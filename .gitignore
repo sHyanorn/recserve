@@ -1,0 +1,9 @@
+# Downloaded datasets, models and generated vectors never enter the repository
+/data/
+*.hdf5
+*.npy
+*.onnx
+*.onnx.data
+/experiments/**/out/
+__pycache__/
+.venv/
