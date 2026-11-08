@@ -1,0 +1,5 @@
+Image check (R1, criterion 3): experiments/m0/onnx/Dockerfile.
+The cloud session intercepts TLS with its own CA, so the build stage ran with two
+extra lines that trust that CA before `go mod download`; the runtime stage is
+unchanged. Runtime image: gcr.io/distroless/cc-debian13:nonroot with
+libonnxruntime.so 1.31.1, 91.9 MB. Parity inside the container: image-parity.txt.

@@ -1,0 +1,4 @@
+enc_l50: max abs diff Go vs Python onnxruntime 0
+enc_l200: max abs diff Go vs Python onnxruntime 0
+ranker: max abs diff Go vs Python onnxruntime 0
+go_mlp: max abs diff vs Python onnxruntime 1.79e-07
