@@ -1,0 +1,71 @@
+$ /home/user/data/m2/bin/annbench -mode build -set synth -M 16 -efc 200 -workers 4 -graph /home/user/data/m2/graphs/synth-M16.bin -noise /home/user/data/m2/bin/noisebase -ref 652267 -out bench-results/m2/ann/synth-M16-build.json
+2026/11/09 06:53:23 synth: 1000000 base, 10000 queries, dim 64
+2026/11/09 06:55:20 build M=16 efc=200 workers=4: 109 s, heap 386 MiB, 89 unreachable on layer 0, noisy false
+exit=0
+$ /home/user/data/m2/bin/annbench -mode query -set synth -graph /home/user/data/m2/graphs/synth-M16.bin -noise /home/user/data/m2/bin/noisebase -ref 652267 -out bench-results/m2/ann/synth-M16.json
+2026/11/09 06:55:25 synth: 1000000 base, 10000 queries, dim 64
+2026/11/09 06:55:26 graph M=16 efc=200: heap 386 MiB, 89 unreachable on layer 0
+2026/11/09 06:55:35 ef=10 k=10 recall=0.6403 p50=71us p99=150us qps=12841 gc=0 max pause <= 0.00ms noisy=false attempt=1
+2026/11/09 06:55:44 ef=20 k=10 recall=0.8269 p50=108us p99=230us qps=8328 gc=0 max pause <= 0.00ms noisy=false attempt=1
+2026/11/09 06:55:54 ef=40 k=10 recall=0.9522 p50=174us p99=364us qps=5336 gc=0 max pause <= 0.00ms noisy=false attempt=1
+2026/11/09 06:56:05 ef=80 k=10 recall=0.9934 p50=243us p99=447us qps=3859 gc=0 max pause <= 0.00ms noisy=false attempt=1
+2026/11/09 06:56:43 ef=120 k=10 recall=0.9985 p50=385us p99=716us qps=2516 gc=0 max pause <= 0.00ms noisy=true attempt=3
+2026/11/09 06:56:56 ef=200 k=10 recall=0.9998 p50=418us p99=832us qps=2226 gc=0 max pause <= 0.00ms noisy=false attempt=1
+2026/11/09 06:57:09 ef=400 k=10 recall=1.0000 p50=518us p99=892us qps=1822 gc=0 max pause <= 0.00ms noisy=false attempt=1
+2026/11/09 06:57:27 ef=800 k=10 recall=1.0000 p50=934us p99=1583us qps=1067 gc=0 max pause <= 0.00ms noisy=false attempt=1
+2026/11/09 06:58:04 ef=120 k=100 recall=0.9956 p50=318us p99=574us qps=2970 gc=0 max pause <= 0.00ms noisy=false attempt=3
+2026/11/09 06:58:17 ef=200 k=100 recall=0.9995 p50=397us p99=729us qps=2355 gc=0 max pause <= 0.00ms noisy=false attempt=1
+2026/11/09 06:58:47 ef=400 k=100 recall=1.0000 p50=545us p99=905us qps=1746 gc=0 max pause <= 0.00ms noisy=false attempt=2
+2026/11/09 06:59:42 ef=800 k=100 recall=1.0000 p50=758us p99=1210us qps=1261 gc=0 max pause <= 0.00ms noisy=true attempt=3
+exit=0
+$ /home/user/data/m2/bin/annbench -mode build -set glove -M 16 -efc 200 -workers 4 -graph /home/user/data/m2/graphs/glove-M16.bin -noise /home/user/data/m2/bin/noisebase -ref 652267 -out bench-results/m2/ann/glove-M16-build.json
+2026/11/09 07:02:55 glove: 1183514 base, 10000 queries, dim 100
+2026/11/09 07:09:07 build M=16 efc=200 workers=4: 362 s, heap 619 MiB, 24 unreachable on layer 0, noisy true
+exit=0
+$ /home/user/data/m2/bin/annbench -mode query -set glove -graph /home/user/data/m2/graphs/glove-M16.bin -noise /home/user/data/m2/bin/noisebase -ref 652267 -out bench-results/m2/ann/glove-M16.json
+2026/11/09 07:09:13 glove: 1183514 base, 10000 queries, dim 100
+2026/11/09 07:09:14 graph M=16 efc=200: heap 619 MiB, 24 unreachable on layer 0
+2026/11/09 07:09:34 ef=10 k=10 recall=0.4723 p50=134us p99=275us qps=7001 gc=0 max pause <= 0.00ms noisy=false attempt=2
+2026/11/09 07:09:54 ef=20 k=10 recall=0.5988 p50=223us p99=476us qps=4199 gc=0 max pause <= 0.00ms noisy=false attempt=2
+2026/11/09 07:10:06 ef=40 k=10 recall=0.7056 p50=388us p99=811us qps=2434 gc=0 max pause <= 0.00ms noisy=false attempt=1
+2026/11/09 07:10:53 ef=80 k=10 recall=0.7882 p50=559us p99=1026us qps=1740 gc=0 max pause <= 0.00ms noisy=false attempt=3
+2026/11/09 07:11:48 ef=120 k=10 recall=0.8262 p50=835us p99=1550us qps=1160 gc=0 max pause <= 0.00ms noisy=false attempt=3
+2026/11/09 07:12:59 ef=200 k=10 recall=0.8665 p50=1372us p99=2352us qps=711 gc=0 max pause <= 0.00ms noisy=true attempt=3
+2026/11/09 07:14:44 ef=400 k=10 recall=0.9121 p50=2404us p99=4070us qps=414 gc=0 max pause <= 0.00ms noisy=false attempt=3
+2026/11/09 07:15:41 ef=800 k=10 recall=0.9459 p50=4370us p99=7956us qps=227 gc=1 max pause <= 0.20ms noisy=false attempt=1
+2026/11/09 07:16:37 ef=120 k=100 recall=0.7119 p50=769us p99=1220us qps=1298 gc=0 max pause <= 0.00ms noisy=true attempt=3
+2026/11/09 07:16:58 ef=200 k=100 recall=0.7737 p50=1230us p99=2085us qps=811 gc=0 max pause <= 0.00ms noisy=false attempt=1
+2026/11/09 07:17:30 ef=400 k=100 recall=0.8422 p50=2161us p99=3312us qps=470 gc=1 max pause <= 0.13ms noisy=false attempt=1
+2026/11/09 07:20:24 ef=800 k=100 recall=0.8978 p50=4365us p99=7631us qps=228 gc=0 max pause <= 0.00ms noisy=true attempt=3
+exit=0
+$ /home/user/data/m2/bin/annbench -mode build -set glove -M 32 -efc 400 -workers 4 -graph /home/user/data/m2/graphs/glove-M32.bin -noise /home/user/data/m2/bin/noisebase -ref 652267 -out bench-results/m2/ann/glove-M32-build.json
+2026/11/09 07:20:31 glove: 1183514 base, 10000 queries, dim 100
+2026/11/09 07:40:06 build M=32 efc=400 workers=4: 1164 s, heap 763 MiB, 3 unreachable on layer 0, noisy true
+exit=0
+$ /home/user/data/m2/bin/annbench -mode query -set glove -graph /home/user/data/m2/graphs/glove-M32.bin -noise /home/user/data/m2/bin/noisebase -ref 652267 -out bench-results/m2/ann/glove-M32.json
+2026/11/09 07:40:11 glove: 1183514 base, 10000 queries, dim 100
+2026/11/09 07:40:12 graph M=32 efc=400: heap 763 MiB, 3 unreachable on layer 0
+2026/11/09 07:40:46 ef=10 k=10 recall=0.5814 p50=267us p99=585us qps=3532 gc=0 max pause <= 0.00ms noisy=false attempt=3
+2026/11/09 07:41:25 ef=20 k=10 recall=0.6981 p50=339us p99=737us qps=2786 gc=0 max pause <= 0.00ms noisy=false attempt=3
+2026/11/09 07:42:12 ef=40 k=10 recall=0.7903 p50=588us p99=1115us qps=1647 gc=0 max pause <= 0.00ms noisy=true attempt=3
+2026/11/09 07:43:12 ef=80 k=10 recall=0.8629 p50=1015us p99=1925us qps=962 gc=0 max pause <= 0.00ms noisy=false attempt=3
+2026/11/09 07:44:05 ef=120 k=10 recall=0.8964 p50=1573us p99=2744us qps=625 gc=0 max pause <= 0.00ms noisy=false attempt=2
+2026/11/09 07:44:38 ef=200 k=10 recall=0.9293 p50=2333us p99=4046us qps=422 gc=1 max pause <= 0.16ms noisy=false attempt=1
+2026/11/09 07:45:31 ef=400 k=10 recall=0.9640 p50=4096us p99=7145us qps=248 gc=0 max pause <= 0.00ms noisy=false attempt=1
+2026/11/09 07:50:29 ef=800 k=10 recall=0.9850 p50=8399us p99=14800us qps=119 gc=1 max pause <= 0.11ms noisy=true attempt=3
+2026/11/09 07:50:55 ef=120 k=100 recall=0.7946 p50=1519us p99=2698us qps=653 gc=0 max pause <= 0.00ms noisy=false attempt=1
+2026/11/09 07:51:29 ef=200 k=100 recall=0.8522 p50=2316us p99=4118us qps=435 gc=0 max pause <= 0.00ms noisy=false attempt=1
+2026/11/09 07:54:18 ef=400 k=100 recall=0.9140 p50=4326us p99=7723us qps=232 gc=1 max pause <= 0.20ms noisy=true attempt=3
+2026/11/09 07:55:59 ef=800 k=100 recall=0.9575 p50=8571us p99=15481us qps=116 gc=0 max pause <= 0.00ms noisy=false attempt=1
+exit=0
+$ /home/user/data/m2/bin/annbench-fbfc810 -mode shards -shards 2 -set glove -M 32 -efc 400 -workers 4 -graph /home/user/data/m2/graphs/glove-M32-shards -noise /home/user/data/m2/bin/noisebase -ref 652267 -k 100 -ef 120,200,400,800 -out bench-results/m2/ann/glove-M32-2shards.json
+2026/11/09 09:37:31 glove: 1183514 base, 10000 queries, dim 100
+2026/11/09 09:37:32 glove: 1183514 base, 10000 queries, dim 100
+2026/11/09 09:37:32 glove: 1183514 base, 10000 queries, dim 100
+2026/11/09 09:56:04 shard 0: 591905 nodes, 2 unreachable on layer 0, build 1110 s
+2026/11/09 09:56:04 shard 1: 591609 nodes, 1 unreachable on layer 0, build 1106 s
+2026/11/09 09:56:31 ef=120 k=100 recall=0.8506 p50=1734us p99=3758us qps=552 gc=0 max pause <= 0.00ms noisy=false attempt=1
+2026/11/09 09:57:46 ef=200 k=100 recall=0.8999 p50=2669us p99=5264us qps=367 gc=1 max pause <= 0.03ms noisy=false attempt=2
+2026/11/09 09:58:48 ef=400 k=100 recall=0.9500 p50=4795us p99=8610us qps=208 gc=0 max pause <= 0.00ms noisy=false attempt=1
+2026/11/09 10:02:20 ef=800 k=100 recall=0.9805 p50=8829us p99=15714us qps=113 gc=1 max pause <= 0.11ms noisy=false attempt=2
+exit=0

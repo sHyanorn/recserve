@@ -1,0 +1,115 @@
+$ /home/user/data/m2/bin/noisebase -n 1 -ref 652267 -out /home/user/recserve/bench-results/m2/ann/synth-faiss-M16-noise-before.json
+median 867327 ns per pass, runs [867327], noisy true
+$ /home/user/data/venv/bin/python -I /home/user/recserve/experiments/m0/ann/faiss_ref.py /home/user/data/m0/ann synth 16 200 /home/user/recserve/bench-results/m2/ann/synth-faiss-M16.json
+build 324s
+{'ef': 10, 'k': 10, 'p50_us': 44.72399996302556, 'p99_us': 134.04499986791052, 'qps': 18823.82417958872}
+{'ef': 20, 'k': 10, 'p50_us': 57.361000472155865, 'p99_us': 127.73699927492999, 'qps': 15210.073566018773}
+{'ef': 40, 'k': 10, 'p50_us': 139.2700005453662, 'p99_us': 306.9419999519596, 'qps': 6824.741991294498}
+{'ef': 80, 'k': 10, 'p50_us': 172.00700040120864, 'p99_us': 330.41599999705795, 'qps': 5329.499564216697}
+{'ef': 120, 'k': 10, 'p50_us': 205.1940000455943, 'p99_us': 354.15000002103625, 'qps': 4560.843584246652}
+{'ef': 200, 'k': 10, 'p50_us': 326.0299999965355, 'p99_us': 568.9800000254763, 'qps': 2879.0694113382433}
+{'ef': 400, 'k': 10, 'p50_us': 537.9499998525716, 'p99_us': 927.3699997720541, 'qps': 1727.34844578035}
+{'ef': 800, 'k': 10, 'p50_us': 854.5250002498506, 'p99_us': 1394.3779995315708, 'qps': 1079.3461142327128}
+{'ef': 120, 'k': 100, 'p50_us': 242.1669996692799, 'p99_us': 459.3439998643589, 'qps': 3909.767559837329}
+{'ef': 200, 'k': 100, 'p50_us': 326.5509994889726, 'p99_us': 600.12399990228, 'qps': 2886.1300256528293}
+{'ef': 400, 'k': 100, 'p50_us': 556.2329997701454, 'p99_us': 827.8639998025028, 'qps': 1788.7663104158937}
+{'ef': 800, 'k': 100, 'p50_us': 841.1519993387628, 'p99_us': 1458.8550002372358, 'qps': 1080.0219627391218}
+$ /home/user/data/m2/bin/noisebase -n 1 -ref 652267 -out /home/user/recserve/bench-results/m2/ann/synth-faiss-M16-noise-after.json
+median 830893 ns per pass, runs [830893], noisy true
+$ /home/user/data/m2/bin/m0ann -data /home/user/data/m0/ann -set synth -index faiss -M 16 -efc 200 -out /home/user/recserve/bench-results/m2/ann/synth-faiss-M16-recall.json
+synth: 1000000 base, 10000 queries, dim 64
+faiss M=16 ef=10 k=10 recall=0.6720
+faiss M=16 ef=20 k=10 recall=0.8564
+faiss M=16 ef=40 k=10 recall=0.9668
+faiss M=16 ef=80 k=10 recall=0.9966
+faiss M=16 ef=120 k=10 recall=0.9990
+faiss M=16 ef=200 k=10 recall=0.9999
+faiss M=16 ef=400 k=10 recall=0.9999
+faiss M=16 ef=800 k=10 recall=1.0000
+faiss M=16 ef=120 k=100 recall=0.9963
+faiss M=16 ef=200 k=100 recall=0.9996
+faiss M=16 ef=400 k=100 recall=0.9999
+faiss M=16 ef=800 k=100 recall=1.0000
+exit=0
+$ /home/user/data/m2/bin/noisebase -n 1 -ref 652267 -out /home/user/recserve/bench-results/m2/ann/glove-faiss-M16-noise-before.json
+median 661252 ns per pass, runs [661252], noisy false
+$ /home/user/data/venv/bin/python -I /home/user/recserve/experiments/m0/ann/faiss_ref.py /home/user/data/m0/ann glove 16 200 /home/user/recserve/bench-results/m2/ann/glove-faiss-M16.json
+build 728s
+{'ef': 10, 'k': 10, 'p50_us': 50.84100030217087, 'p99_us': 126.04500079760328, 'qps': 17319.87747433797}
+{'ef': 20, 'k': 10, 'p50_us': 75.08899943786673, 'p99_us': 156.54400067433016, 'qps': 12086.829457316411}
+{'ef': 40, 'k': 10, 'p50_us': 130.65800067124655, 'p99_us': 258.05099994613556, 'qps': 7097.288192895319}
+{'ef': 80, 'k': 10, 'p50_us': 345.63400004117284, 'p99_us': 760.4340007674182, 'qps': 2639.5631709837094}
+{'ef': 120, 'k': 10, 'p50_us': 381.6859998551081, 'p99_us': 737.1129995590309, 'qps': 2435.171798784042}
+{'ef': 200, 'k': 10, 'p50_us': 712.1959997675731, 'p99_us': 1341.3180004135938, 'qps': 1336.5693870165753}
+{'ef': 400, 'k': 10, 'p50_us': 1225.8909991942346, 'p99_us': 2083.6149997194298, 'qps': 793.2564152065562}
+{'ef': 800, 'k': 10, 'p50_us': 2477.3590002951096, 'p99_us': 4186.83099996997, 'qps': 394.79782123130826}
+{'ef': 120, 'k': 100, 'p50_us': 468.05699912511045, 'p99_us': 937.6900006827782, 'qps': 2005.7363610641876}
+{'ef': 200, 'k': 100, 'p50_us': 602.316000367864, 'p99_us': 1021.1429998889798, 'qps': 1594.9190744705413}
+{'ef': 400, 'k': 100, 'p50_us': 1049.4450007172418, 'p99_us': 1700.4300007101847, 'qps': 929.6760368540549}
+{'ef': 800, 'k': 100, 'p50_us': 2150.058000552235, 'p99_us': 3752.9789997279295, 'qps': 446.07890620497335}
+$ /home/user/data/m2/bin/noisebase -n 1 -ref 652267 -out /home/user/recserve/bench-results/m2/ann/glove-faiss-M16-noise-after.json
+median 591003 ns per pass, runs [591003], noisy false
+$ /home/user/data/m2/bin/m0ann -data /home/user/data/m0/ann -set glove -index faiss -M 16 -efc 200 -out /home/user/recserve/bench-results/m2/ann/glove-faiss-M16-recall.json
+glove: 1183514 base, 10000 queries, dim 100
+faiss M=16 ef=10 k=10 recall=0.4758
+faiss M=16 ef=20 k=10 recall=0.6007
+faiss M=16 ef=40 k=10 recall=0.7061
+faiss M=16 ef=80 k=10 recall=0.7883
+faiss M=16 ef=120 k=10 recall=0.8259
+faiss M=16 ef=200 k=10 recall=0.8652
+faiss M=16 ef=400 k=10 recall=0.9085
+faiss M=16 ef=800 k=10 recall=0.9414
+faiss M=16 ef=120 k=100 recall=0.7185
+faiss M=16 ef=200 k=100 recall=0.7780
+faiss M=16 ef=400 k=100 recall=0.8438
+faiss M=16 ef=800 k=100 recall=0.8961
+exit=0
+$ /home/user/data/m2/bin/noisebase -n 1 -ref 652267 -out /home/user/recserve/bench-results/m2/ann/glove-faiss-M32-noise-before.json
+median 690529 ns per pass, runs [690529], noisy false
+$ /home/user/data/venv/bin/python -I /home/user/recserve/experiments/m0/ann/faiss_ref.py /home/user/data/m0/ann glove 32 400 /home/user/recserve/bench-results/m2/ann/glove-faiss-M32.json
+build 1930s
+{'ef': 10, 'k': 10, 'p50_us': 93.73399916512426, 'p99_us': 249.81299975479487, 'qps': 9424.586161270554}
+{'ef': 20, 'k': 10, 'p50_us': 108.12899927259423, 'p99_us': 211.11500063852873, 'qps': 8562.141774005613}
+{'ef': 40, 'k': 10, 'p50_us': 185.4920010373462, 'p99_us': 313.3959999104263, 'qps': 5203.848066214868}
+{'ef': 80, 'k': 10, 'p50_us': 356.913000359782, 'p99_us': 628.4849987423513, 'qps': 2710.6681872545473}
+{'ef': 120, 'k': 10, 'p50_us': 512.6040014147293, 'p99_us': 833.0269993166439, 'qps': 1946.167044577181}
+{'ef': 200, 'k': 10, 'p50_us': 830.3979993797839, 'p99_us': 1496.8320010666503, 'qps': 1173.020108324121}
+{'ef': 400, 'k': 10, 'p50_us': 1739.406001433963, 'p99_us': 3395.0460001506144, 'qps': 546.6359816318815}
+{'ef': 800, 'k': 10, 'p50_us': 3070.101000048453, 'p99_us': 5545.840000195312, 'qps': 321.80926865574895}
+{'ef': 120, 'k': 100, 'p50_us': 523.5429998720065, 'p99_us': 1108.5429996455787, 'qps': 1844.502319639647}
+{'ef': 200, 'k': 100, 'p50_us': 873.7170010135742, 'p99_us': 1835.5840002186596, 'qps': 1074.3531146228988}
+{'ef': 400, 'k': 100, 'p50_us': 1727.3789999308065, 'p99_us': 3604.9299997102935, 'qps': 552.5207219777819}
+{'ef': 800, 'k': 100, 'p50_us': 3236.9109994760947, 'p99_us': 6448.788000852801, 'qps': 298.2386970503833}
+$ /home/user/data/m2/bin/noisebase -n 1 -ref 652267 -out /home/user/recserve/bench-results/m2/ann/glove-faiss-M32-noise-after.json
+median 601849 ns per pass, runs [601849], noisy false
+$ /home/user/data/m2/bin/m0ann -data /home/user/data/m0/ann -set glove -index faiss -M 32 -efc 400 -out /home/user/recserve/bench-results/m2/ann/glove-faiss-M32-recall.json
+glove: 1183514 base, 10000 queries, dim 100
+faiss M=32 ef=10 k=10 recall=0.5809
+faiss M=32 ef=20 k=10 recall=0.6988
+faiss M=32 ef=40 k=10 recall=0.7942
+faiss M=32 ef=80 k=10 recall=0.8659
+faiss M=32 ef=120 k=10 recall=0.8983
+faiss M=32 ef=200 k=10 recall=0.9315
+faiss M=32 ef=400 k=10 recall=0.9657
+faiss M=32 ef=800 k=10 recall=0.9858
+faiss M=32 ef=120 k=100 recall=0.8008
+faiss M=32 ef=200 k=100 recall=0.8588
+faiss M=32 ef=400 k=100 recall=0.9196
+faiss M=32 ef=800 k=100 recall=0.9610
+exit=0
+$ /home/user/data/m2/bin/noisebase -n 1 -ref 652267 -out /home/user/recserve/bench-results/m2/ann/synth-exact-noise-before.json
+median 688949 ns per pass, runs [688949], noisy false
+$ /home/user/data/m2/bin/m0ann -data /home/user/data/m0/ann -set synth -index exact -ref 0 -out /home/user/recserve/bench-results/m2/ann/synth-exact.json
+synth: 1000000 base, 10000 queries, dim 64
+exact k=100 recall=1.0000 recall@10=1.0000 p50=76067us p99=110825us noisy=false
+$ /home/user/data/m2/bin/noisebase -n 1 -ref 652267 -out /home/user/recserve/bench-results/m2/ann/synth-exact-noise-after.json
+median 596074 ns per pass, runs [596074], noisy false
+exit=0
+$ /home/user/data/m2/bin/noisebase -n 1 -ref 652267 -out /home/user/recserve/bench-results/m2/ann/glove-exact-noise-before.json
+median 790304 ns per pass, runs [790304], noisy true
+$ /home/user/data/m2/bin/m0ann -data /home/user/data/m0/ann -set glove -index exact -ref 0 -out /home/user/recserve/bench-results/m2/ann/glove-exact.json
+glove: 1183514 base, 10000 queries, dim 100
+exact k=100 recall=1.0000 recall@10=1.0000 p50=153658us p99=199372us noisy=false
+$ /home/user/data/m2/bin/noisebase -n 1 -ref 652267 -out /home/user/recserve/bench-results/m2/ann/glove-exact-noise-after.json
+median 742262 ns per pass, runs [742262], noisy true
+exit=0

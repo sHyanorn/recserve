@@ -22,7 +22,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 
 ## M2 Models, ANN, degradation, swaps
 - [ ] User encoder and ranker through ONNX Runtime, one intra-op thread (D015)
-- [ ] Hand-written HNSW (D016), measured per docs/BENCHMARKS.md (Hand-written HNSW)
+- [x] Hand-written HNSW (D016), measured per docs/BENCHMARKS.md (Hand-written HNSW): synth passes, glove fails on latency only
 - [ ] Per-stage deadlines and degradation reasons in responses
 - [ ] Result cache keyed by versions, arm and history head (in memory for now); property test 5
 - [ ] Two-phase bundle swap; property test 4
@@ -56,6 +56,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] Fault runs with toxiproxy and container control (D021)
 - [ ] ANN and sharded recall and latency on glove-100 and synthetic vectors
 - [ ] Profiles and at least one optimization backed by before/after data
+  - Candidate: SIMD inner product in the HNSW search; on glove the p99 is 1.3 to 2.4 times faiss's at equal recall on the same machine (BENCHMARKS, M2), and `vec.Dot32` is scalar Go
 - [ ] Report with charts
 
 ## M7 Integration and evaluation

@@ -213,3 +213,31 @@ recall@100 by ef, and single-thread p99 at ef = 800 (`ann/*.json`). coder/hnsw r
 - On glove, faiss reaches recall@100 ≥ 0.95 only at M = 32, ef = 800, with p99 6.59 ms. The single-thread p99 ≤ 5 ms part of the criterion is therefore not met there by the outside reference either. This is recorded as found; the criterion is unchanged and applies to the hand-written index in M2.
 - Noise: six coder/hnsw points of synth M = 16 in the rerun stayed flagged after three attempts (marked noisy in the JSON); none of them affects the verdict, which rests on recall. The faiss runs are bracketed but were not rerun; the baseline before glove faiss M = 32 was 911,710 ns, 11% over the first reference, so that run is flagged. faiss is the outside reference and does not enter the criterion.
 - Settings: coder/hnsw has no separate efConstruction; it builds with `EfSearch`, which was set to efConstruction during the build. The faiss latencies include Python's per-call overhead, about 6 to 11 µs. The Go heap figure is live heap after a GC; faiss's figure in its JSON is RSS growth.
+
+### M2 (2026-11-09)
+
+A different cloud VM from M0: Intel Xeon @ 2.30GHz with AVX-512 and AMX (M0: Xeon @ 2.10GHz), 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.3 (`bench-results/m2/env.txt`). M0's noise binary ran about 28% faster here (591,451 and 593,274 ns per pass against 820,984 ns), so M0's latencies are not comparable with these; faiss and exact search were rerun here with the unchanged M0 code. Session reference 652,267 ns (`noise-reference.json`, threshold 717,494 ns), from the one noisebase build of D025; its ten runs fell into two groups, about 590,000 and 700,000 to 820,000 ns, with nothing else running.
+
+#### Hand-written HNSW: fail, on glove latency only
+
+recall@100 and single-thread p99 by ef (`ann/*.json`). The hand-written graphs were built with 4 goroutines (`Workers = 4`), faiss's with one thread, so build times are not comparable.
+
+| Set | Index | M / efC | recall@100 at ef = 120 / 200 / 400 / 800 | p99 ms at ef = 120 / 200 / 400 / 800 | Build | Unreachable |
+|---|---|---|---|---|---|---|
+| synth | recserve/hnsw | 16 / 200 | 0.996 / 1.000 / 1.000 / 1.000 | 0.57 / 0.73 / 0.91 / 1.21 | 109 s | 89 |
+| synth | faiss | 16 / 200 | 0.996 / 1.000 / 1.000 / 1.000 | 0.46 / 0.60 / 0.83 / 1.46 | 324 s (disturbed) | |
+| glove | recserve/hnsw | 16 / 200 | 0.712 / 0.774 / 0.842 / 0.898 | 1.22 / 2.09 / 3.31 / 7.63 | 362 s | 24 |
+| glove | faiss | 16 / 200 | 0.719 / 0.778 / 0.844 / 0.896 | 0.94 / 1.02 / 1.70 / 3.75 | 728 s | |
+| glove | recserve/hnsw | 32 / 400 | 0.795 / 0.852 / 0.914 / 0.958 | 2.70 / 4.12 / 7.72 / 15.48 | 1,164 s | 3 |
+| glove | faiss | 32 / 400 | 0.801 / 0.859 / 0.920 / 0.961 | 1.11 / 1.84 / 3.60 / 6.45 | 1,930 s | |
+| glove | recserve/hnsw, 2 shards | 32 / 400 | 0.851 / 0.900 / 0.94997 / 0.980 | 3.76 / 5.26 / 8.61 / 15.71 | 1,110 s per shard | 2 + 1 |
+| synth | exact (Go) | | 1.000 | 110.8 | | |
+| glove | exact (Go) | | 1.000 | 199.4 | | |
+
+- synth passes with M = 16, efConstruction = 200: recall@100 reaches 0.95 first at ef = 120 (0.9956), with p99 0.57 ms, and no GC cycle ran in any synth query phase. M = 32 was not run on synth.
+- glove: with M = 16 recall@100 never reaches 0.95 (0.898 at ef = 800). With M = 32 it does only at ef = 800 (0.9575), with p99 15.48 ms, above 5 ms; that point was not flagged (first attempt, baselines 589,900 and 588,214 ns). The longest GC pause in any glove query phase is at most 0.20 ms. Only the latency part fails, so the criterion fails as written and no threshold changes; as the protocol states, the index stays in use with its measured p99 given wherever retrieval latency is reported. No qualifying point has a p99 between 3.6 and 5 ms, so the verdict does not depend on this CPU being faster than M0's.
+- Two shards: two shard processes, each with the half of the vectors `shard.Of` assigns to it and its own graph (2 build goroutines each); the parent sends every query to both over pipes and merges their top 100, scored against the full ground truth. recall@100 is 0.94997 at ef = 400, so the lowest ef reaching 0.95 is 800, with p99 15.71 ms: on 4 vCPUs, two shards searching with the same ef as one index do not lower p99. M6 measures the sharded tier again through annshard and gRPC.
+- Against faiss on this machine, recall agrees within 0.007 at every point. p99 is 1.3 to 2.4 times faiss's on glove, and 0.8 to 1.2 times on synth. faiss's recall equals M0's to the digits shown, and checkgt verified the ground truth of 100 queries per set against an exact scan, so the regenerated data and ground truth match M0's. M0's faiss p99 at ef = 800, from the slower CPU: 1.34 ms (synth, M = 16), 3.43 ms and 6.59 ms (glove, M = 16 and 32).
+- Unreachable nodes are those layer 0 does not reach from the entry point (`hnsw.Index.Reachable`). Heap in use after a collection, with the vectors: synth 386 MiB (244 MiB of vectors), glove 619 MiB with M = 16 and 763 MiB with M = 32 (451 MiB of vectors).
+- Noise: of the 40 query points (12 per single-index run, 4 for two shards), 15 needed a third attempt and 8 (20%) were still flagged after it; each point's baselines and attempt are in its JSON. Builds are not repeated: both glove builds are flagged. The synth faiss run is flagged (867,327 and 830,893 ns before and after), and its build overlapped a test run pinned to CPU 3, so its build time is for reference only; the glove faiss runs are not flagged. The glove exact run is flagged after (742,262 ns). faiss and exact search are references and do not enter the criterion.
+
