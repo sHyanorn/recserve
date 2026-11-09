@@ -6,6 +6,8 @@ package recommend
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sHyanorn/recserve/internal/bundle"
+	"github.com/sHyanorn/recserve/internal/cache"
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/shard"
 	"github.com/sHyanorn/recserve/internal/vec"
@@ -121,6 +124,9 @@ type Response struct {
 	Dropped int `json:"-"`
 	// Failures holds the errors behind Degraded, except timeouts.
 	Failures []Failure `json:"-"`
+	// Cached is true for a response from the cache, nil if the
+	// pipeline has none or the history could not be read.
+	Cached *bool `json:"-"`
 }
 
 // Coverage counts the shards searched for vector retrieval and those that
@@ -201,9 +207,15 @@ type Pipeline struct {
 	Shards  *shard.Set // the bundle's item vectors, for vector retrieval
 	History history.Store
 	Budgets Budgets
+	// Cache, if not nil, holds responses that were not degraded. It may be
+	// shared by pipelines over different bundles: keys include the bundle
+	// version. Responses from it share their slices; callers must not
+	// modify them.
+	Cache *cache.Cache[Response]
 
-	rankWith       Ranker // test only: replaces the bundle's ranker
-	skipSeenFilter bool   // test only: the broken variant of property 2
+	rankWith          Ranker // test only: replaces the bundle's ranker
+	skipSeenFilter    bool   // test only: the broken variant of property 2
+	keyWithoutVersion bool   // test only: the broken variant of property 5
 	// stall, test only, runs at the start of a stage under the stage's
 	// context; shard is the shard searched, -1 outside vector retrieval.
 	// An error fails the stage.
@@ -259,6 +271,15 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error)
 	if err != nil {
 		return Response{}, err
 	}
+	var key cache.Key
+	useCache := p.Cache != nil && len(d.reasons) == 0
+	if useCache {
+		key = p.cacheKey(req, hist)
+		if resp, ok := p.Cache.Get(key); ok {
+			resp.Cached = &ok
+			return resp, nil
+		}
+	}
 	seen := make(map[int32]bool, len(hist)+len(req.Exclude))
 	for _, id := range hist {
 		seen[id] = true
@@ -302,7 +323,39 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error)
 		resp.Items[i] = Item{ID: b.IDs[h.ID], Score: h.Score}
 	}
 	resp.Degraded, resp.Failures = d.list(), d.failures
+	if useCache {
+		resp.Cached = new(bool)
+		if len(resp.Degraded) == 0 {
+			stored := resp
+			stored.Dropped, stored.Cached = 0, nil // a hit ranks nothing
+			p.Cache.Put(key, stored)
+		}
+	}
 	return resp, nil
+}
+
+// cacheKey returns the digest of what a response depends on, given the
+// history: the bundle version, the user, k, the exclusions as a set and the
+// history items in order. The request time only selects the history, and
+// the recent items are used only when the history cannot be read, which
+// is never cached.
+func (p *Pipeline) cacheKey(req Request, hist []int32) cache.Key {
+	str := func(b []byte, s string) []byte { return append(binary.AppendUvarint(b, uint64(len(s))), s...) }
+	var b []byte
+	if !p.keyWithoutVersion {
+		b = str(b, p.Bundle.ModelVersion)
+	}
+	b = binary.AppendUvarint(str(b, req.User), uint64(req.K))
+	exclude := slices.Compact(slices.Sorted(slices.Values(req.Exclude)))
+	b = binary.AppendUvarint(b, uint64(len(exclude)))
+	for _, raw := range exclude {
+		b = str(b, raw)
+	}
+	b = binary.AppendUvarint(b, uint64(len(hist)))
+	for _, id := range hist {
+		b = binary.LittleEndian.AppendUint32(b, uint32(id))
+	}
+	return sha256.Sum256(b)
 }
 
 // history returns the user's stored history before req.TS or, if it cannot

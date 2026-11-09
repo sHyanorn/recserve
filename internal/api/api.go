@@ -40,6 +40,7 @@ type Server struct {
 	rankerTruncated prometheus.Counter
 	rankerDropped   prometheus.Counter
 	degraded        *prometheus.CounterVec
+	cacheLookups    *prometheus.CounterVec
 	reg             *prometheus.Registry
 }
 
@@ -65,7 +66,10 @@ func New(p *recommend.Pipeline, h history.Store, log *slog.Logger) *Server {
 	for _, r := range recommend.Reasons {
 		s.degraded.WithLabelValues(r)
 	}
-	s.reg.MustRegister(s.requests, s.latency, s.rankerTruncated, s.rankerDropped, s.degraded,
+	s.cacheLookups = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "recserve_cache_lookups_total", Help: "Result cache lookups by result: hit or miss.",
+	}, []string{"result"})
+	s.reg.MustRegister(s.requests, s.latency, s.rankerTruncated, s.rankerDropped, s.degraded, s.cacheLookups,
 		collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return s
 }
@@ -209,6 +213,13 @@ func (s *Server) recommend(w http.ResponseWriter, r *http.Request) error {
 	}
 	for _, r := range resp.Degraded {
 		s.degraded.WithLabelValues(r).Inc()
+	}
+	if resp.Cached != nil {
+		result := "miss"
+		if *resp.Cached {
+			result = "hit"
+		}
+		s.cacheLookups.WithLabelValues(result).Inc()
 	}
 	for _, f := range resp.Failures {
 		s.Log.Warn("request degraded", "reason", f.Reason, "err", f.Err)

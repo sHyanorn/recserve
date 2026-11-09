@@ -26,14 +26,14 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] Hand-written HNSW (D016), measured per docs/BENCHMARKS.md (Hand-written HNSW): synth passes, glove fails on latency only
 - [x] In-process shards of the item vectors (`shard.Of`, two by default), exact or HNSW search per shard; property test 6 (D028)
 - [x] Per-stage deadlines and degradation reasons in responses (D029)
-- [ ] Result cache keyed by versions, arm and history head (in memory for now); property test 5
+- [x] Result cache keyed by version and history (in memory for now); property test 5 (D030)
 - [ ] Two-phase bundle swap; property test 4
 
 ## M3 Event pipeline and shared state
 - [ ] Kafka (KRaft) and Valkey in docker compose (D019, D020)
 - [ ] `/v1/events` produces to the `events` topic, keyed by user, idempotent producer
 - [ ] `cmd/ingest`: consumer group, idempotent apply to Valkey, commit after apply; property tests 8 and 9
-- [ ] History store and result cache on Valkey; singleflight; property test 11
+- [ ] History store and result cache on Valkey; singleflight; property test 11. A hit still reads the history to key it (D030); if that costs too much, key by a per-user history version instead
 - [ ] Circuit breaker and `history_unavailable` path; property test 10
 - [ ] Integration tests against real Kafka and Valkey containers
 
@@ -45,7 +45,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 
 ## M5 Operations and deployment
 - [ ] Rate limiting and bounded concurrency with 503
-- [ ] A/B assignment; property test 3 with its broken variant
+- [ ] A/B assignment; property test 3 with its broken variant; the arm joins the result cache key (D030)
 - [ ] OpenTelemetry tracing
 - [ ] Dockerfiles and docker compose with Prometheus, Grafana and Jaeger
 - [ ] kind manifests: probes, resource limits, HPA with metrics-server (D022)

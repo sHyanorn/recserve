@@ -12,7 +12,7 @@ An online recommendation and search serving system written in Go. A request goes
 - Features known at request time only: a user's recent events before the request timestamp, item features
 - Ranking with an ONNX model; re-ranking with seen-item filtering, deduplication and diversity (MMR)
 - Per-stage deadlines with degradation: a retrieval source that times out is skipped, a ranker that times out falls back to retrieval order, a missing shard yields partial results; every response reports what was degraded and the shard coverage
-- Result cache keyed by user, request, index version, model version and experiment arm
+- Result cache keyed by user, request, bundle version, experiment arm and the user's history before the request
 - Rate limiting and overload protection (bounded concurrency, fail fast with 503)
 - A/B assignment by deterministic hash of the user ID, configurable traffic split, arm and config version in every response
 - Prometheus metrics and OpenTelemetry tracing
@@ -49,8 +49,8 @@ All load tests run on one 4-vCPU VM. Kafka, Valkey, the shards and their replica
                           │
         ┌─────────────────▼──────────────────────────────┐
         │ gateway (stateless, N instances)                │
-        │  rate limit → A/B arm → cache ◄─────────────────┼── Valkey: result cache,
-        │  features: user history before request ts ◄─────┼── user histories
+        │  rate limit → A/B arm → features: user history ◄┼── Valkey: user histories,
+        │  before request ts → cache keyed by it ◄────────┼── result cache
         │  POST /v1/events ───────────────────────────────┼─► Kafka topic `events`
         │                                                 │   (keyed by user) ──► ingest
         │                                                 │   consumer ──► Valkey
@@ -78,8 +78,8 @@ All load tests run on one 4-vCPU VM. Kafka, Valkey, the shards and their replica
 
 | Stage | p99 budget | On timeout or error |
 |---|---|---|
-| Rate limit, A/B, cache lookup | 1 ms | — |
-| Feature lookup (Valkey) | 3 ms | history from the request's `recent` only: `history_unavailable` |
+| Rate limit, A/B | 1 ms | — |
+| Feature lookup (Valkey), then cache lookup | 3 ms | history from the request's `recent` only: `history_unavailable` |
 | User encoder | 5 ms | vector retrieval skipped: `encoder_timeout`, `encoder_error` |
 | Retrieval (parallel; shard deadline 15 ms) | 15 ms | source skipped: `cooc_timeout`, `cooc_error`, `popular_timeout`, `popular_error`; shards that did not answer skipped: `shards_partial`, or `vector_timeout` (every shard timed out) or `vector_error` (none answered, one failed) |
 | Ranking (at most 512 candidates) | 15 ms | retrieval order kept: `ranker_timeout`, `ranker_error` |
@@ -88,6 +88,8 @@ All load tests run on one 4-vCPU VM. Kafka, Valkey, the shards and their replica
 | **Server-side end to end** | **50 ms** | |
 
 The service target is a server-side p99 of 50 ms; the headline figure is the highest request rate that meets it (D005). Filters are never skipped: a degraded response is still filtered.
+
+The cache is looked up after the history, since its key includes the history (D030); a response is cached only if it was not degraded, so a request whose history cannot be read neither reads nor writes it.
 
 Each stage runs under its own deadline, set by the gateway flags `-budget-history`, `-budget-encoder`, `-budget-retrieval`, `-budget-shard` and `-budget-ranker` (0 for none); a shard search ends at the earlier of its own deadline and the retrieval deadline. A stage that runs out of time or fails is skipped or falls back as the table says, and the response lists the reasons in `degraded`, in the table's order, each once; `recserve_degraded_total{reason}` counts them, and an error other than a timeout is logged. The stages check their deadline themselves (exact search every 1,024 rows, ONNX Runtime between nodes), and the gateway waits for each to return, so a stage ends shortly after its deadline (D029). A request that its client cancels fails with status 499, and one past a deadline its caller set fails with 504; neither is a degradation.
 

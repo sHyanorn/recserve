@@ -17,6 +17,7 @@ import (
 
 	"github.com/sHyanorn/recserve/internal/api"
 	"github.com/sHyanorn/recserve/internal/bundle"
+	"github.com/sHyanorn/recserve/internal/cache"
 	"github.com/sHyanorn/recserve/internal/dataset"
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/onnx"
@@ -41,15 +42,17 @@ func main() {
 	flag.DurationVar(&budgets.Retrieval, "budget-retrieval", budgets.Retrieval, "retrieval budget, all sources; 0 for none")
 	flag.DurationVar(&budgets.Shard, "budget-shard", budgets.Shard, "budget of each shard search; 0 for none")
 	flag.DurationVar(&budgets.Ranker, "budget-ranker", budgets.Ranker, "ranker budget; 0 for none")
+	cacheSize := flag.Int("cache-size", 13000, "result cache entries; 0 for no cache")
+	cacheTTL := flag.Duration("cache-ttl", 5*time.Minute, "result cache time to live, changed by up to 10% either way")
 	flag.Parse()
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if err := run(log, *addr, *dir, *testSplit, *preload, *ortLib, shards, budgets, *drain); err != nil {
+	if err := run(log, *addr, *dir, *testSplit, *preload, *ortLib, shards, budgets, *cacheSize, *cacheTTL, *drain); err != nil {
 		log.Error("gateway stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(log *slog.Logger, addr, dir, testSplit, preload, ortLib string, shards shard.Config, budgets recommend.Budgets, drain time.Duration) (err error) {
+func run(log *slog.Logger, addr, dir, testSplit, preload, ortLib string, shards shard.Config, budgets recommend.Budgets, cacheSize int, cacheTTL time.Duration, drain time.Duration) (err error) {
 	if dir == "" {
 		return errors.New("-bundle is required")
 	}
@@ -94,6 +97,9 @@ func run(log *slog.Logger, addr, dir, testSplit, preload, ortLib string, shards 
 		return err
 	}
 	p.Budgets = budgets
+	if cacheSize > 0 {
+		p.Cache = cache.New[recommend.Response](cacheSize, cacheTTL)
+	}
 	srv := api.New(p, store, log)
 	hs := &http.Server{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second}
 

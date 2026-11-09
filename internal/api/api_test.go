@@ -19,6 +19,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/sHyanorn/recserve/internal/bundle"
+	"github.com/sHyanorn/recserve/internal/cache"
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/onnx"
 	"github.com/sHyanorn/recserve/internal/onnx/onnxtest"
@@ -403,5 +404,22 @@ func TestEncoderErrorDegrades(t *testing.T) {
 	}
 	if !strings.Contains(log.String(), onnx.ErrClosed.Error()) {
 		t.Fatalf("log: %s", log.String())
+	}
+}
+
+// Lookups are counted by result; without a cache nothing is counted.
+func TestCacheLookupsAreCounted(t *testing.T) {
+	s, ts := testServer(t)
+	post(t, ts.URL+"/v1/recommend", `{"user_id":"u","k":2}`)
+	s.Pipeline.Cache = cache.New[recommend.Response](10, time.Hour)
+	for range 3 {
+		if code, out := post(t, ts.URL+"/v1/recommend", `{"user_id":"u","k":2}`); code != http.StatusOK || len(ids(out)) != 2 {
+			t.Fatalf("%d %v", code, out)
+		}
+	}
+	for result, want := range map[string]float64{"miss": 1, "hit": 2} {
+		if got := testutil.ToFloat64(s.cacheLookups.WithLabelValues(result)); got != want {
+			t.Fatalf("%s: %v, want %v", result, got, want)
+		}
 	}
 }
