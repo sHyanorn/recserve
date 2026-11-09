@@ -129,6 +129,41 @@ func TestMMRPrefersDiversity(t *testing.T) {
 	}
 }
 
+// When every candidate has the same score (one candidate, or a ranker that
+// scores all alike), relevance is 1 for each and similarity alone decides;
+// nothing is NaN. Items 1 and 2 point the same way, 3 is orthogonal, 4 is
+// zero, so after 1 the order is 3, 4 (ties to the lower ID), then 2.
+func TestMMREqualScores(t *testing.T) {
+	m := matrix(t, 2, []float32{0, 0, 1, 0, 1, 0, 0, 1, 0, 0})
+	hits := []vec.Hit{{ID: 1, Score: 5}, {ID: 2, Score: 5}, {ID: 3, Score: 5}, {ID: 4, Score: 5}}
+	got := mmr(m, m.InvNorms(), hits, 4, MMRLambda)
+	if want := []vec.Hit{{ID: 1, Score: 5}, {ID: 3, Score: 5}, {ID: 4, Score: 5}, {ID: 2, Score: 5}}; !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	if got := mmr(m, m.InvNorms(), []vec.Hit{{ID: 2, Score: -3}}, 5, MMRLambda); !slices.Equal(got, []vec.Hit{{ID: 2, Score: -3}}) {
+		t.Fatalf("one candidate: %v", got)
+	}
+
+	// Through the pipeline, with a ranker that gives every candidate 7.
+	r := rand.New(rand.NewPCG(9, 9))
+	for c := range 50 {
+		p, err := randomPipeline(r, 2+r.IntN(40), 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.rankWith = positionRanker(0, 7)
+		resp, err := p.Recommend(context.Background(), Request{User: fmt.Sprint("u", r.IntN(3)), K: 1 + r.IntN(MaxK), TS: int64(r.IntN(110))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, it := range resp.Items {
+			if it.Score != 7 {
+				t.Fatalf("case %d: score %v, want 7", c, it.Score)
+			}
+		}
+	}
+}
+
 // mmrEager is MMR as defined: every round recomputes every remaining
 // candidate's value and picks the highest, ties to the lower ID.
 func mmrEager(m vec.Matrix, inv []float32, hits []vec.Hit, k int, lambda float64) []vec.Hit {
