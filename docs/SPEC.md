@@ -124,14 +124,16 @@ A bundle is a directory `bundle/<version>/`:
 
 | File | Content |
 |---|---|
-| `manifest.json` | `format_version`, `model_version`, `dataset`, `train_cutoff_ts` (latest event time used in training), `item_count`, `dim`, `metric` (`dot`), `normalized`, `max_seq_len`, `pad_id` (0), `opset`, input and output names, sha256 of every file |
+| `manifest.json` | `format_version`, `model_version`, `dataset`, `train_cutoff_ts` (latest event time used in training), `item_count`, `dim`, `metric` (`dot`), `normalized`, `max_seq_len`, `pad_id` (0), `user_encoder` (`mean` or `onnx`), build parameters, sha256 of every other file |
 | `items.ids` | One raw item ID per line; line i is internal ID i, starting at 1 |
-| `items.npy` | float32, N × D, little-endian, rows in `items.ids` order |
-| `user_encoder.onnx` | Input `item_seq` int64 [B, L], left-padded with 0; output `user_emb` float32 [B, D]; score = dot product |
+| `items.npy` | float32, (item_count + 1) × D, little-endian; row i is internal ID i, row 0 is padding and all zeros |
+| `user_encoder.onnx` | With `user_encoder: onnx`: input `item_seq` int64 [B, L], left-padded with 0; output `user_emb` float32 [B, D]. With `mean`, absent: the user vector is the mean of the last `max_seq_len` history items' vectors. Score = dot product |
 | `ranker.onnx` | Optional |
-| `golden.jsonl` | Sample inputs with expected embeddings and top-10 IDs |
+| `cooc_ids.npy`, `cooc_counts.npy` | Optional. int64 and float32, (item_count + 1) × 50: each item's most frequent co-occurring items and their counts, 0-padded |
+| `popular.npy` | Optional. int64: the most popular internal IDs, best first |
+| `golden.jsonl` | Sample histories with the expected user vector and top-10 IDs (history excluded, ties by internal ID) |
 
-The service verifies checksums and replays `golden.jsonl` (tolerance 1e-4) before it accepts a bundle; a failure rejects the swap.
+The service verifies checksums and replays `golden.jsonl` (tolerance 1e-4) before it accepts a bundle, and rejects one whose `train_cutoff_ts` is not before the first test event of the evaluation split; a failure rejects the swap. `tools/bundle` builds the baseline bundle (implicit-feedback ALS on the train split) and verifies a bundle with the same rules in Python.
 
 ## 9. Data
 
