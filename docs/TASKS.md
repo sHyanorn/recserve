@@ -24,6 +24,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] User encoder through ONNX Runtime, one intra-op thread (D015, D026)
 - [x] Ranker contract and its ONNX call path (D015, D027)
 - [x] Hand-written HNSW (D016), measured per docs/BENCHMARKS.md (Hand-written HNSW): synth passes, glove fails on latency only
+- [x] In-process shards of the item vectors (`shard.Of`, two by default), exact or HNSW search per shard; property test 6 (D028)
 - [ ] Per-stage deadlines and degradation reasons in responses
 - [ ] Result cache keyed by versions, arm and history head (in memory for now); property test 5
 - [ ] Two-phase bundle swap; property test 4
@@ -38,7 +39,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 
 ## M4 Sharded vector tier
 - [ ] annshard service over gRPC
-- [ ] Scatter-gather with per-shard deadlines, partial results and coverage; property test 6
+- [ ] Scatter-gather over gRPC with per-shard deadlines, partial results and coverage, merging as the in-process shards do; property test 6 rerun over gRPC (D028)
 - [ ] Replica failover and hedged requests
 - [ ] Fault tests: slow shard, dead replica, failed swap
 

@@ -62,10 +62,11 @@ func TestRankerFeatures(t *testing.T) {
 	b := bundle.New(bundle.Manifest{ModelVersion: "t", ItemCount: 4, Dim: 2, MaxSeqLen: 5}, []string{"", "a", "b", "c", "d"}, m, cooc, []int32{4, 3})
 	store := storeWith(t, history.Event{ID: 1, User: "u", Item: 1, TS: 1}, history.Event{ID: 2, User: "u", Item: 2, TS: 2})
 	var got []float32
-	p := &Pipeline{Bundle: b, History: store, rankWith: rankFunc(func(_ context.Context, x []float32) ([]float32, error) {
+	p := newPipeline(t, b, store)
+	p.rankWith = rankFunc(func(_ context.Context, x []float32) ([]float32, error) {
 		got = slices.Clone(x)
 		return make([]float32, len(x)/nf), nil
-	})}
+	})
 	if _, err := p.Recommend(context.Background(), Request{User: "u", K: 2, TS: 3}); err != nil {
 		t.Fatal(err)
 	}
@@ -225,10 +226,11 @@ func TestRankerTruncates(t *testing.T) {
 	}
 	store := storeWith(t, events...)
 	var got []float32
-	p := &Pipeline{Bundle: b, History: store, rankWith: rankFunc(func(_ context.Context, x []float32) ([]float32, error) {
+	p := newPipeline(t, b, store)
+	p.rankWith = rankFunc(func(_ context.Context, x []float32) ([]float32, error) {
 		got = slices.Clone(x)
 		return make([]float32, len(x)/nf), nil
-	})}
+	})
 	req := Request{User: "u", K: 10, TS: 100}
 	resp, err := p.Recommend(context.Background(), req)
 	if err != nil {
@@ -250,8 +252,12 @@ func TestRankerTruncates(t *testing.T) {
 		t.Fatal(err)
 	}
 	var results [][]vec.Hit
-	for _, src := range p.sources(hist, uv, seen) {
-		results = append(results, src())
+	for _, src := range p.sources(ctx, hist, uv, seen) {
+		hits, err := src()
+		if err != nil {
+			t.Fatal(err)
+		}
+		results = append(results, hits)
 	}
 	all := p.retrievalScores(results, uv, seen)
 	slices.SortFunc(all, func(a, b vec.Hit) int { return cmp.Or(cmp.Compare(b.Score, a.Score), cmp.Compare(a.ID, b.ID)) })
@@ -312,8 +318,9 @@ func TestONNXRankerMatchesGo(t *testing.T) {
 		}
 	}
 	store := storeWith(t, events...)
-	viaONNX := &Pipeline{Bundle: b, History: store}
-	viaGo := &Pipeline{Bundle: b, History: store, rankWith: linearRanker}
+	viaONNX := newPipeline(t, b, store)
+	viaGo := newPipeline(t, b, store)
+	viaGo.rankWith = linearRanker
 	ctx := context.Background()
 	for c := range 300 {
 		req := Request{User: fmt.Sprint("u", r.IntN(21)), K: 1 + r.IntN(n), TS: int64(r.IntN(110))}

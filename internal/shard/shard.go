@@ -1,5 +1,5 @@
 // Package shard assigns items to shards by a hash of their internal ID
-// (SPEC §4).
+// (SPEC §4) and searches the item vectors split that way (D028).
 package shard
 
 // Of returns the shard, in [0, n), of internal ID id: SplitMix64's

@@ -22,6 +22,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/onnx"
 	"github.com/sHyanorn/recserve/internal/onnx/onnxtest"
 	"github.com/sHyanorn/recserve/internal/recommend"
+	"github.com/sHyanorn/recserve/internal/shard"
 	"github.com/sHyanorn/recserve/internal/vec"
 )
 
@@ -34,11 +35,20 @@ func testServer(t *testing.T) (*Server, *httptest.Server) {
 	b := bundle.New(bundle.Manifest{ModelVersion: "v1", ItemCount: 4, Dim: 2, MaxSeqLen: 50},
 		[]string{"", "a", "b", "c", "d"}, m, nil, []int32{4, 3})
 	store := history.NewMemory()
-	s := New(&recommend.Pipeline{Bundle: b, History: store}, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s := New(pipeline(t, b, store), store, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	s.Now = func() time.Time { return time.UnixMilli(1000) }
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 	return s, ts
+}
+
+func pipeline(t *testing.T, b *bundle.Bundle, h history.Store) *recommend.Pipeline {
+	t.Helper()
+	p, err := recommend.New(b, h, shard.DefaultConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 func post(t *testing.T, url, body string) (int, map[string]any) {
@@ -215,7 +225,7 @@ func TestRankerTruncationIsCounted(t *testing.T) {
 	if err := store.Append(context.Background(), evs); err != nil {
 		t.Fatal(err)
 	}
-	s := New(&recommend.Pipeline{Bundle: b, History: store}, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s := New(pipeline(t, b, store), store, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 	for range 2 {

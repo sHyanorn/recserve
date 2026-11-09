@@ -21,6 +21,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/onnx"
 	"github.com/sHyanorn/recserve/internal/recommend"
+	"github.com/sHyanorn/recserve/internal/shard"
 )
 
 func main() {
@@ -29,16 +30,20 @@ func main() {
 	testSplit := flag.String("test-split", "", "test split file; its first event bounds the bundle's train cutoff")
 	preload := flag.String("preload", "", "comma-separated split files whose events are loaded into the history store at start")
 	drain := flag.Duration("drain", 10*time.Second, "time allowed for in-flight requests at shutdown")
-	ortLib := flag.String("ort-lib", "", "ONNX Runtime shared library (libonnxruntime.so.1.31.x), needed by a bundle with an ONNX user encoder")
+	ortLib := flag.String("ort-lib", "", "ONNX Runtime shared library (libonnxruntime.so.1.31.x), needed by a bundle with an ONNX user encoder or a ranker")
+	shards := shard.DefaultConfig
+	flag.IntVar(&shards.Shards, "shards", shards.Shards, "in-process shards of the item vectors")
+	flag.StringVar((*string)(&shards.Mode), "shard-mode", string(shards.Mode), "vector search in each shard: exact or hnsw")
+	flag.IntVar(&shards.Ef, "hnsw-ef", shards.Ef, "HNSW search list size, with -shard-mode hnsw")
 	flag.Parse()
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if err := run(log, *addr, *dir, *testSplit, *preload, *ortLib, *drain); err != nil {
+	if err := run(log, *addr, *dir, *testSplit, *preload, *ortLib, shards, *drain); err != nil {
 		log.Error("gateway stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(log *slog.Logger, addr, dir, testSplit, preload, ortLib string, drain time.Duration) (err error) {
+func run(log *slog.Logger, addr, dir, testSplit, preload, ortLib string, shards shard.Config, drain time.Duration) (err error) {
 	if dir == "" {
 		return errors.New("-bundle is required")
 	}
@@ -78,7 +83,11 @@ func run(log *slog.Logger, addr, dir, testSplit, preload, ortLib string, drain t
 			log.Info("history preloaded", "file", path, "events", n)
 		}
 	}
-	srv := api.New(&recommend.Pipeline{Bundle: b, History: store}, store, log)
+	p, err := recommend.New(b, store, shards)
+	if err != nil {
+		return err
+	}
+	srv := api.New(p, store, log)
 	hs := &http.Server{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -90,7 +99,8 @@ func run(log *slog.Logger, addr, dir, testSplit, preload, ortLib string, drain t
 	errc := make(chan error, 1)
 	go func() { errc <- hs.Serve(ln) }()
 	srv.SetReady(true)
-	log.Info("serving", "addr", addr, "model_version", b.ModelVersion, "items", b.ItemCount)
+	log.Info("serving", "addr", addr, "model_version", b.ModelVersion, "items", b.ItemCount,
+		"shards", shards.Shards, "shard_mode", shards.Mode, "zero_vectors", p.Shards.Zeroes())
 	select {
 	case err := <-errc:
 		return err

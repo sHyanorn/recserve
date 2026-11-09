@@ -32,8 +32,12 @@ func newRankCase(b *testing.B, p *Pipeline, hist []int32) rankCase {
 		b.Fatal(err)
 	}
 	var results [][]vec.Hit
-	for _, src := range p.sources(hist, uv, seen) {
-		results = append(results, src())
+	for _, src := range p.sources(context.Background(), hist, uv, seen) {
+		hits, err := src()
+		if err != nil {
+			b.Fatal(err)
+		}
+		results = append(results, hits)
 	}
 	return rankCase{results, uv, seen}
 }
@@ -78,7 +82,7 @@ func BenchmarkRank(b *testing.B) {
 		popular[i] = int32(1 + r.IntN(n))
 	}
 	bd := bundle.New(bundle.Manifest{ModelVersion: "b", ItemCount: n, Dim: dim, MaxSeqLen: 50}, make([]string, n+1), m, cooc, popular)
-	p := &Pipeline{Bundle: bd}
+	p := newPipeline(b, bd, nil)
 	cases := make([]rankCase, 20)
 	for i := range cases {
 		hist := make([]int32, 50)
@@ -112,7 +116,7 @@ func BenchmarkRankRealData(b *testing.B) {
 		b.Fatal(err)
 	}
 	defer f.Close() //nolint:errcheck // read only
-	p := &Pipeline{Bundle: bd}
+	p := newPipeline(b, bd, nil)
 	var cases []rankCase
 	sc := bufio.NewScanner(f)
 	sc.Buffer(nil, 1<<20)

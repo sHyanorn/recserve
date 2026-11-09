@@ -113,25 +113,41 @@ func (h *worstFirst) Pop() any {
 // TopK returns the k rows with the highest dot product with q, best first,
 // over IDs 1 and up; rows for which skip returns true are left out.
 func (m Matrix) TopK(q []float32, k int, skip func(int32) bool) []Hit {
-	if k <= 0 {
-		return nil
-	}
-	h := make(worstFirst, 0, k+1)
+	t := NewTop(k)
 	for id := int32(1); int(id) < m.Rows(); id++ {
-		if skip != nil && skip(id) {
-			continue
-		}
-		c := Hit{id, Dot(q, m.Row(id))}
-		if len(h) < k {
-			heap.Push(&h, c)
-		} else if Better(c, h[0]) {
-			h[0] = c
-			heap.Fix(&h, 0)
+		if skip == nil || !skip(id) {
+			t.Push(Hit{id, Dot(q, m.Row(id))})
 		}
 	}
-	out := make([]Hit, len(h))
-	for i := len(h) - 1; i >= 0; i-- {
-		out[i] = heap.Pop(&h).(Hit)
+	return t.Hits()
+}
+
+// Top keeps the best k hits pushed into it, by Better.
+type Top struct {
+	k int
+	h worstFirst
+}
+
+// NewTop returns a Top that keeps k hits.
+func NewTop(k int) *Top { return &Top{k: k, h: make(worstFirst, 0, max(k, 0)+1)} }
+
+// Push offers c.
+func (t *Top) Push(c Hit) {
+	switch {
+	case t.k <= 0:
+	case len(t.h) < t.k:
+		heap.Push(&t.h, c)
+	case Better(c, t.h[0]):
+		t.h[0] = c
+		heap.Fix(&t.h, 0)
+	}
+}
+
+// Hits returns the kept hits, best first, and empties t.
+func (t *Top) Hits() []Hit {
+	out := make([]Hit, len(t.h))
+	for i := len(t.h) - 1; i >= 0; i-- {
+		out[i] = heap.Pop(&t.h).(Hit)
 	}
 	return out
 }

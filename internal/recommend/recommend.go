@@ -14,6 +14,7 @@ import (
 
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/history"
+	"github.com/sHyanorn/recserve/internal/shard"
 	"github.com/sHyanorn/recserve/internal/vec"
 )
 
@@ -76,10 +77,21 @@ type Ranker interface {
 // Pipeline answers requests from one bundle and a history store.
 type Pipeline struct {
 	Bundle  *bundle.Bundle
+	Shards  *shard.Set // the bundle's item vectors, for vector retrieval
 	History history.Store
 
 	rankWith       Ranker // test only: replaces the bundle's ranker
 	skipSeenFilter bool   // test only: the broken variant of property 2
+}
+
+// New returns a pipeline over b and h, with b's vectors split into shards
+// by cfg.
+func New(b *bundle.Bundle, h history.Store, cfg shard.Config) (*Pipeline, error) {
+	s, err := shard.Build(b.Vectors, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Pipeline{Bundle: b, Shards: s, History: h}, nil
 }
 
 func (p *Pipeline) ranker() Ranker {
@@ -121,14 +133,18 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error)
 		return Response{}, fmt.Errorf("user vector: %w", err)
 	}
 
-	sources := p.sources(hist, uv, seen)
+	sources := p.sources(ctx, hist, uv, seen)
 	results := make([][]vec.Hit, len(sources))
+	errs := make([]error, len(sources))
 	var wg sync.WaitGroup
 	for i, src := range sources {
-		wg.Go(func() { results[i] = src() })
+		wg.Go(func() { results[i], errs[i] = src() })
 	}
 	wg.Wait()
 	if err := ctx.Err(); err != nil {
+		return Response{}, err
+	}
+	if err := errors.Join(errs...); err != nil {
 		return Response{}, err
 	}
 	resp := Response{ModelVersion: b.ModelVersion, Degraded: []string{}}
@@ -241,16 +257,16 @@ func best(hits []vec.Hit) map[int32]float64 {
 }
 
 // sources returns the retrieval sources; each returns its hits, best first.
-func (p *Pipeline) sources(hist []int32, uv []float32, seen map[int32]bool) []func() []vec.Hit {
+func (p *Pipeline) sources(ctx context.Context, hist []int32, uv []float32, seen map[int32]bool) []func() ([]vec.Hit, error) {
 	b := p.Bundle
-	return []func() []vec.Hit{ // in the order of srcVector, srcCooc, srcPopular
-		func() []vec.Hit { // vector
+	return []func() ([]vec.Hit, error){ // in the order of srcVector, srcCooc, srcPopular
+		func() ([]vec.Hit, error) { // vector
 			if uv == nil {
-				return nil
+				return nil, nil
 			}
-			return b.Vectors.TopK(uv, VectorTop, func(id int32) bool { return seen[id] })
+			return p.Shards.SearchAll(ctx, uv, VectorTop, func(id int32) bool { return seen[id] })
 		},
-		func() []vec.Hit { // co-occurrence: seeds weighted by recency, neighbors by rank
+		func() ([]vec.Hit, error) { // co-occurrence: seeds weighted by recency, neighbors by rank
 			var out []vec.Hit
 			for i := 0; i < CoocSeeds && i < len(hist); i++ {
 				w := 1 / float64(i+1)
@@ -258,15 +274,15 @@ func (p *Pipeline) sources(hist []int32, uv []float32, seen map[int32]bool) []fu
 					out = append(out, vec.Hit{ID: id, Score: w / float64(r+1)})
 				}
 			}
-			return out
+			return out, nil
 		},
-		func() []vec.Hit { // popularity
+		func() ([]vec.Hit, error) { // popularity
 			pop := b.Popular[:min(PopularTop, len(b.Popular))]
 			out := make([]vec.Hit, len(pop))
 			for r, id := range pop {
 				out[r] = vec.Hit{ID: id, Score: 1 / float64(r+1)}
 			}
-			return out
+			return out, nil
 		},
 	}
 }

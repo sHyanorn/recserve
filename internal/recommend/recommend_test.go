@@ -12,6 +12,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/onnx"
 	"github.com/sHyanorn/recserve/internal/onnx/onnxtest"
+	"github.com/sHyanorn/recserve/internal/shard"
 	"github.com/sHyanorn/recserve/internal/vec"
 )
 
@@ -56,7 +57,7 @@ func randomPipeline(r *rand.Rand, n, users int) (*Pipeline, error) {
 	if err := store.Append(context.Background(), events); err != nil {
 		return nil, err
 	}
-	return &Pipeline{Bundle: b, History: store}, nil
+	return New(b, store, shard.DefaultConfig)
 }
 
 // checkProperty2 returns the first response that contains an item from the
@@ -251,7 +252,7 @@ func TestZeroVectorHistoryFallsBackToPopularity(t *testing.T) {
 	m := matrix(t, 2, []float32{0, 0, 0, 0, 1, 0, 0, 1})
 	b := bundle.New(bundle.Manifest{ModelVersion: "t", ItemCount: 3, Dim: 2, MaxSeqLen: 5}, []string{"", "a", "b", "c"}, m, nil, []int32{3, 2})
 	store := storeWith(t, history.Event{ID: 1, User: "u", Item: 1, TS: 1})
-	resp, err := (&Pipeline{Bundle: b, History: store}).Recommend(context.Background(), Request{User: "u", K: 2, TS: 2})
+	resp, err := newPipeline(t, b, store).Recommend(context.Background(), Request{User: "u", K: 2, TS: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +267,7 @@ func TestEventAtRequestTimeIsNotHistory(t *testing.T) {
 	m := matrix(t, 2, []float32{0, 0, 1, 0, 0, 1})
 	b := bundle.New(bundle.Manifest{ModelVersion: "t", ItemCount: 2, Dim: 2, MaxSeqLen: 5}, []string{"", "a", "b"}, m, nil, []int32{1, 2})
 	store := storeWith(t, history.Event{ID: 1, User: "u", Item: 1, TS: 5})
-	resp, err := (&Pipeline{Bundle: b, History: store}).Recommend(context.Background(), Request{User: "u", K: 1, TS: 5})
+	resp, err := newPipeline(t, b, store).Recommend(context.Background(), Request{User: "u", K: 1, TS: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,6 +283,16 @@ func matrix(t testing.TB, dim int, data []float32) vec.Matrix {
 		t.Fatal(err)
 	}
 	return m
+}
+
+// newPipeline returns a pipeline over b and h with the default shards.
+func newPipeline(t testing.TB, b *bundle.Bundle, h history.Store) *Pipeline {
+	t.Helper()
+	p, err := New(b, h, shard.DefaultConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 func storeWith(t testing.TB, events ...history.Event) *history.Memory {
@@ -333,8 +344,8 @@ func TestONNXEncoderMatchesMean(t *testing.T) {
 		}
 	}
 	store := storeWith(t, events...)
-	viaMean := &Pipeline{Bundle: bundle.New(man, ids, m, cooc, popular), History: store}
-	viaONNX := &Pipeline{Bundle: withEncoder, History: store}
+	viaMean := newPipeline(t, bundle.New(man, ids, m, cooc, popular), store)
+	viaONNX := newPipeline(t, withEncoder, store)
 	ctx := context.Background()
 	for c := range 300 {
 		req := Request{User: fmt.Sprint("u", r.IntN(21)), K: 1 + r.IntN(n), TS: int64(r.IntN(110)), Exclude: []string{fmt.Sprint("i", 1+r.IntN(n))}}
