@@ -121,14 +121,18 @@ func TestRealDataDegradation(t *testing.T) {
 	p.Budgets = Budgets{Shard: 100 * time.Microsecond}
 	got := (&overshoot{stage: stageVector, after: []string{stageRanker}}).run(t, p, qs, VectorTimeout, ShardsPartial)
 	t.Logf("exact search, shard budget 100µs: %d of %d with a shard timed out; overshoot past the later deadline %s", len(got), len(qs), overshootSummary(got))
-	if rd.bundle.Encoder != nil {
-		for _, budget := range []time.Duration{5 * time.Microsecond, 20 * time.Microsecond} {
-			p.Budgets = Budgets{Encoder: budget}
-			got := (&overshoot{stage: stageEncoder, after: retrieval}).run(t, p, qs, EncoderTimeout)
-			t.Logf("ONNX encoder, budget %v: %d of %d timed out; overshoot %s", budget, len(got), len(qs), overshootSummary(got))
-		}
+	encoderBudgets := []time.Duration{5 * time.Microsecond, 20 * time.Microsecond}
+	if rd.bundle.Encoder == nil {
+		encoderBudgets = nil
+		t.Logf("ONNX encoder: not measured, the bundle's user vector is the mean")
 	}
-	if os.Getenv("RECSERVE_ORT_LIB") != "" {
+	for _, budget := range encoderBudgets {
+		p.Budgets = Budgets{Encoder: budget}
+		got := (&overshoot{stage: stageEncoder, after: retrieval}).run(t, p, qs, EncoderTimeout)
+		t.Logf("ONNX encoder, budget %v: %d of %d timed out; overshoot %s", budget, len(got), len(qs), overshootSummary(got))
+	}
+	switch {
+	case os.Getenv("RECSERVE_ORT_LIB") != "":
 		rk, err := onnx.NewRanker(onnxtest.Model(t, "slow_ranker.onnx"), len(bundle.RankerFeatures), bundle.RankerRows)
 		if err != nil {
 			t.Fatal(err)
@@ -138,14 +142,23 @@ func TestRealDataDegradation(t *testing.T) {
 				t.Error(err)
 			}
 		}()
+		// The first run sets up the session's memory; time the second.
+		x := make([]float32, bundle.RankerRows*len(bundle.RankerFeatures))
+		if _, err := rk.Rank(context.Background(), x); err != nil {
+			t.Fatal(err)
+		}
 		start := time.Now()
-		if _, err := rk.Rank(context.Background(), make([]float32, bundle.RankerRows*len(bundle.RankerFeatures))); err != nil {
+		if _, err := rk.Rank(context.Background(), x); err != nil {
 			t.Fatal(err)
 		}
 		full := time.Since(start)
 		p.rankWith, p.Budgets = rk, Budgets{Ranker: full / 4}
 		got := (&overshoot{stage: stageRanker}).run(t, p, qs, RankerTimeout)
 		t.Logf("ONNX ranker of 300 nodes (a run %v), budget %v: %d of %d timed out; overshoot %s", full, full/4, len(got), len(qs), overshootSummary(got))
+	case os.Getenv("RECSERVE_REQUIRE_ORT") != "":
+		t.Fatal("RECSERVE_REQUIRE_ORT is set but RECSERVE_ORT_LIB is not")
+	default:
+		t.Logf("ONNX ranker: not measured, RECSERVE_ORT_LIB not set")
 	}
 
 	// Default budgets against none, as the gateway serves the bundle.
