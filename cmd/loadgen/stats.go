@@ -4,6 +4,8 @@ import (
 	"math"
 	"slices"
 	"time"
+
+	"github.com/sHyanorn/recserve/internal/bench"
 )
 
 // summary describes one latency distribution, in microseconds.
@@ -45,11 +47,7 @@ func summarize(samples []int64) summary {
 	return s
 }
 
-// at returns the p-th percentile of sorted samples, in microseconds: the
-// sample of rank ceil(p/100 * n), which rounding error must not push up.
-func at(sorted []int64, p float64) float64 {
-	rank := int(math.Ceil(p*float64(len(sorted))/100 - 1e-9))
-	return micros(sorted[max(rank, 1)-1])
-}
+// at returns the p-th percentile of sorted samples, in microseconds.
+func at(sorted []int64, p float64) float64 { return micros(bench.Percentile(sorted, p/100)) }
 
 func micros(ns int64) float64 { return float64(ns) / float64(time.Microsecond) }

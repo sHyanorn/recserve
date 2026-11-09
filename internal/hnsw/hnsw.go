@@ -159,6 +159,9 @@ func (x *Index) allocate() error {
 // Len returns the number of nodes.
 func (x *Index) Len() int { return x.n }
 
+// Params returns M and the efConstruction the graph was built with.
+func (x *Index) Params() (m, efConstruction int) { return x.m, x.efc }
+
 func (x *Index) vec(i int32) []float32 { return x.data[int(i)*x.dim : (int(i)+1)*x.dim] }
 
 func (x *Index) dist(q []float32, i int32) float32 { return -vec.Dot32(q, x.vec(i)) }
