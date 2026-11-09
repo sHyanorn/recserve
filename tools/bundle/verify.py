@@ -10,6 +10,7 @@ service's ranker_features and pass its load check (build.check_ranker).
 """
 
 import json
+import os
 import sys
 
 import numpy as np
@@ -17,6 +18,9 @@ import numpy as np
 from build import RANKER_FEATURES, check_ranker, encode, mean_vector, session, sha256, top_k
 
 TOL = 1e-4
+# Read only when the manifest lists them; one on disk that it does not list
+# rejects the bundle, as in the service.
+OPTIONAL = ("user_encoder.onnx", "ranker.onnx", "cooc_ids.npy", "cooc_counts.npy", "popular.npy")
 
 
 def reject(name):
@@ -29,6 +33,9 @@ def main(d):
     for name, want in m["sha256"].items():
         if sha256(f"{d}/{name}") != want:
             sys.exit(f"{name}: checksum mismatch")
+    for name in OPTIONAL:
+        if name not in m["sha256"] and os.path.exists(f"{d}/{name}"):
+            sys.exit(f"{name} is in the directory but not in the manifest")
     with open(f"{d}/items.ids") as f:
         ids = f.read().splitlines()
     vecs = np.load(f"{d}/items.npy")
@@ -37,6 +44,8 @@ def main(d):
     if np.any(vecs[0] != 0):
         sys.exit("padding row 0 is not zero")
     for name in ("cooc_ids.npy", "popular.npy"):
+        if name not in m["sha256"]:
+            continue
         ids_ = np.load(f"{d}/{name}")
         low = 0 if name == "cooc_ids.npy" else 1
         if ids_.dtype != np.int64 or ids_.min(initial=low) < low or ids_.max(initial=0) > m["item_count"]:

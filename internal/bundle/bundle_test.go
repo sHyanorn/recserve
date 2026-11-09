@@ -123,6 +123,30 @@ func TestLoadONNXTruncates(t *testing.T) {
 	}), Options{})
 }
 
+// With max_seq_len 1 every encoder call takes one item, the load check's
+// included.
+func TestLoadONNXSeqLenOne(t *testing.T) {
+	initORT(t)
+	load(t, writeBundle(t, withEncoder(t, "mean.onnx"), func(f map[string][]byte, m map[string]any) {
+		m["max_seq_len"] = 1
+		f["golden.jsonl"] = []byte(goldenLine(t, testVectors(), 1, []int32{1}) + goldenLine(t, testVectors(), 1, []int32{2, 5}))
+	}), Options{})
+}
+
+// An optional file on disk that the manifest does not list rejects the
+// bundle, instead of being ignored.
+func TestLoadRejectsUnlistedFile(t *testing.T) {
+	for _, name := range optionalFiles {
+		t.Run(name, func(t *testing.T) {
+			dir := writeBundle(t, func(f map[string][]byte, _ map[string]any) { delete(f, name) })
+			if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			checkRejected(t, dir, Options{}, "not in the manifest")
+		})
+	}
+}
+
 func TestLoadRejects(t *testing.T) {
 	cases := map[string]struct {
 		edit editFunc
@@ -207,7 +231,7 @@ func TestLoadRejectsONNX(t *testing.T) {
 			f["cooc_ids.npy"] = npy.Encode([]int{testItems + 2, CoocWidth}, nil, make([]int64, (testItems+2)*CoocWidth))
 			f["golden.jsonl"] = []byte(goldenLine(t, v, 50, []int32{1}))
 			m["item_count"] = testItems + 1
-		}, "items 1 and 13"},
+		}, "items [1 13]"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

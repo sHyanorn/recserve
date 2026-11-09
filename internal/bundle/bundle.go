@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -55,6 +56,10 @@ const CoocWidth = 50
 // RankerFeatures are the ranker's input columns the service computes, in
 // order (docs/SPEC.md §8).
 var RankerFeatures = []string{"vector_score", "cooc_score", "popular_score", "item_norm", "last_item_cosine", "log_history_len"}
+
+// optionalFiles are the files a bundle may have; each is read only if the
+// manifest lists it.
+var optionalFiles = []string{"user_encoder.onnx", "ranker.onnx", "cooc_ids.npy", "cooc_counts.npy", "popular.npy"}
 
 // RankerRows is the number of rows every ranker call passes: at most this
 // many candidates are ranked, and the rest of the rows are zero.
@@ -129,6 +134,18 @@ func (b *Bundle) load(opt Options) error {
 			return fmt.Errorf("%s: checksum mismatch", name)
 		}
 		files[name] = data
+	}
+	// An optional file the manifest does not list would be ignored, so the
+	// bundle would serve without it.
+	for _, name := range optionalFiles {
+		if _, listed := files[name]; listed {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(b.Dir, name)); err == nil {
+			return fmt.Errorf("%s is in the directory but not in the manifest", name)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
 	}
 	need := func(name string) ([]byte, error) {
 		data, ok := files[name]
@@ -209,9 +226,11 @@ func (b *Bundle) load(opt Options) error {
 			return fmt.Errorf("user_encoder.onnx: %w", err)
 		}
 		// The golden cases use few IDs; the highest one shows that the
-		// encoder knows every item.
-		if _, err := b.Encoder.Encode(context.Background(), []int32{1, int32(m.ItemCount)}); err != nil {
-			return fmt.Errorf("user_encoder.onnx: items 1 and %d: %w", m.ItemCount, err)
+		// encoder knows every item. A call takes at most max_seq_len items.
+		for seq := range slices.Chunk([]int32{1, int32(m.ItemCount)}, m.MaxSeqLen) {
+			if _, err := b.Encoder.Encode(context.Background(), seq); err != nil {
+				return fmt.Errorf("user_encoder.onnx: items %v: %w", seq, err)
+			}
 		}
 	}
 
