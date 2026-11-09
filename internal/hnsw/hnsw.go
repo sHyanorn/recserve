@@ -473,6 +473,28 @@ func (x *Index) Check() error {
 	return nil
 }
 
+// Reachable marks the nodes reachable on layer 0 from the entry point: the
+// nodes a search can return. Pruning can remove every link to a node, so a
+// few may be unreachable, as in hnswlib and faiss.
+func (x *Index) Reachable() []bool {
+	seen := make([]bool, x.n)
+	if x.n == 0 {
+		return seen
+	}
+	queue := []int32{x.entry}
+	seen[x.entry] = true
+	for h := 0; h < len(queue); h++ {
+		l := x.list(queue[h], 0)
+		for _, j := range l[1 : 1+l[0]] {
+			if !seen[j] {
+				seen[j] = true
+				queue = append(queue, j)
+			}
+		}
+	}
+	return seen
+}
+
 func pushNear(h []item, it item) []item {
 	h = append(h, it)
 	for i := len(h) - 1; i > 0; {

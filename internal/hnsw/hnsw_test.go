@@ -106,34 +106,12 @@ func (d dataset) recall(ix *Index, k, ef int, filtered bool) float64 {
 // reachable returns the number of nodes reachable on layer 0 from the entry point.
 func reachable(ix *Index) int {
 	n := 0
-	for _, v := range reachableFrom(ix) {
+	for _, v := range ix.Reachable() {
 		if v {
 			n++
 		}
 	}
 	return n
-}
-
-// reachableFrom marks the nodes reachable on layer 0 from the entry point.
-func reachableFrom(ix *Index) []bool {
-	seen := make([]bool, ix.n)
-	if ix.n == 0 {
-		return seen
-	}
-	queue := []int32{ix.entry}
-	seen[ix.entry] = true
-	s := ix.newSearcher()
-	for len(queue) > 0 {
-		i := queue[0]
-		queue = queue[1:]
-		for _, j := range ix.neighbors(s, i, 0) {
-			if !seen[j] {
-				seen[j] = true
-				queue = append(queue, j)
-			}
-		}
-	}
-	return seen
 }
 
 func maxDegree0(ix *Index) int {
@@ -259,9 +237,9 @@ func TestExhaustiveSearchIsExact(t *testing.T) {
 	}{"uniform": {uniform, Config{M: 8, EfConstruction: 64, Seed: 1}}, "tight": {tight, tightCfg}} {
 		ix := mustBuild(t, c.d, c.cfg, mutation{})
 		var ids []int32
-		for i := range int32(ix.n) {
-			if reachableFrom(ix)[i] {
-				ids = append(ids, i)
+		for i, ok := range ix.Reachable() {
+			if ok {
+				ids = append(ids, int32(i))
 			}
 		}
 		for i := range c.d.nq() {
