@@ -92,7 +92,9 @@ func main() {
 
 // noiseBaseline runs the noisebase binary once and returns its baseline.
 func noiseBaseline(bin string, cpu int) (float64, error) {
-	out, err := exec.Command(bin, "-n", "1", "-cpu", strconv.Itoa(cpu), "-q").Output()
+	cmd := exec.Command(bin, "-n", "1", "-cpu", strconv.Itoa(cpu), "-q")
+	cmd.Stderr = os.Stderr // its reason for failing, such as a CPU it cannot pin to
+	out, err := cmd.Output()
 	if err != nil {
 		return 0, fmt.Errorf("noise baseline: %w", err)
 	}

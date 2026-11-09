@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"runtime"
 	"slices"
@@ -59,17 +60,53 @@ func noisePass() float32 {
 }
 
 // MeasureNoise runs the workload pinned to cpu and returns the median
-// nanoseconds of one pass.
-func MeasureNoise(cpu int) float64 {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	var old, set unix.CPUSet
-	if err := unix.SchedGetaffinity(0, &old); err == nil {
-		set.Set(cpu)
-		if unix.SchedSetaffinity(0, &set) == nil {
-			defer unix.SchedSetaffinity(0, &old) //nolint:errcheck // the thread is unlocked and discarded either way
-		}
+// nanoseconds of one pass. It fails if the thread cannot be pinned, rather
+// than measure unpinned.
+func MeasureNoise(cpu int) (float64, error) {
+	var ns float64
+	err := pinned(cpu, func() { ns = noiseRun() })
+	return ns, err
+}
+
+// setAffinity is unix.SchedSetaffinity; tests replace it.
+var setAffinity = unix.SchedSetaffinity
+
+// pinned runs fn on a goroutine of its own, locked to its thread and the
+// thread pinned to cpu. If the thread's affinity cannot be restored
+// afterwards, the goroutine exits still locked, so the runtime terminates
+// the thread (or parks it for good, if it is the main thread) instead of
+// returning it, pinned, to the pool.
+func pinned(cpu int, fn func()) error {
+	if cpu < 0 {
+		return fmt.Errorf("CPU %d is negative", cpu)
 	}
+	done := make(chan error, 1)
+	go func() {
+		runtime.LockOSThread()
+		var old, set unix.CPUSet
+		if err := unix.SchedGetaffinity(0, &old); err != nil {
+			runtime.UnlockOSThread()
+			done <- fmt.Errorf("reading CPU affinity: %w", err)
+			return
+		}
+		set.Set(cpu) // a CPU beyond the set leaves it empty, which the kernel rejects
+		if err := setAffinity(0, &set); err != nil {
+			runtime.UnlockOSThread()
+			done <- fmt.Errorf("pinning to CPU %d: %w", cpu, err)
+			return
+		}
+		fn()
+		if err := setAffinity(0, &old); err != nil {
+			done <- fmt.Errorf("restoring CPU affinity: %w", err)
+			return // still locked: the thread is discarded
+		}
+		runtime.UnlockOSThread()
+		done <- nil
+	}()
+	return <-done
+}
+
+func noiseRun() float64 {
 	noiseOnce.Do(makeNoiseData)
 	t := make([]time.Duration, noiseTimings)
 	for i := range t {

@@ -25,7 +25,10 @@ func main() {
 	}
 	v := make([]float64, *n)
 	for i := range v {
-		v[i] = bench.MeasureNoise(*cpu)
+		var err error
+		if v[i], err = bench.MeasureNoise(*cpu); err != nil {
+			log.Fatal(err)
+		}
 	}
 	med := bench.Median(v)
 	noisy := bench.Noisy(med, *ref)
