@@ -14,9 +14,6 @@ import (
 	"sync"
 )
 
-// Cap is the number of most recent events kept per user.
-const Cap = 200
-
 // Event is one user event. ID identifies the event: storing the same ID
 // twice stores it once.
 type Event struct {
@@ -41,7 +38,7 @@ type Store interface {
 	// Append stores events; events already stored are ignored.
 	Append(ctx context.Context, events []Event) error
 	// Before returns the items of the user's last n stored events with
-	// TS < ts, oldest first.
+	// TS < ts, oldest first; all of them if n <= 0.
 	Before(ctx context.Context, user string, ts int64, n int) ([]int32, error)
 }
 
@@ -60,7 +57,7 @@ type Memory struct {
 	seed   maphash.Seed
 	shards [shards]struct {
 		sync.RWMutex
-		users map[string][]Event // sorted by order, at most Cap
+		users map[string][]Event // sorted by order
 	}
 	inclusive bool // test only: the broken variant that also returns events at ts
 }
@@ -84,11 +81,7 @@ func (m *Memory) Append(_ context.Context, events []Event) error {
 		evs := s.users[e.User]
 		i, found := slices.BinarySearchFunc(evs, e, order)
 		if !found && !slices.ContainsFunc(evs, func(x Event) bool { return x.ID == e.ID }) {
-			evs = slices.Insert(evs, i, e)
-			if len(evs) > Cap {
-				evs = slices.Delete(evs, 0, len(evs)-Cap)
-			}
-			s.users[e.User] = evs
+			s.users[e.User] = slices.Insert(evs, i, e)
 		}
 		s.Unlock()
 	}
@@ -107,7 +100,10 @@ func (m *Memory) Before(_ context.Context, user string, ts int64, n int) ([]int3
 		}
 		return 1
 	})
-	start := max(0, end-n)
+	start := 0
+	if n > 0 {
+		start = max(0, end-n)
+	}
 	out := make([]int32, 0, end-start)
 	for _, e := range evs[start:end] {
 		out = append(out, e.Item)

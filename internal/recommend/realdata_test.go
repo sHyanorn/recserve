@@ -16,9 +16,10 @@ import (
 )
 
 // TestRealDataSmoke runs when RECSERVE_DATA (the directory of make data) and
-// RECSERVE_BUNDLE (a bundle built from it) are set. It loads the train split
-// into the store, asks for 20 items for 1,000 random test users at their
-// first test event, and checks property 2 against their full train history.
+// RECSERVE_BUNDLE (a bundle built from it) are set. It loads the train and
+// valid splits, which precede the test split, into the store, asks for 20
+// items for 1,000 random test users at their first test event, and checks
+// property 2 against everything they rated before it.
 // It also checks that the bundle is rejected when its cutoff reaches the test period.
 func TestRealDataSmoke(t *testing.T) {
 	data, dir := os.Getenv("RECSERVE_DATA"), os.Getenv("RECSERVE_BUNDLE")
@@ -34,16 +35,20 @@ func TestRealDataSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	train, err := dataset.Read(filepath.Join(data, "Video_Games.train.csv.gz"))
-	if err != nil {
-		t.Fatal(err)
+	var train []dataset.Row
+	for _, name := range []string{"train", "valid"} {
+		rows, err := dataset.Read(filepath.Join(data, "Video_Games."+name+".csv.gz"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		train = append(train, rows...)
 	}
 	store := history.NewMemory()
 	trained := map[string]map[string]bool{}
 	var evs []history.Event
 	for _, r := range train {
 		if r.TS >= first {
-			t.Fatalf("train event at %d is not before the first test event %d", r.TS, first)
+			t.Fatalf("event at %d is not before the first test event %d", r.TS, first)
 		}
 		if trained[r.User] == nil {
 			trained[r.User] = map[string]bool{}
@@ -51,7 +56,7 @@ func TestRealDataSmoke(t *testing.T) {
 		trained[r.User][r.Item] = true
 		id, ok := b.Lookup(r.Item)
 		if !ok {
-			t.Fatalf("train item %s not in the bundle", r.Item)
+			t.Fatalf("item %s not in the bundle", r.Item)
 		}
 		evs = append(evs, history.Event{ID: history.EventID(r.User, r.Item, r.TS, dataset.Kind), User: r.User, Item: id, TS: r.TS})
 	}
@@ -74,7 +79,7 @@ func TestRealDataSmoke(t *testing.T) {
 	users = users[:1000]
 
 	p := &Pipeline{Bundle: b, History: store}
-	var withHistory, items, capped int
+	var withHistory, items, long int
 	for _, u := range users {
 		resp, err := p.Recommend(context.Background(), Request{User: u, K: 20, TS: firstTest[u]})
 		if err != nil {
@@ -86,13 +91,13 @@ func TestRealDataSmoke(t *testing.T) {
 		if len(trained[u]) > 0 {
 			withHistory++
 		}
-		if len(trained[u]) > history.Cap {
-			capped++
+		if len(trained[u]) > 200 {
+			long++
 		}
 		got := map[string]bool{}
 		for _, it := range resp.Items {
 			if trained[u][it.ID] {
-				t.Errorf("%s: recommended %s from the train history", u, it.ID)
+				t.Errorf("%s: recommended %s, rated before the request", u, it.ID)
 			}
 			if got[it.ID] {
 				t.Errorf("%s: %s twice", u, it.ID)
@@ -101,8 +106,8 @@ func TestRealDataSmoke(t *testing.T) {
 			items++
 		}
 	}
-	t.Logf("%d users (%d with train history, %d over the %d-event cap), %d items, none seen or repeated",
-		len(users), withHistory, capped, history.Cap, items)
+	t.Logf("%d users (%d with history, %d with over 200 items), %d items, none seen or repeated",
+		len(users), withHistory, long, items)
 
 	// A copy of the bundle whose cutoff is the first test event must be rejected.
 	bad := t.TempDir()

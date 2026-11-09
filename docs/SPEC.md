@@ -70,7 +70,7 @@ All load tests run on one 4-vCPU VM. Kafka, Valkey, the shards and their replica
 
 - **gateway** holds item features, the co-occurrence table, the popularity list and the models in memory, loaded from versioned bundles; per-user state lives in Valkey, so gateway instances are interchangeable.
 - **ingest** is a Kafka consumer group that applies events to the user histories in Valkey (§7, properties 8 and 9).
-- **Valkey** holds each user's recent events as a sorted set (member: item and event ID, score: event time, capped at the latest 200) and the result cache. Item features stay in the gateway: they are part of the bundle, immutable per version, and a request reads about 500 of them (D020).
+- **Valkey** holds each user's recent events as a sorted set (member: item and event ID, score: event time; D023 on retention) and the result cache. Item features stay in the gateway: they are part of the bundle, immutable per version, and a request reads about 500 of them (D020).
 - **annshard** holds one shard of the item vectors. Items are assigned to shards by hash of their internal ID.
 - **Versions.** A bundle version names the vectors, the ID map and the models together. A swap is two-phase: every shard loads and verifies the new version (prepare), then the gateway activates it and pins each request to one version; shards keep the previous version until no request uses it.
 

@@ -9,8 +9,8 @@ import (
 	"testing"
 )
 
-// naiveBefore is the reference for property 1: keep the Cap latest distinct
-// events, then take the last n with TS < ts.
+// naiveBefore is the reference for property 1: the last n distinct events
+// with TS < ts (all of them if n <= 0).
 func naiveBefore(events []Event, ts int64, n int) []int32 {
 	var all []Event
 	seen := map[uint64]bool{}
@@ -21,14 +21,14 @@ func naiveBefore(events []Event, ts int64, n int) []int32 {
 		}
 	}
 	slices.SortFunc(all, order)
-	if len(all) > Cap {
-		all = all[len(all)-Cap:]
-	}
 	var out []int32
 	for _, e := range all {
 		if e.TS < ts {
 			out = append(out, e.Item)
 		}
+	}
+	if n <= 0 {
+		return out
 	}
 	return out[max(0, len(out)-n):]
 }
@@ -41,7 +41,7 @@ func checkProperty1(newStore func() *Memory, seed uint64, cases int) error {
 	for c := range cases {
 		s := newStore()
 		var sent []Event
-		nEvents := r.IntN(3 * Cap)
+		nEvents := r.IntN(600)
 		for range nEvents {
 			var e Event
 			if len(sent) > 0 && r.IntN(5) == 0 {
@@ -57,7 +57,7 @@ func checkProperty1(newStore func() *Memory, seed uint64, cases int) error {
 			}
 		}
 		for range 20 {
-			ts, n := int64(r.IntN(52)), r.IntN(Cap+10)
+			ts, n := int64(r.IntN(52)), r.IntN(610)-5
 			got, err := s.Before(ctx, "u", ts, n)
 			if err != nil {
 				return err
@@ -108,9 +108,9 @@ func TestConcurrentAppendAndRead(t *testing.T) {
 	}
 	wg.Wait()
 	for i := range 10 {
-		got, _ := s.Before(ctx, fmt.Sprint("u", i), 1<<40, Cap+1)
-		if len(got) != Cap {
-			t.Fatalf("user %d keeps %d events, want %d", i, len(got), Cap)
+		got, _ := s.Before(ctx, fmt.Sprint("u", i), 1<<40, 0)
+		if len(got) != 8*50 {
+			t.Fatalf("user %d has %d events, want %d", i, len(got), 8*50)
 		}
 	}
 }

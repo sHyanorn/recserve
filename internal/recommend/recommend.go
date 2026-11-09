@@ -67,7 +67,7 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error)
 		return Response{}, fmt.Errorf("k must be in 1..%d", MaxK)
 	}
 	b := p.Bundle
-	hist, err := p.History.Before(ctx, req.User, req.TS, history.Cap)
+	hist, err := p.History.Before(ctx, req.User, req.TS, 0)
 	if err != nil {
 		return Response{}, fmt.Errorf("history: %w", err)
 	}
