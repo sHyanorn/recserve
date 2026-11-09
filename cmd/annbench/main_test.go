@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"encoding/binary"
 	"encoding/json"
+	"io"
 	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/sHyanorn/recserve/internal/bench"
@@ -193,5 +196,57 @@ func TestNoiseBaseline(t *testing.T) {
 		if _, err := noiseBaseline(script(name, body), 0); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+func TestShards(t *testing.T) {
+	dir := t.TempDir()
+	writeSet(t, dir)
+	s, err := bench.LoadANNSet(dir, "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := options{dataDir: dir, set: "t", graph: filepath.Join(dir, "g"), m: 8, efc: 64, workers: 1, seed: 1,
+		efs: []int{10, 200}, ks: []int{10, 100}, shards: 2}
+	// Shards run in goroutines connected by pipes, as processes are by theirs.
+	spawn := func(i, n int) (*shardConn, error) {
+		so := o
+		so.shard, so.shards, so.graph = i, n, o.graph+"."+strconv.Itoa(i)
+		reqR, reqW := io.Pipe()
+		repR, repW := io.Pipe()
+		errc := make(chan error, 1)
+		go func() { errc <- serve(s, so, reqR, repW); _ = repW.Close() }()
+		return &shardConn{w: bufio.NewWriter(reqW), r: bufio.NewReader(repR), done: func() error {
+			_ = reqW.Close()
+			return <-errc
+		}}, nil
+	}
+	var first []point
+	for run := range 2 { // the second run reads the graphs the first one saved
+		res, err := shards(s, o, func() float64 { return 1 }, t.Logf, spawn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := res.(shardRecord)
+		if len(r.Shards) != 2 || r.Shards[0].Nodes+r.Shards[1].Nodes != testN || r.Shards[0].Nodes < testN/3 || r.Shards[1].Nodes < testN/3 {
+			t.Fatalf("shards %+v", r.Shards)
+		}
+		if built := r.Shards[0].BuildSeconds > 0; built != (run == 0) {
+			t.Fatalf("run %d: build seconds %v", run, r.Shards[0].BuildSeconds)
+		}
+		var got [][2]int
+		for i, p := range r.Points {
+			got = append(got, [2]int{p.K, p.Ef})
+			if p.Ef == 200 && p.Recall < 0.99 {
+				t.Errorf("k=%d ef=200: recall %.4f", p.K, p.Recall)
+			}
+			if run == 1 && p.Recall != first[i].Recall {
+				t.Errorf("k=%d ef=%d: recall %.4f from saved graphs, %.4f from built ones", p.K, p.Ef, p.Recall, first[i].Recall)
+			}
+		}
+		if want := [][2]int{{10, 10}, {10, 200}, {100, 200}}; !slices.Equal(got, want) {
+			t.Fatalf("points %v, want %v", got, want)
+		}
+		first = r.Points
 	}
 }

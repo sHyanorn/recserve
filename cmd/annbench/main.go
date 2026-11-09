@@ -5,6 +5,10 @@
 //	annbench -mode checkgt -set glove                                 verify the ground truth of the first queries
 //	annbench -mode build -set glove -M 16 -efc 200 -graph G -noise NB  build with -workers goroutines, save to G
 //	annbench -mode query -set glove -graph G -noise NB -ref REF        read G, measure every (k, ef)
+//	annbench -mode shards -set glove -M 32 -efc 400 -graph G -noise NB  the same through -shards shard processes
+//
+// In shards mode, shard i reads its graph from G.i, or builds it with
+// -workers / -shards goroutines and saves it there.
 //
 // NB is a cmd/noisebase binary: every noise baseline is taken by running
 // it, so the session reference and the baselines come from the same code
@@ -38,6 +42,7 @@ type options struct {
 	seed                           uint64
 	efs, ks                        []int
 	nq, check, cpu                 int
+	shards, shard                  int
 	ref                            float64
 }
 
@@ -57,6 +62,8 @@ func main() {
 	flag.StringVar(&ks, "k", "10,100", "query: k values")
 	flag.IntVar(&o.nq, "nq", 0, "query: use the first nq queries (0: all)")
 	flag.IntVar(&o.check, "check", 100, "checkgt: number of queries to verify")
+	flag.IntVar(&o.shards, "shards", 2, "shards, serve: number of shards")
+	flag.IntVar(&o.shard, "shard", 0, "serve: the shard this process serves")
 	flag.StringVar(&o.noise, "noise", "", "build, query: cmd/noisebase binary that takes the noise baselines")
 	flag.IntVar(&o.cpu, "cpu", 0, "CPU the noise baseline is pinned to")
 	flag.Float64Var(&o.ref, "ref", 0, "noise reference in ns per pass (0 disables flagging)")
@@ -68,7 +75,7 @@ func main() {
 	if o.ks, err = ints(ks); err != nil {
 		log.Fatal(err)
 	}
-	if o.noise == "" && o.mode != "checkgt" {
+	if o.noise == "" && o.mode != "checkgt" && o.mode != "serve" {
 		log.Fatal("-noise is required")
 	}
 	measure := func() float64 {
@@ -124,6 +131,10 @@ func run(o options, measure func() float64, logf func(string, ...any)) error {
 		res, err = build(s, o, measure, logf)
 	case "query":
 		res, err = query(s, o, measure, logf)
+	case "shards":
+		res, err = shards(s, o, measure, logf, spawnProcess(o))
+	case "serve":
+		err = serve(s, o, os.Stdin, os.Stdout)
 	default:
 		err = fmt.Errorf("unknown mode %q", o.mode)
 	}
@@ -260,10 +271,9 @@ type queryRecord struct {
 }
 
 func query(s *bench.ANNSet, o options, measure func() float64, logf func(string, ...any)) (any, error) {
-	for _, k := range o.ks {
-		if k > bench.TruthK {
-			return nil, fmt.Errorf("k %d above the %d true neighbors", k, bench.TruthK)
-		}
+	nq, err := queryCount(s, o)
+	if err != nil {
+		return nil, err
 	}
 	f, err := os.Open(o.graph)
 	if err != nil {
@@ -277,13 +287,6 @@ func query(s *bench.ANNSet, o options, measure func() float64, logf func(string,
 		return nil, err
 	}
 	m, efc := ix.Params()
-	nq := s.NQuery()
-	if o.nq > 0 {
-		nq = min(nq, o.nq)
-	}
-	if nq == 0 {
-		return nil, errors.New("no queries")
-	}
 	r := queryRecord{Env: env(o), Set: o.set, Nodes: ix.Len(), Queries: nq, M: m, EfC: efc,
 		HeapObjectsMiB: bench.HeapObjectsMiB(), UnreachableLayer0: unreachable(ix)}
 	logf("graph M=%d efc=%d: heap %.0f MiB, %d unreachable on layer 0", m, efc, r.HeapObjectsMiB, r.UnreachableLayer0)
@@ -292,15 +295,37 @@ func query(s *bench.ANNSet, o options, measure func() float64, logf func(string,
 			if ef < k {
 				continue
 			}
-			got, noise := bench.Bracketed(o.ref, measure, func() pass { return timed(ix, s, nq, k, ef) })
+			search := func(q []float32) ([]vec.Hit, error) { return ix.Search(q, k, ef, nil), nil }
+			got, noise := bench.Bracketed(o.ref, measure, func() pass { return timed(s, nq, k, search) })
 			p := point{Index: "recserve/hnsw", M: m, EfC: efc, Ef: ef, K: k, Recall: got.recall,
 				Latency: got.latency, QPS: got.qps, GC: got.gc, Noise: noise}
-			logf("ef=%d k=%d recall=%.4f p50=%.0fus p99=%.0fus qps=%.0f gc=%d max pause <= %.2fms noisy=%v attempt=%d",
-				ef, k, p.Recall, p.Latency.P50, p.Latency.P99, p.QPS, p.GC.Cycles, p.GC.MaxPauseUpper, noise.Flagged, noise.Attempt)
+			logPoint(logf, p)
 			r.Points = append(r.Points, p)
 		}
 	}
 	return r, nil
+}
+
+// queryCount checks the k values and returns the number of queries to use.
+func queryCount(s *bench.ANNSet, o options) (int, error) {
+	for _, k := range o.ks {
+		if k > bench.TruthK {
+			return 0, fmt.Errorf("k %d above the %d true neighbors", k, bench.TruthK)
+		}
+	}
+	nq := s.NQuery()
+	if o.nq > 0 {
+		nq = min(nq, o.nq)
+	}
+	if nq == 0 {
+		return 0, errors.New("no queries")
+	}
+	return nq, nil
+}
+
+func logPoint(logf func(string, ...any), p point) {
+	logf("ef=%d k=%d recall=%.4f p50=%.0fus p99=%.0fus qps=%.0f gc=%d max pause <= %.2fms noisy=%v attempt=%d",
+		p.Ef, p.K, p.Recall, p.Latency.P50, p.Latency.P99, p.QPS, p.GC.Cycles, p.GC.MaxPauseUpper, p.Noise.Flagged, p.Noise.Attempt)
 }
 
 type pass struct {
@@ -308,14 +333,17 @@ type pass struct {
 	recall  float64
 	qps     float64
 	gc      bench.GCStats
+	err     error
 }
 
-// timed answers the first nq queries one at a time on this goroutine, after
-// a warm pass over the first 1,000, and scores the answers once timing ends.
-// GC statistics cover the timed pass only.
-func timed(ix *hnsw.Index, s *bench.ANNSet, nq, k, ef int) pass {
+// timed answers the first nq queries one at a time on this goroutine with
+// search, after a warm pass over the first 1,000, and scores the answers
+// once timing ends. GC statistics cover the timed pass only.
+func timed(s *bench.ANNSet, nq, k int, search func([]float32) ([]vec.Hit, error)) pass {
 	for q := range min(1000, nq) {
-		ix.Search(s.QueryVec(q), k, ef, nil)
+		if _, err := search(s.QueryVec(q)); err != nil {
+			return pass{err: err}
+		}
 	}
 	lat := make([]time.Duration, nq)
 	hits := make([][]vec.Hit, nq)
@@ -323,8 +351,12 @@ func timed(ix *hnsw.Index, s *bench.ANNSet, nq, k, ef int) pass {
 	start := time.Now()
 	for q := range nq {
 		t0 := time.Now()
-		hits[q] = ix.Search(s.QueryVec(q), k, ef, nil)
+		h, err := search(s.QueryVec(q))
 		lat[q] = time.Since(t0)
+		if err != nil {
+			return pass{err: err}
+		}
+		hits[q] = h
 	}
 	elapsed := time.Since(start)
 	gc := bench.GCBetween(g0, bench.ReadGC())
