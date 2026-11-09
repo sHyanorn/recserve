@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -87,13 +88,19 @@ func (s *Server) instrument(route string, h func(http.ResponseWriter, *http.Requ
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, code: http.StatusOK}
-		r.Body = http.MaxBytesReader(sw, r.Body, MaxBody)
+		r.Body = http.MaxBytesReader(w, r.Body, MaxBody)
 		if err := h(sw, r); err != nil {
 			code := http.StatusInternalServerError
 			var be badRequest
-			if errors.As(err, &be) {
+			var tooLarge *http.MaxBytesError
+			switch {
+			case errors.As(err, &tooLarge):
+				code = http.StatusRequestEntityTooLarge
+			case errors.As(err, &be):
 				code = http.StatusBadRequest
-			} else {
+			case errors.Is(err, context.Canceled) && r.Context().Err() != nil:
+				code = statusClientClosed
+			default:
 				s.Log.Error("request failed", "route", route, "err", err)
 			}
 			writeJSON(sw, code, map[string]string{"error": err.Error()})
@@ -104,6 +111,11 @@ func (s *Server) instrument(route string, h func(http.ResponseWriter, *http.Requ
 }
 
 type badRequest struct{ error }
+
+func (b badRequest) Unwrap() error { return b.error }
+
+// statusClientClosed is recorded when the client went away before the reply (nginx's 499).
+const statusClientClosed = 499
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -118,7 +130,7 @@ func decode(r io.Reader, v any) error {
 	if err := d.Decode(v); err != nil {
 		return badRequest{fmt.Errorf("body: %w", err)}
 	}
-	if d.More() {
+	if _, err := d.Token(); !errors.Is(err, io.EOF) {
 		return badRequest{errors.New("body: trailing data")}
 	}
 	return nil
@@ -130,6 +142,7 @@ type RecommendRequest struct {
 	K       int      `json:"k"`
 	TS      *int64   `json:"ts,omitempty"`
 	Exclude []string `json:"exclude,omitempty"`
+	Recent  []string `json:"recent,omitempty"` // used from M3, when the stored history is unavailable
 }
 
 // ParseRecommend decodes and validates a recommend request; now is used when ts is absent.

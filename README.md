@@ -10,7 +10,7 @@ Status: single-node request path (M1). See [docs/SPEC.md](docs/SPEC.md), [docs/D
 make data DATA=data      # Amazon Reviews 2023 Video_Games, 5-core timestamp split
 make bundle DATA=data    # baseline ALS bundle into data/bundle/<version>
 make build
-bin/gateway -bundle data/bundle/<version> -test-split data/Video_Games.test.csv.gz -preload data/Video_Games.train.csv.gz
+bin/gateway -bundle data/bundle/<version> -test-split data/Video_Games.test.csv.gz -preload data/Video_Games.train.csv.gz,data/Video_Games.valid.csv.gz
 bin/loadgen -split data/Video_Games.test.csv.gz -rate 200 -duration 30s
 ```
 

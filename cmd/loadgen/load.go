@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -282,20 +283,26 @@ func (d *datasetWorkload) request(i int, b []byte) (string, []byte) {
 	r := d.rows[i%len(d.rows)]
 	if int(float64(i+1)*d.writeShare) > int(float64(i)*d.writeShare) {
 		b = append(b, `{"events":[{"user_id":`...)
-		b = strconv.AppendQuote(b, r.user)
+		b = appendJSONString(b, r.user)
 		b = append(b, `,"item_id":`...)
-		b = strconv.AppendQuote(b, r.item)
+		b = appendJSONString(b, r.item)
 		b = append(b, `,"ts":`...)
 		b = strconv.AppendInt(b, r.ts, 10)
 		b = append(b, `,"kind":"rating"}]}`...)
 		return "/v1/events", b
 	}
 	b = append(b, `{"user_id":`...)
-	b = strconv.AppendQuote(b, r.user)
+	b = appendJSONString(b, r.user)
 	b = append(b, `,"k":`...)
 	b = strconv.AppendInt(b, int64(d.k), 10)
 	b = append(b, `,"ts":`...)
 	b = strconv.AppendInt(b, r.ts, 10)
 	b = append(b, '}')
 	return "/v1/recommend", b
+}
+
+// appendJSONString appends s as a JSON string.
+func appendJSONString(b []byte, s string) []byte {
+	q, _ := json.Marshal(s) // a string always marshals
+	return append(b, q...)
 }

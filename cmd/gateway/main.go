@@ -6,9 +6,11 @@ import (
 	"errors"
 	"flag"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,7 +25,7 @@ func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	dir := flag.String("bundle", "", "bundle directory")
 	testSplit := flag.String("test-split", "", "test split file; its first event bounds the bundle's train cutoff")
-	preload := flag.String("preload", "", "split file whose events are loaded into the history store at start")
+	preload := flag.String("preload", "", "comma-separated split files whose events are loaded into the history store at start")
 	drain := flag.Duration("drain", 10*time.Second, "time allowed for in-flight requests at shutdown")
 	flag.Parse()
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -43,7 +45,12 @@ func run(log *slog.Logger, addr, dir, testSplit, preload string, drain time.Dura
 		if err != nil {
 			return err
 		}
+		if len(rows) == 0 {
+			return errors.New("-test-split is empty")
+		}
 		opt.FirstTestTS = dataset.FirstTS(rows)
+	} else {
+		log.Warn("no -test-split: the bundle's train cutoff is not checked")
 	}
 	b, err := bundle.Load(dir, opt)
 	if err != nil {
@@ -51,19 +58,25 @@ func run(log *slog.Logger, addr, dir, testSplit, preload string, drain time.Dura
 	}
 	store := history.NewMemory()
 	if preload != "" {
-		n, err := preloadHistory(store, b, preload)
-		if err != nil {
-			return err
+		for _, path := range strings.Split(preload, ",") {
+			n, err := preloadHistory(store, b, path)
+			if err != nil {
+				return err
+			}
+			log.Info("history preloaded", "file", path, "events", n)
 		}
-		log.Info("history preloaded", "events", n)
 	}
 	srv := api.New(&recommend.Pipeline{Bundle: b, History: store}, store, log)
 	hs := &http.Server{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
 	errc := make(chan error, 1)
-	go func() { errc <- hs.ListenAndServe() }()
+	go func() { errc <- hs.Serve(ln) }()
 	srv.SetReady(true)
 	log.Info("serving", "addr", addr, "model_version", b.ModelVersion, "items", b.ItemCount)
 	select {

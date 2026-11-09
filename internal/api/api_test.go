@@ -82,11 +82,18 @@ func TestBadRequests(t *testing.T) {
 		{"/v1/recommend", `not json`},
 		{"/v1/events", `{"events":[]}`},
 		{"/v1/events", `{"events":[{"user_id":"u","item_id":"a","ts":0}]}`},
-		{"/v1/recommend", `{"user_id":"` + strings.Repeat("x", MaxBody) + `","k":1}`},
+		{"/v1/recommend", `{"user_id":"u","k":5}]`},
 	} {
 		if code, _ := post(t, ts.URL+tc.path, tc.body); code != http.StatusBadRequest {
 			t.Errorf("%s %.40s: status %d", tc.path, tc.body, code)
 		}
+	}
+}
+
+func TestOversizedBody(t *testing.T) {
+	_, ts := testServer(t)
+	if code, _ := post(t, ts.URL+"/v1/recommend", `{"user_id":"`+strings.Repeat("x", MaxBody)+`","k":1}`); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d", code)
 	}
 }
 
