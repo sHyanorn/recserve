@@ -10,15 +10,15 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] Record the outcomes against the criteria; adopt the fallbacks where a criterion fails
 
 ## M1 Single-node request path
-- [ ] go.mod, Makefile, golangci-lint, CI
-- [ ] `make data`: download Amazon 2023 Video_Games (5-core timestamp split, metadata), verify checksums
-- [ ] Baseline item vectors (offline matrix factorization) exported as a bundle (SPEC §8)
-- [ ] Bundle loader with checksum and golden verification
-- [ ] Point-in-time history store behind an interface (in memory for now); property test 1
-- [ ] Retrieval: exact vector search, co-occurrence, popularity
-- [ ] Merge, seen filter, dedup, MMR; property test 2
-- [ ] HTTP API `/v1/recommend`, `/v1/events`, `/livez`, `/readyz`, `/metrics`
-- [ ] `cmd/loadgen` and its coordinated-omission test (property 7)
+- [x] go.mod, Makefile, golangci-lint, CI
+- [x] `make data`: download Amazon 2023 Video_Games (5-core timestamp split, metadata), verify checksums
+- [x] Baseline item vectors (offline matrix factorization) exported as a bundle (SPEC §8)
+- [x] Bundle loader with checksum and golden verification
+- [x] Point-in-time history store behind an interface (in memory for now); property test 1
+- [x] Retrieval: exact vector search, co-occurrence, popularity
+- [x] Merge, seen filter, dedup, MMR; property test 2
+- [x] HTTP API `/v1/recommend`, `/v1/events`, `/livez`, `/readyz`, `/metrics`
+- [x] `cmd/loadgen` and its coordinated-omission test (property 7)
 
 ## M2 Models, ANN, degradation, swaps
 - [ ] User encoder and ranker through ONNX Runtime, one intra-op thread (D015)
