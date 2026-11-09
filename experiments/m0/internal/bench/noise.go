@@ -68,8 +68,23 @@ func MeasureNoise(cpu int) float64 {
 		}
 		t[i] = time.Since(start)
 	}
-	slices.Sort(t)
-	return float64(t[len(t)/2]) / noisePasses
+	return Median(t) / noisePasses
+}
+
+// Median returns the median of v, the mean of the two middle values when len(v) is even.
+func Median[T ~int64 | ~float64](v []T) float64 {
+	s := slices.Clone(v)
+	slices.Sort(s)
+	n := len(s)
+	if n%2 == 1 {
+		return float64(s[n/2])
+	}
+	return (float64(s[n/2-1]) + float64(s[n/2])) / 2
+}
+
+// Noisy reports whether a baseline is more than NoiseLimit slower than ref; ref <= 0 disables the check.
+func Noisy(baseline, ref float64) bool {
+	return ref > 0 && baseline > NoiseLimit*ref
 }
 
 // Noise is the baseline record of one measured run.
@@ -90,7 +105,7 @@ func Bracketed[T any](ref float64, cpu int, fn func() T) (T, Noise) {
 		r := fn()
 		after := MeasureNoise(cpu)
 		n := Noise{Reference: ref, Before: before, After: after, Attempt: attempt,
-			Flagged: before > NoiseLimit*ref || after > NoiseLimit*ref}
+			Flagged: Noisy(before, ref) || Noisy(after, ref)}
 		if !n.Flagged || attempt == NoiseAttempts {
 			return r, n
 		}

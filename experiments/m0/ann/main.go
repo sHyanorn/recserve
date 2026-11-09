@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -109,22 +108,18 @@ func (d *data) recall(q int, got []int32, k int) float64 {
 type gcStats struct {
 	NumGC          uint64  `json:"num_gc"`
 	MaxPauseUpper  float64 `json:"max_pause_upper_ms"` // upper bound of the highest histogram bucket hit
-	GCCPUFraction  float64 `json:"gc_cpu_fraction"`
 	HeapObjectsMiB float64 `json:"heap_objects_mib,omitempty"`
 }
 
 var gcSamples = []metrics.Sample{
 	{Name: "/sched/pauses/total/gc:seconds"},
-	{Name: "/cpu/classes/gc/total:cpu-seconds"},
-	{Name: "/cpu/classes/total:cpu-seconds"},
 	{Name: "/gc/cycles/total:gc-cycles"},
 }
 
 type gcSnap struct {
-	pauses       []uint64
-	buckets      []float64
-	gcCPU, total float64
-	cycles       uint64
+	pauses  []uint64
+	buckets []float64
+	cycles  uint64
 }
 
 func snapGC() gcSnap {
@@ -133,7 +128,7 @@ func snapGC() gcSnap {
 	metrics.Read(s)
 	h := s[0].Value.Float64Histogram()
 	return gcSnap{pauses: append([]uint64(nil), h.Counts...), buckets: h.Buckets,
-		gcCPU: s[1].Value.Float64(), total: s[2].Value.Float64(), cycles: s[3].Value.Uint64()}
+		cycles: s[1].Value.Uint64()}
 }
 
 func gcDiff(a, b gcSnap) gcStats {
@@ -143,9 +138,6 @@ func gcDiff(a, b gcSnap) gcStats {
 			st.MaxPauseUpper = b.buckets[i+1] * 1e3
 			break
 		}
-	}
-	if b.total > a.total {
-		st.GCCPUFraction = (b.gcCPU - a.gcCPU) / (b.total - a.total)
 	}
 	return st
 }
@@ -247,11 +239,11 @@ func main() {
 	switch *index {
 	case "exact":
 		type r struct {
-			s    bench.Summary
-			rec  float64
-			qps  float64
-			gc   gcStats
-			ids  [][]int32
+			s   bench.Summary
+			rec float64
+			qps float64
+			gc  gcStats
+			ids [][]int32
 		}
 		got, noise := bench.Bracketed(*ref, 0, func() r {
 			s, rec, qps, gs, ids := d.timed(100, d.exact)
@@ -266,7 +258,8 @@ func main() {
 		points = append(points, p)
 	case "hnsw":
 		g := hnsw.NewGraph[int32]()
-		g.M, g.Ml, g.EfSearch = *m, 1/math.Log(float64(*m)), *efc
+		// coder/hnsw's Ml is the probability of promoting a node one layer up, 1/M in the paper's terms.
+		g.M, g.Ml, g.EfSearch = *m, 1/float64(*m), *efc
 		g.Distance = hnsw.CosineDistance
 		g.Rng = rand.New(rand.NewSource(1))
 		start := time.Now()
@@ -305,8 +298,8 @@ func main() {
 					return r{s, rec, qps, gs}
 				})
 				p := point{Index: "coder/hnsw", M: *m, EfC: *efc, Ef: ef, K: k, Recall: got.rec, Latency: got.s, QPS: got.qps, GC: got.gc, Noise: noise}
-				fmt.Printf("hnsw M=%d ef=%d k=%d recall=%.4f p50=%.0fus p99=%.0fus qps=%.0f gcmax=%.2fms gccpu=%.3f noisy=%v\n",
-					*m, ef, k, p.Recall, p.Latency.P50, p.Latency.P99, p.QPS, p.GC.MaxPauseUpper, p.GC.GCCPUFraction, noise.Flagged)
+				fmt.Printf("hnsw M=%d ef=%d k=%d recall=%.4f p50=%.0fus p99=%.0fus qps=%.0f gcmax=%.2fms noisy=%v\n",
+					*m, ef, k, p.Recall, p.Latency.P50, p.Latency.P99, p.QPS, p.GC.MaxPauseUpper, noise.Flagged)
 				points = append(points, p)
 			}
 		}

@@ -13,7 +13,7 @@ go build -o /tmp/noise ./cmd/noise
 if [ ! -f "$OUT/$set_-exact.json" ]; then
   /tmp/r2 -data "$DATA" -set "$set_" -index exact -ref "$ref" -out "$OUT/$set_-exact.json"
 fi
-/tmp/noise -n 1 -out "$OUT/$set_-faiss-M$m-noise-before.json"
+/tmp/noise -n 1 -ref "$ref" -out "$OUT/$set_-faiss-M$m-noise-before.json"
 "$PY" -I ann/faiss_ref.py "$DATA" "$set_" "$m" "$efc" "$OUT/$set_-faiss-M$m.json"
-/tmp/noise -n 1 -out "$OUT/$set_-faiss-M$m-noise-after.json"
+/tmp/noise -n 1 -ref "$ref" -out "$OUT/$set_-faiss-M$m-noise-after.json"
 /tmp/r2 -data "$DATA" -set "$set_" -index faiss -M "$m" -efc "$efc" -out "$OUT/$set_-faiss-M$m-recall.json"
