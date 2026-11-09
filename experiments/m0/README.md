@@ -21,7 +21,7 @@ go run ./onnx -mode latency -dir DATA/onnx -lib .../libonnxruntime.so -ref REF -
 docker build -f onnx/Dockerfile -t recserve-m0-onnx . && docker run --rm -v DATA/onnx:/models:ro recserve-m0-onnx -mode parity
 
 # R2: pure-Go HNSW
-DATA/venv/bin/python -I ann/prep.py glove-100-angular.hdf5 DATA/ann
+DATA/venv/bin/python -I ann/prep.py DATA/glove-100-angular.hdf5 DATA/ann
 # coder/hnsw, exact search (once per set), faiss with noise baselines, faiss recall
 DATA=DATA/ann PY=DATA/venv/bin/python ann/run.sh synth 16 200 REF
 DATA=DATA/ann PY=DATA/venv/bin/python ann/run.sh glove 16 200 REF
