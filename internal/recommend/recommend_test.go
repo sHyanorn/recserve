@@ -62,8 +62,10 @@ func randomPipeline(r *rand.Rand, n, users int) (*Pipeline, error) {
 
 // checkProperty2 returns the first response that contains an item from the
 // user's history before the request (or the request's exclusions) or repeats
-// an item; rk, if not nil, ranks the candidates.
-func checkProperty2(seed uint64, cases int, broken bool, rk Ranker) error {
+// an item; rk, if not nil, ranks the candidates, and f, if not nil, makes
+// stages fail. When the stored history is unavailable, the history is the
+// request's recent items (property 10).
+func checkProperty2(seed uint64, cases int, broken bool, rk Ranker, f *fault) error {
 	r := rand.New(rand.NewPCG(seed, 0))
 	ctx := context.Background()
 	for c := range cases {
@@ -72,22 +74,32 @@ func checkProperty2(seed uint64, cases int, broken bool, rk Ranker) error {
 			return err
 		}
 		p.skipSeenFilter, p.rankWith = broken, rk
+		if f != nil {
+			p.stall = f.stall
+		}
 		for range 10 {
 			user := fmt.Sprint("u", r.IntN(4))
 			ts := int64(r.IntN(110))
 			exclude := []string{fmt.Sprint("i", 1+r.IntN(p.Bundle.ItemCount)), "unknown"}
-			resp, err := p.Recommend(ctx, Request{User: user, K: 1 + r.IntN(MaxK), TS: ts, Exclude: exclude})
+			recent := randomRecent(r, p.Bundle.ItemCount)
+			resp, err := p.Recommend(ctx, Request{User: user, K: 1 + r.IntN(MaxK), TS: ts, Exclude: exclude, Recent: recent})
 			if err != nil {
 				return err
 			}
-			// Everything stored for the user before ts.
 			banned := map[string]bool{exclude[0]: true}
-			kept, err := p.History.Before(ctx, user, ts, 0)
-			if err != nil {
-				return err
-			}
-			for _, id := range kept {
-				banned[p.Bundle.IDs[id]] = true
+			if slices.Contains(resp.Degraded, HistoryUnavailable) {
+				for _, raw := range recent {
+					banned[raw] = true
+				}
+			} else {
+				// Everything stored for the user before ts.
+				kept, err := p.History.Before(ctx, user, ts, 0)
+				if err != nil {
+					return err
+				}
+				for _, id := range kept {
+					banned[p.Bundle.IDs[id]] = true
+				}
 			}
 			got := map[string]bool{}
 			for _, it := range resp.Items {
@@ -105,13 +117,13 @@ func checkProperty2(seed uint64, cases int, broken bool, rk Ranker) error {
 }
 
 func TestProperty2NoSeenOrRepeatedItems(t *testing.T) {
-	if err := checkProperty2(1, 300, false, nil); err != nil {
+	if err := checkProperty2(1, 300, false, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestProperty2CatchesBrokenVariant(t *testing.T) {
-	if err := checkProperty2(1, 300, true, nil); err == nil {
+	if err := checkProperty2(1, 300, true, nil, nil); err == nil {
 		t.Fatal("the check passed a pipeline without the seen filter")
 	}
 }

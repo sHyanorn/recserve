@@ -11,6 +11,7 @@ import (
 	"math"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/history"
@@ -25,16 +26,64 @@ const (
 	CoocSeeds     = 10  // most recent history items used as co-occurrence seeds
 	PopularTop    = 100 // candidates from the popularity list
 	MMRLambda     = 0.7 // weight of relevance against diversity
+	MaxRecent     = 500 // items in a request's recent list
 	SourceVector  = "vector"
 	SourceCooc    = "cooc"
 	SourcePopular = "popular"
 )
 
-// Degradation reasons reported in a response.
+// Degradation reasons reported in a response (docs/SPEC.md §5).
 const (
-	RankerTimeout = "ranker_timeout"
-	RankerError   = "ranker_error"
+	HistoryUnavailable = "history_unavailable"
+	EncoderTimeout     = "encoder_timeout"
+	EncoderError       = "encoder_error"
+	VectorTimeout      = "vector_timeout"
+	VectorError        = "vector_error"
+	ShardsPartial      = "shards_partial"
+	CoocTimeout        = "cooc_timeout"
+	CoocError          = "cooc_error"
+	PopularTimeout     = "popular_timeout"
+	PopularError       = "popular_error"
+	RankerTimeout      = "ranker_timeout"
+	RankerError        = "ranker_error"
 )
+
+// Reasons lists the degradation reasons in the order a response reports them.
+var Reasons = []string{
+	HistoryUnavailable, EncoderTimeout, EncoderError, VectorTimeout, VectorError, ShardsPartial,
+	CoocTimeout, CoocError, PopularTimeout, PopularError, RankerTimeout, RankerError,
+}
+
+// Stages of a request, as the test hook names them.
+const (
+	stageHistory = "history"
+	stageEncoder = "encoder"
+	stageVector  = SourceVector // one call per shard
+	stageCooc    = SourceCooc
+	stagePopular = SourcePopular
+	stageRanker  = "ranker"
+)
+
+// Budgets bounds the stages of a request (docs/SPEC.md §5). A stage that
+// runs out of time is skipped or falls back, and the response says so; zero
+// leaves a stage unbounded. Each shard search is bounded by Shard and by
+// what is left of Retrieval.
+type Budgets struct {
+	History   time.Duration
+	Encoder   time.Duration
+	Retrieval time.Duration
+	Shard     time.Duration
+	Ranker    time.Duration
+}
+
+// DefaultBudgets are the budgets of docs/SPEC.md §5.
+var DefaultBudgets = Budgets{
+	History:   3 * time.Millisecond,
+	Encoder:   5 * time.Millisecond,
+	Retrieval: 15 * time.Millisecond,
+	Shard:     15 * time.Millisecond,
+	Ranker:    15 * time.Millisecond,
+}
 
 // The sources' positions in the results of a request.
 const (
@@ -49,6 +98,9 @@ type Request struct {
 	K       int
 	TS      int64    // only events strictly before TS are used
 	Exclude []string // raw item IDs never to return
+	// Recent is the client's list of the user's latest items, oldest
+	// first, used as the history when the stored one cannot be read.
+	Recent []string
 }
 
 // Item is one recommended item.
@@ -59,13 +111,82 @@ type Item struct {
 
 // Response is the result of a request.
 type Response struct {
-	Items        []Item   `json:"items"`
-	ModelVersion string   `json:"model_version"`
-	Degraded     []string `json:"degraded"` // what was skipped or fell back; empty if nothing
+	Items        []Item    `json:"items"`
+	ModelVersion string    `json:"model_version"`
+	Degraded     []string  `json:"degraded"` // what was skipped or fell back, in the order of Reasons; empty if nothing
+	Coverage     *Coverage `json:"coverage"` // nil when vector retrieval did not run
 	// Dropped counts the candidates left out because the ranker takes at
 	// most bundle.RankerRows; they are the ones with the lowest retrieval
 	// scores.
 	Dropped int `json:"-"`
+	// Failures holds the errors behind Degraded, except timeouts.
+	Failures []Failure `json:"-"`
+}
+
+// Coverage counts the shards searched for vector retrieval and those that
+// answered in time.
+type Coverage struct {
+	Shards   int `json:"shards"`
+	Answered int `json:"answered"`
+}
+
+// Failure is an error that degraded a response.
+type Failure struct {
+	Reason string
+	Err    error
+}
+
+// degradation collects what a request skipped or fell back on.
+type degradation struct {
+	reasons  map[string]bool
+	failures []Failure
+}
+
+// add records reason; err is kept unless it is a timeout.
+func (d *degradation) add(reason string, err error) {
+	if d.reasons == nil {
+		d.reasons = map[string]bool{}
+	}
+	d.reasons[reason] = true
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		d.failures = append(d.failures, Failure{reason, err})
+	}
+}
+
+// list returns the reasons in the order of Reasons.
+func (d *degradation) list() []string {
+	out := []string{}
+	for _, r := range Reasons {
+		if d.reasons[r] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// timeoutOr returns timeout if err is a deadline's end, otherwise failed.
+func timeoutOr(err error, timeout, failed string) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return timeout
+	}
+	return failed
+}
+
+// within returns ctx bounded by d, or ctx unchanged if d is zero.
+func within(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if d <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, d)
+}
+
+// ended returns the request's own end, if it has ended: a request cancelled
+// or past its caller's deadline fails instead of degrading.
+func ended(ctx context.Context, stage string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%s: %w", stage, err)
+	}
+	return nil
 }
 
 // Ranker scores rows of candidate features, bundle.RankerFeatures in order,
@@ -79,9 +200,21 @@ type Pipeline struct {
 	Bundle  *bundle.Bundle
 	Shards  *shard.Set // the bundle's item vectors, for vector retrieval
 	History history.Store
+	Budgets Budgets
 
 	rankWith       Ranker // test only: replaces the bundle's ranker
 	skipSeenFilter bool   // test only: the broken variant of property 2
+	// stall, test only, runs at the start of a stage under the stage's
+	// context; shard is the shard searched, -1 outside vector retrieval.
+	// An error fails the stage.
+	stall func(ctx context.Context, stage string, shard int) error
+}
+
+func (p *Pipeline) stalled(ctx context.Context, stage string, shard int) error {
+	if p.stall == nil {
+		return nil
+	}
+	return p.stall(ctx, stage, shard)
 }
 
 // New returns a pipeline over b and h, with b's vectors split into shards
@@ -109,15 +242,22 @@ type candidate struct {
 	score float64 // source score, used when there is no user vector
 }
 
-// Recommend answers a request.
+// Recommend answers a request. Each stage runs within its budget; one that
+// fails or runs out of time is skipped or falls back, and the response
+// reports why. If ctx ends, the request fails with an error that wraps
+// ctx.Err().
 func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error) {
 	if req.K <= 0 || req.K > MaxK {
 		return Response{}, fmt.Errorf("k must be in 1..%d", MaxK)
 	}
+	if len(req.Recent) > MaxRecent {
+		return Response{}, fmt.Errorf("recent holds more than %d items", MaxRecent)
+	}
 	b := p.Bundle
-	hist, err := p.History.Before(ctx, req.User, req.TS, 0)
+	var d degradation
+	hist, err := p.history(ctx, req, &d)
 	if err != nil {
-		return Response{}, fmt.Errorf("history: %w", err)
+		return Response{}, err
 	}
 	seen := make(map[int32]bool, len(hist)+len(req.Exclude))
 	for _, id := range hist {
@@ -128,38 +268,32 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error)
 			seen[id] = true
 		}
 	}
-	uv, err := b.UserVector(ctx, hist)
+	uv, err := p.userVector(ctx, hist, &d)
 	if err != nil {
-		return Response{}, fmt.Errorf("user vector: %w", err)
-	}
-
-	sources := p.sources(ctx, hist, uv, seen)
-	results := make([][]vec.Hit, len(sources))
-	errs := make([]error, len(sources))
-	var wg sync.WaitGroup
-	for i, src := range sources {
-		wg.Go(func() { results[i], errs[i] = src() })
-	}
-	wg.Wait()
-	if err := ctx.Err(); err != nil {
 		return Response{}, err
 	}
-	if err := errors.Join(errs...); err != nil {
+	results, cov, err := p.retrieve(ctx, hist, uv, seen, &d)
+	if err != nil {
 		return Response{}, err
 	}
-	resp := Response{ModelVersion: b.ModelVersion, Degraded: []string{}}
+	resp := Response{ModelVersion: b.ModelVersion, Coverage: cov}
 	scored := p.retrievalScores(results, uv, seen)
 	if rk := p.ranker(); rk != nil && len(scored) > 0 {
-		ranked, dropped, err := p.rank(ctx, rk, scored, results, hist, uv)
-		switch {
-		case err == nil:
+		kctx, cancel := within(ctx, p.Budgets.Ranker)
+		err := p.stalled(kctx, stageRanker, -1)
+		var ranked []vec.Hit
+		var dropped int
+		if err == nil {
+			ranked, dropped, err = p.rank(kctx, rk, scored, results, hist, uv)
+		}
+		cancel()
+		if err != nil {
+			if err := ended(ctx, stageRanker); err != nil {
+				return Response{}, err
+			}
+			d.add(timeoutOr(err, RankerTimeout, RankerError), err)
+		} else {
 			scored, resp.Dropped = ranked, dropped
-		case errors.Is(ctx.Err(), context.Canceled):
-			return Response{}, err
-		case errors.Is(err, context.DeadlineExceeded):
-			resp.Degraded = append(resp.Degraded, RankerTimeout)
-		default:
-			resp.Degraded = append(resp.Degraded, RankerError)
 		}
 	}
 	picked := mmr(b.Vectors, b.InvNorms, scored, req.K, MMRLambda)
@@ -167,7 +301,136 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error)
 	for i, h := range picked {
 		resp.Items[i] = Item{ID: b.IDs[h.ID], Score: h.Score}
 	}
+	resp.Degraded, resp.Failures = d.list(), d.failures
 	return resp, nil
+}
+
+// history returns the user's stored history before req.TS or, if it cannot
+// be read in time, the known items of req.Recent.
+func (p *Pipeline) history(ctx context.Context, req Request, d *degradation) ([]int32, error) {
+	hctx, cancel := within(ctx, p.Budgets.History)
+	defer cancel()
+	err := p.stalled(hctx, stageHistory, -1)
+	var hist []int32
+	if err == nil {
+		hist, err = p.History.Before(hctx, req.User, req.TS, 0)
+	}
+	if err == nil {
+		return hist, nil
+	}
+	if err := ended(ctx, stageHistory); err != nil {
+		return nil, err
+	}
+	d.add(HistoryUnavailable, err)
+	hist = make([]int32, 0, len(req.Recent))
+	for _, raw := range req.Recent {
+		if id, ok := p.Bundle.Lookup(raw); ok {
+			hist = append(hist, id)
+		}
+	}
+	return hist, nil
+}
+
+// userVector returns the user vector of hist, or nil if there is none or
+// the encoder fails or runs out of time.
+func (p *Pipeline) userVector(ctx context.Context, hist []int32, d *degradation) ([]float32, error) {
+	ectx, cancel := within(ctx, p.Budgets.Encoder)
+	defer cancel()
+	err := p.stalled(ectx, stageEncoder, -1)
+	var uv []float32
+	if err == nil {
+		uv, err = p.Bundle.UserVector(ectx, hist)
+	}
+	if err == nil {
+		return uv, nil
+	}
+	if err := ended(ctx, stageEncoder); err != nil {
+		return nil, err
+	}
+	d.add(timeoutOr(err, EncoderTimeout, EncoderError), err)
+	return nil, nil
+}
+
+// retrieve runs the retrieval sources in parallel within the retrieval
+// budget and returns their hits, in the order of srcVector, srcCooc and
+// srcPopular, nil for a source that failed, and the coverage of vector
+// retrieval, nil without a user vector.
+func (p *Pipeline) retrieve(ctx context.Context, hist []int32, uv []float32, seen map[int32]bool, d *degradation) ([][]vec.Hit, *Coverage, error) {
+	rctx, cancel := within(ctx, p.Budgets.Retrieval)
+	defer cancel()
+	results := make([][]vec.Hit, 3)
+	errs := make([]error, 3)
+	var shardHits [][]vec.Hit
+	var shardErrs []error
+	var wg sync.WaitGroup
+	if uv != nil {
+		wg.Go(func() { shardHits, shardErrs = p.searchShards(rctx, uv, seen) })
+	}
+	wg.Go(func() { results[srcCooc], errs[srcCooc] = p.cooc(rctx, hist) })
+	wg.Go(func() { results[srcPopular], errs[srcPopular] = p.popular(rctx) })
+	wg.Wait()
+	if err := ended(ctx, "retrieval"); err != nil {
+		return nil, nil, err
+	}
+	for _, s := range []struct {
+		src              int
+		timeout, failure string
+	}{{srcCooc, CoocTimeout, CoocError}, {srcPopular, PopularTimeout, PopularError}} {
+		if err := errs[s.src]; err != nil {
+			results[s.src] = nil
+			d.add(timeoutOr(err, s.timeout, s.failure), err)
+		}
+	}
+	if uv == nil {
+		return results, nil, nil
+	}
+	cov := &Coverage{Shards: len(shardErrs)}
+	var answered [][]vec.Hit
+	var failed []error
+	allTimeouts := true
+	for i, err := range shardErrs {
+		if err != nil {
+			failed = append(failed, fmt.Errorf("shard %d: %w", i, err))
+			allTimeouts = allTimeouts && errors.Is(err, context.DeadlineExceeded)
+			continue
+		}
+		answered = append(answered, shardHits[i])
+	}
+	cov.Answered = len(answered)
+	reason := ShardsPartial
+	if cov.Answered == 0 {
+		reason = VectorError
+		if allTimeouts {
+			reason = VectorTimeout
+		}
+	}
+	for _, err := range failed {
+		d.add(reason, err)
+	}
+	if cov.Answered > 0 {
+		results[srcVector] = shard.Merge(answered, VectorTop)
+	}
+	return results, cov, nil
+}
+
+// searchShards searches every shard in parallel, each within the shard
+// budget, for the VectorTop unseen items closest to uv.
+func (p *Pipeline) searchShards(ctx context.Context, uv []float32, seen map[int32]bool) ([][]vec.Hit, []error) {
+	n := p.Shards.Shards()
+	hits, errs := make([][]vec.Hit, n), make([]error, n)
+	skip := func(id int32) bool { return seen[id] }
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			sctx, cancel := within(ctx, p.Budgets.Shard)
+			defer cancel()
+			if errs[i] = p.stalled(sctx, stageVector, i); errs[i] == nil {
+				hits[i], errs[i] = p.Shards.Search(sctx, i, uv, VectorTop, skip)
+			}
+		})
+	}
+	wg.Wait()
+	return hits, errs
 }
 
 // retrievalScores merges the sources' results and drops seen items. A
@@ -256,35 +519,33 @@ func best(hits []vec.Hit) map[int32]float64 {
 	return out
 }
 
-// sources returns the retrieval sources; each returns its hits, best first.
-func (p *Pipeline) sources(ctx context.Context, hist []int32, uv []float32, seen map[int32]bool) []func() ([]vec.Hit, error) {
-	b := p.Bundle
-	return []func() ([]vec.Hit, error){ // in the order of srcVector, srcCooc, srcPopular
-		func() ([]vec.Hit, error) { // vector
-			if uv == nil {
-				return nil, nil
-			}
-			return p.Shards.SearchAll(ctx, uv, VectorTop, func(id int32) bool { return seen[id] })
-		},
-		func() ([]vec.Hit, error) { // co-occurrence: seeds weighted by recency, neighbors by rank
-			var out []vec.Hit
-			for i := 0; i < CoocSeeds && i < len(hist); i++ {
-				w := 1 / float64(i+1)
-				for r, id := range b.CoocRow(hist[len(hist)-1-i]) {
-					out = append(out, vec.Hit{ID: id, Score: w / float64(r+1)})
-				}
-			}
-			return out, nil
-		},
-		func() ([]vec.Hit, error) { // popularity
-			pop := b.Popular[:min(PopularTop, len(b.Popular))]
-			out := make([]vec.Hit, len(pop))
-			for r, id := range pop {
-				out[r] = vec.Hit{ID: id, Score: 1 / float64(r+1)}
-			}
-			return out, nil
-		},
+// cooc returns the co-occurrence candidates: seeds weighted by recency,
+// neighbors by rank.
+func (p *Pipeline) cooc(ctx context.Context, hist []int32) ([]vec.Hit, error) {
+	if err := p.stalled(ctx, stageCooc, -1); err != nil {
+		return nil, err
 	}
+	var out []vec.Hit
+	for i := 0; i < CoocSeeds && i < len(hist); i++ {
+		w := 1 / float64(i+1)
+		for r, id := range p.Bundle.CoocRow(hist[len(hist)-1-i]) {
+			out = append(out, vec.Hit{ID: id, Score: w / float64(r+1)})
+		}
+	}
+	return out, nil
+}
+
+// popular returns the PopularTop most popular items, scored by rank.
+func (p *Pipeline) popular(ctx context.Context) ([]vec.Hit, error) {
+	if err := p.stalled(ctx, stagePopular, -1); err != nil {
+		return nil, err
+	}
+	pop := p.Bundle.Popular[:min(PopularTop, len(p.Bundle.Popular))]
+	out := make([]vec.Hit, len(pop))
+	for r, id := range pop {
+		out[r] = vec.Hit{ID: id, Score: 1 / float64(r+1)}
+	}
+	return out, nil
 }
 
 // merge returns the union of the sources' hits, each ID once with its best

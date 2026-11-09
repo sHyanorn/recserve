@@ -31,13 +31,13 @@ func newRankCase(b *testing.B, p *Pipeline, hist []int32) rankCase {
 	if err != nil {
 		b.Fatal(err)
 	}
-	var results [][]vec.Hit
-	for _, src := range p.sources(context.Background(), hist, uv, seen) {
-		hits, err := src()
-		if err != nil {
-			b.Fatal(err)
-		}
-		results = append(results, hits)
+	var d degradation
+	results, _, err := p.retrieve(context.Background(), hist, uv, seen, &d)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if len(d.reasons) > 0 {
+		b.Fatalf("retrieval degraded: %v", d.list())
 	}
 	return rankCase{results, uv, seen}
 }

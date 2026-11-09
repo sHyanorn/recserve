@@ -25,7 +25,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] Ranker contract and its ONNX call path (D015, D027)
 - [x] Hand-written HNSW (D016), measured per docs/BENCHMARKS.md (Hand-written HNSW): synth passes, glove fails on latency only
 - [x] In-process shards of the item vectors (`shard.Of`, two by default), exact or HNSW search per shard; property test 6 (D028)
-- [ ] Per-stage deadlines and degradation reasons in responses
+- [x] Per-stage deadlines and degradation reasons in responses (D029)
 - [ ] Result cache keyed by versions, arm and history head (in memory for now); property test 5
 - [ ] Two-phase bundle swap; property test 4
 

@@ -35,15 +35,21 @@ func main() {
 	flag.IntVar(&shards.Shards, "shards", shards.Shards, "in-process shards of the item vectors")
 	flag.StringVar((*string)(&shards.Mode), "shard-mode", string(shards.Mode), "vector search in each shard: exact or hnsw")
 	flag.IntVar(&shards.Ef, "hnsw-ef", shards.Ef, "HNSW search list size, with -shard-mode hnsw")
+	budgets := recommend.DefaultBudgets
+	flag.DurationVar(&budgets.History, "budget-history", budgets.History, "history lookup budget; 0 for none")
+	flag.DurationVar(&budgets.Encoder, "budget-encoder", budgets.Encoder, "user encoder budget; 0 for none")
+	flag.DurationVar(&budgets.Retrieval, "budget-retrieval", budgets.Retrieval, "retrieval budget, all sources; 0 for none")
+	flag.DurationVar(&budgets.Shard, "budget-shard", budgets.Shard, "budget of each shard search; 0 for none")
+	flag.DurationVar(&budgets.Ranker, "budget-ranker", budgets.Ranker, "ranker budget; 0 for none")
 	flag.Parse()
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if err := run(log, *addr, *dir, *testSplit, *preload, *ortLib, shards, *drain); err != nil {
+	if err := run(log, *addr, *dir, *testSplit, *preload, *ortLib, shards, budgets, *drain); err != nil {
 		log.Error("gateway stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(log *slog.Logger, addr, dir, testSplit, preload, ortLib string, shards shard.Config, drain time.Duration) (err error) {
+func run(log *slog.Logger, addr, dir, testSplit, preload, ortLib string, shards shard.Config, budgets recommend.Budgets, drain time.Duration) (err error) {
 	if dir == "" {
 		return errors.New("-bundle is required")
 	}
@@ -87,6 +93,7 @@ func run(log *slog.Logger, addr, dir, testSplit, preload, ortLib string, shards 
 	if err != nil {
 		return err
 	}
+	p.Budgets = budgets
 	srv := api.New(p, store, log)
 	hs := &http.Server{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second}
 

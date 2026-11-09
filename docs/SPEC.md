@@ -76,29 +76,31 @@ All load tests run on one 4-vCPU VM. Kafka, Valkey, the shards and their replica
 
 ## 5. Request path and latency budget
 
-| Stage | p99 budget | On timeout |
+| Stage | p99 budget | On timeout or error |
 |---|---|---|
 | Rate limit, A/B, cache lookup | 1 ms | — |
-| Feature lookup (Valkey) | 3 ms | history from the request only, reason `history_unavailable` |
-| User encoder | 5 ms | vector retrieval skipped |
-| Retrieval (parallel; shard deadline 15 ms) | 15 ms | source skipped, partial shards reported |
-| Ranking (at most 512 candidates) | 15 ms | retrieval order kept |
+| Feature lookup (Valkey) | 3 ms | history from the request's `recent` only: `history_unavailable` |
+| User encoder | 5 ms | vector retrieval skipped: `encoder_timeout`, `encoder_error` |
+| Retrieval (parallel; shard deadline 15 ms) | 15 ms | source skipped: `cooc_timeout`, `cooc_error`, `popular_timeout`, `popular_error`; shards that did not answer skipped: `shards_partial`, or `vector_timeout` (every shard timed out) or `vector_error` (none answered, one failed) |
+| Ranking (at most 512 candidates) | 15 ms | retrieval order kept: `ranker_timeout`, `ranker_error` |
 | Re-ranking and filters | 2 ms | — |
 | Other overhead | 9 ms | — |
 | **Server-side end to end** | **50 ms** | |
 
 The service target is a server-side p99 of 50 ms; the headline figure is the highest request rate that meets it (D005). Filters are never skipped: a degraded response is still filtered.
 
+Each stage runs under its own deadline, set by the gateway flags `-budget-history`, `-budget-encoder`, `-budget-retrieval`, `-budget-shard` and `-budget-ranker` (0 for none); a shard search ends at the earlier of its own deadline and the retrieval deadline. A stage that runs out of time or fails is skipped or falls back as the table says, and the response lists the reasons in `degraded`, in the table's order, each once; `recserve_degraded_total{reason}` counts them, and an error other than a timeout is logged. The stages check their deadline themselves (exact search every 1,024 rows, ONNX Runtime between nodes), and the gateway waits for each to return, so a stage ends shortly after its deadline (D029). A request that its client cancels fails with status 499, and one past a deadline its caller set fails with 504; neither is a degradation.
+
 ## 6. API (draft)
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/v1/recommend` | `{"user_id", "k", "ts"?, "exclude"?, "recent"?}` → items, scores, arm, versions, degraded reasons, coverage |
+| POST | `/v1/recommend` | `{"user_id", "k", "ts"?, "exclude"?, "recent"?}` → items, scores, arm, versions, degraded reasons (§5), coverage |
 | POST | `/v1/events` | Append user events (`user_id`, `item_id`, `ts`, `kind`); 202 once the broker has acknowledged them |
 | POST | `/v1/admin/swap` | Prepare and activate a bundle version |
 | GET | `/livez`, `/readyz`, `/metrics` | Liveness (the process serves), readiness (a bundle is active and the instance is not draining), Prometheus metrics |
 
-`recent` is the client's own list of the user's latest item IDs; it is used only when the stored history cannot be read. An event's ID is a hash of its four fields, so an identical event sent twice is one event. Readiness does not depend on Valkey or Kafka: their failure is handled by degradation, and failing readiness on it would take every instance out of service at once.
+`recent` is the client's own list of the user's latest item IDs, oldest first, at most 500; it is used only when the stored history cannot be read, and IDs the bundle does not know are ignored. `coverage` is `{"shards", "answered"}`: the shards searched for vector retrieval and those that answered in time; it is null when vector retrieval did not run (no user vector, or the encoder failed). An event's ID is a hash of its four fields, so an identical event sent twice is one event. Readiness does not depend on Valkey or Kafka: their failure is handled by degradation, and failing readiness on it would take every instance out of service at once.
 
 `ts` defaults to the server clock; benchmarks and evaluation pass the event time from the dataset so the same request always sees the same history.
 
@@ -135,7 +137,7 @@ A bundle is a directory `bundle/<version>/`:
 
 ### Ranker features
 
-H is the request's history: every stored event of the user strictly before the request time, ordered by time, then event ID, one entry per event (an item may appear more than once). u is the user vector, computed from the last `max_seq_len` entries of H (none if H is empty or the vector is zero); v_i is row i of `items.npy`. Every value is computed in float64 from these float32 inputs and rounded to float32. For candidate i:
+H is the request's history: every stored event of the user strictly before the request time, ordered by time, then event ID, one entry per event (an item may appear more than once); when the stored history cannot be read, the request's `recent` items the bundle knows, in their order (§6). u is the user vector, computed from the last `max_seq_len` entries of H (none if H is empty, the vector is zero, or the encoder fails or times out); v_i is row i of `items.npy`. Every value is computed in float64 from these float32 inputs and rounded to float32. For candidate i:
 
 1. `vector_score`: u · v_i; 0 without a user vector
 2. `cooc_score`: the largest 1 / ((s + 1)(r + 1)) over the seeds s = 0, 1, …, min(10, |H|) − 1, seed s being the entry H[|H| − 1 − s] (s = 0 is the latest), and the positions r, counted from 0, where i appears in that item's row of `cooc_ids.npy` before the row's first 0; 0 if there is none

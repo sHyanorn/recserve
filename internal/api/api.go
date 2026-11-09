@@ -39,6 +39,7 @@ type Server struct {
 	latency         *prometheus.HistogramVec
 	rankerTruncated prometheus.Counter
 	rankerDropped   prometheus.Counter
+	degraded        *prometheus.CounterVec
 	reg             *prometheus.Registry
 }
 
@@ -58,7 +59,13 @@ func New(p *recommend.Pipeline, h history.Store, log *slog.Logger) *Server {
 	s.rankerDropped = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "recserve_ranker_candidates_dropped_total", Help: "Candidates left out of ranking for want of ranker rows.",
 	})
-	s.reg.MustRegister(s.requests, s.latency, s.rankerTruncated, s.rankerDropped,
+	s.degraded = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "recserve_degraded_total", Help: "Recommend responses that report each degradation reason.",
+	}, []string{"reason"})
+	for _, r := range recommend.Reasons {
+		s.degraded.WithLabelValues(r)
+	}
+	s.reg.MustRegister(s.requests, s.latency, s.rankerTruncated, s.rankerDropped, s.degraded,
 		collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return s
 }
@@ -109,6 +116,8 @@ func (s *Server) instrument(route string, h func(http.ResponseWriter, *http.Requ
 				code = http.StatusBadRequest
 			case errors.Is(err, context.Canceled) && r.Context().Err() != nil:
 				code = statusClientClosed
+			case errors.Is(err, context.DeadlineExceeded) && r.Context().Err() != nil:
+				code = http.StatusGatewayTimeout
 			default:
 				s.Log.Error("request failed", "route", route, "err", err)
 			}
@@ -160,7 +169,7 @@ type RecommendRequest struct {
 	K       int      `json:"k"`
 	TS      *int64   `json:"ts,omitempty"`
 	Exclude []string `json:"exclude,omitempty"`
-	Recent  []string `json:"recent,omitempty"` // used from M3, when the stored history is unavailable
+	Recent  []string `json:"recent,omitempty"` // the user's latest items, oldest first; the history when the stored one is unavailable
 }
 
 // ParseRecommend decodes and validates a recommend request; now is used when ts is absent.
@@ -175,11 +184,14 @@ func ParseRecommend(r io.Reader, now int64) (recommend.Request, error) {
 	if in.K < 1 || in.K > recommend.MaxK {
 		return recommend.Request{}, badRequest{fmt.Errorf("k must be in 1..%d", recommend.MaxK)}
 	}
+	if len(in.Recent) > recommend.MaxRecent {
+		return recommend.Request{}, badRequest{fmt.Errorf("recent must hold at most %d items", recommend.MaxRecent)}
+	}
 	ts := now
 	if in.TS != nil {
 		ts = *in.TS
 	}
-	return recommend.Request{User: in.UserID, K: in.K, TS: ts, Exclude: in.Exclude}, nil
+	return recommend.Request{User: in.UserID, K: in.K, TS: ts, Exclude: in.Exclude, Recent: in.Recent}, nil
 }
 
 func (s *Server) recommend(w http.ResponseWriter, r *http.Request) error {
@@ -194,6 +206,12 @@ func (s *Server) recommend(w http.ResponseWriter, r *http.Request) error {
 	if resp.Dropped > 0 {
 		s.rankerTruncated.Inc()
 		s.rankerDropped.Add(float64(resp.Dropped))
+	}
+	for _, r := range resp.Degraded {
+		s.degraded.WithLabelValues(r).Inc()
+	}
+	for _, f := range resp.Failures {
+		s.Log.Warn("request degraded", "reason", f.Reason, "err", f.Err)
 	}
 	return writeJSON(w, http.StatusOK, resp)
 }

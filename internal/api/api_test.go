@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -115,6 +116,7 @@ func TestBadRequests(t *testing.T) {
 		{"/v1/events", `{"events":[]}`},
 		{"/v1/events", `{"events":[{"user_id":"u","item_id":"a","ts":0}]}`},
 		{"/v1/recommend", `{"user_id":"u","k":5}]`},
+		{"/v1/recommend", `{"user_id":"u","k":5,"recent":["a"` + strings.Repeat(`,"a"`, recommend.MaxRecent) + `]}`},
 	} {
 		if code, _ := post(t, ts.URL+tc.path, tc.body); code != http.StatusBadRequest {
 			t.Errorf("%s %.40s: status %d", tc.path, tc.body, code)
@@ -162,7 +164,7 @@ func FuzzParseRecommend(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if req.User == "" || req.K < 1 || req.K > recommend.MaxK {
+		if req.User == "" || req.K < 1 || req.K > recommend.MaxK || len(req.Recent) > recommend.MaxRecent {
 			t.Fatalf("accepted invalid request %+v", req)
 		}
 	})
@@ -238,5 +240,168 @@ func TestRankerTruncationIsCounted(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(s.rankerDropped); got <= 0 || math.Mod(got, 2) != 0 {
 		t.Fatalf("dropped candidates %v, want a positive count, the same for both requests", got)
+	}
+}
+
+// A user with a history gets a user vector, so both shards are searched; a
+// user without one gets no vector retrieval, and coverage is null.
+func TestCoverage(t *testing.T) {
+	_, ts := testServer(t)
+	post(t, ts.URL+"/v1/events", `{"events":[{"user_id":"u","item_id":"a","ts":500,"kind":"view"}]}`)
+	for _, c := range []struct {
+		user string
+		want string
+	}{{"u", `{"shards":2,"answered":2}`}, {"new", `null`}} {
+		resp, err := http.Post(ts.URL+"/v1/recommend", "application/json", strings.NewReader(`{"user_id":"`+c.user+`","k":2}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out map[string]json.RawMessage
+		if err := json.Unmarshal(readBody(t, resp), &out); err != nil {
+			t.Fatal(err)
+		}
+		if got := string(out["coverage"]); got != c.want {
+			t.Fatalf("%s: coverage %s, want %s", c.user, got, c.want)
+		}
+	}
+}
+
+// failingStore stores events but cannot read them.
+type failingStore struct{ history.Store }
+
+func (failingStore) Before(context.Context, string, int64, int) ([]int32, error) {
+	return nil, errors.New("store down")
+}
+
+// blockingStore reads nothing until the request's context ends.
+type blockingStore struct {
+	history.Store
+	entered chan struct{}
+}
+
+func (s blockingStore) Before(ctx context.Context, _ string, _ int64, _ int) ([]int32, error) {
+	close(s.entered)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// degradedServer returns a server over testServer's bundle and store h,
+// logging into log.
+func degradedServer(t *testing.T, h history.Store, log io.Writer) *Server {
+	t.Helper()
+	m, err := vec.NewMatrix(2, []float32{0, 0, 1, 0, 0.9, 0.1, 0, 1, -1, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := bundle.New(bundle.Manifest{ModelVersion: "v1", ItemCount: 4, Dim: 2, MaxSeqLen: 50},
+		[]string{"", "a", "b", "c", "d"}, m, nil, []int32{4, 3})
+	return New(pipeline(t, b, h), h, slog.New(slog.NewTextHandler(log, nil)))
+}
+
+// With the store failing, the response is 200, uses the request's recent
+// items as the history, reports history_unavailable, counts it and logs the
+// error.
+func TestHistoryUnavailableUsesRecent(t *testing.T) {
+	var log bytes.Buffer
+	s := degradedServer(t, failingStore{history.NewMemory()}, &log)
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	code, out := post(t, ts.URL+"/v1/recommend", `{"user_id":"u","k":3,"recent":["a","zz"]}`)
+	if code != http.StatusOK {
+		t.Fatalf("%d %v", code, out)
+	}
+	if got := ids(out); len(got) != 3 || got[0] != "b" || slices.Contains(got, "a") {
+		t.Fatalf("items %v; want b first (closest to a), a never", got)
+	}
+	if d, _ := out["degraded"].([]any); len(d) != 1 || d[0] != recommend.HistoryUnavailable {
+		t.Fatalf("degraded %v", out["degraded"])
+	}
+	if got := testutil.ToFloat64(s.degraded.WithLabelValues(recommend.HistoryUnavailable)); got != 1 {
+		t.Fatalf("counted %v", got)
+	}
+	if !strings.Contains(log.String(), "store down") || !strings.Contains(log.String(), "level=WARN") {
+		t.Fatalf("log: %s", log.String())
+	}
+}
+
+// A request cancelled by its client is answered 499, one past its caller's
+// deadline 504; neither is a degradation.
+func TestEndedRequestStatus(t *testing.T) {
+	for _, c := range []struct {
+		deadline bool
+		want     int
+	}{{false, statusClientClosed}, {true, http.StatusGatewayTimeout}} {
+		store := blockingStore{history.NewMemory(), make(chan struct{})}
+		s := degradedServer(t, store, io.Discard)
+		ctx, cancel := context.WithCancel(context.Background())
+		if c.deadline {
+			ctx, cancel = context.WithTimeout(context.Background(), 20*time.Millisecond)
+		} else {
+			go func() {
+				<-store.entered
+				cancel()
+			}()
+		}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/recommend", strings.NewReader(`{"user_id":"u","k":3}`)).WithContext(ctx)
+		s.Handler().ServeHTTP(rec, req)
+		cancel()
+		if rec.Code != c.want {
+			t.Fatalf("deadline %v: status %d, want %d: %s", c.deadline, rec.Code, c.want, rec.Body.String())
+		}
+		for _, r := range recommend.Reasons {
+			if got := testutil.ToFloat64(s.degraded.WithLabelValues(r)); got != 0 {
+				t.Fatalf("%s counted %v", r, got)
+			}
+		}
+	}
+}
+
+// An encoder that fails gives a 200 without vector retrieval: the
+// response reports encoder_error and null coverage, and the error is
+// counted and logged.
+func TestEncoderErrorDegrades(t *testing.T) {
+	if err := onnx.Init(onnxtest.Lib(t)); err != nil {
+		t.Fatal(err)
+	}
+	const n = onnxtest.MeanItems
+	m, err := vec.NewMatrix(onnxtest.MeanDim, onnxtest.MeanVectors())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := make([]string, n+1)
+	for i := 1; i <= n; i++ {
+		raw[i] = fmt.Sprint("i", i)
+	}
+	b := bundle.New(bundle.Manifest{ModelVersion: "v1", ItemCount: n, Dim: onnxtest.MeanDim, MaxSeqLen: 5}, raw, m, nil, []int32{3, 7})
+	if b.Encoder, err = onnx.NewEncoder(onnxtest.Model(t, "mean.onnx"), 5, onnxtest.MeanDim); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Encoder.Close(); err != nil { // later calls fail with onnx.ErrClosed
+		t.Fatal(err)
+	}
+	store := history.NewMemory()
+	if err := store.Append(context.Background(), []history.Event{{ID: 1, User: "u", Item: 1, TS: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	var log bytes.Buffer
+	s := New(pipeline(t, b, store), store, slog.New(slog.NewTextHandler(&log, nil)))
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	code, out := post(t, ts.URL+"/v1/recommend", `{"user_id":"u","k":2,"ts":5}`)
+	if code != http.StatusOK || out["coverage"] != nil {
+		t.Fatalf("%d %v", code, out)
+	}
+	if got := ids(out); !slices.Equal(got, []string{"i3", "i7"}) {
+		t.Fatalf("items %v, want the popular ones", got)
+	}
+	if d, _ := out["degraded"].([]any); len(d) != 1 || d[0] != recommend.EncoderError {
+		t.Fatalf("degraded %v", out["degraded"])
+	}
+	if got := testutil.ToFloat64(s.degraded.WithLabelValues(recommend.EncoderError)); got != 1 {
+		t.Fatalf("counted %v", got)
+	}
+	if !strings.Contains(log.String(), onnx.ErrClosed.Error()) {
+		t.Fatalf("log: %s", log.String())
 	}
 }

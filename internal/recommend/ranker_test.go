@@ -251,13 +251,10 @@ func TestRankerTruncates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var results [][]vec.Hit
-	for _, src := range p.sources(ctx, hist, uv, seen) {
-		hits, err := src()
-		if err != nil {
-			t.Fatal(err)
-		}
-		results = append(results, hits)
+	var d degradation
+	results, _, err := p.retrieve(ctx, hist, uv, seen, &d)
+	if err != nil || len(d.reasons) > 0 {
+		t.Fatal(err, d.list())
 	}
 	all := p.retrievalScores(results, uv, seen)
 	slices.SortFunc(all, func(a, b vec.Hit) int { return cmp.Or(cmp.Compare(b.Score, a.Score), cmp.Compare(a.ID, b.ID)) })
@@ -276,7 +273,7 @@ func TestRankerTruncates(t *testing.T) {
 
 func TestProperty2WithRanker(t *testing.T) {
 	for name, rk := range map[string]Ranker{"linear": linearRanker, "failing": failingRanker(onnx.ErrClosed)} {
-		if err := checkProperty2(2, 300, false, rk); err != nil {
+		if err := checkProperty2(2, 300, false, rk, nil); err != nil {
 			t.Fatalf("%s ranker: %v", name, err)
 		}
 	}
