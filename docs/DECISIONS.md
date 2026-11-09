@@ -85,3 +85,15 @@ Format: ID, date, decision, rationale, alternatives. Append new decisions at the
 - Decision: Before and after each benchmark run a fixed single-core workload is timed (docs/BENCHMARKS.md, Noise baseline). A run whose baseline is more than 10% slower than the session reference is flagged and rerun, at most twice; a run still flagged is reported as such
 - Rationale: Cloud VMs share CPUs with other tenants; matching-engine saw stalls of up to 128 ms with no engine code running. A baseline measured around each run separates a slower machine from a slower service
 - Alternatives: hiccup meter only (catches stalls, not a slower CPU share)
+
+## D015 ONNX Runtime sessions run with one intra-op thread
+- Date: 2026-11-09
+- Decision: R1 passed (docs/BENCHMARKS.md, Results), so D006 stands. Every session is created with intra-op threads = 1; concurrency comes from goroutines sharing a session, bounded by the service's concurrency limit
+- Rationale: At concurrency 4 on 4 CPUs, the default thread pool raised p99 by 2.7 to 8.3 times over one intra-op thread, because each call's worker threads compete with the other callers
+- Alternatives: the default pool (faster single calls for the L = 200 encoder, worse under load)
+
+## D016 HNSW written by hand
+- Date: 2026-11-09
+- Decision: R2 failed, so D007's fallback applies: M2 implements HNSW (Malkov and Yashunin) in the service, with vectors in one float32 array, neighbor lists in flat int32 arrays per layer, beam search bounded by ef, and the neighbor-selection heuristic. It is measured in M2 with the R2 protocol unchanged, against the same exact and faiss baselines
+- Rationale: coder/hnsw v0.6.1 reached recall@100 of at most 0.112 at every ef on both sets and both settings, while faiss reached 1.000 on the synthetic set with the same settings. Its layer search keeps only k results and stops at the first expansion without improvement, so ef has no effect on recall. Patching it would mean replacing its search and its pointer-map graph, which is most of the library
+- Alternatives: patch coder/hnsw (most of it replaced anyway); cgo to faiss (a second native library, rejected in D007); exact search only (enough for the 137.2k-item catalogs, but leaves the 1M-scale tier without an index)

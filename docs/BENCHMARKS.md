@@ -119,4 +119,59 @@ The share of degraded responses is reported per run, and runs above 1% are marke
 
 ## Results
 
-None yet.
+### M0 (2026-11-08 and 09)
+
+One cloud VM: Intel Xeon @ 2.10GHz, 4 vCPU, 15 GB, kernel 6.18.44, Go 1.27.3. Session noise reference 820,984 ns per pass (`bench-results/m0/noise-reference.json`); the flag threshold is 903,082 ns. Raw results are in `bench-results/m0`.
+
+#### R1: pass, with intra-op threads = 1
+
+| Criterion | Result |
+|---|---|
+| 1. Parity (max abs diff, Go vs Python) | 0 for encoder L=50, encoder L=200 and ranker; pure-Go MLP 1.8e-7 |
+| 2. Concurrency 4, p99 | encoder L=50 1.02 ms (≤ 5), ranker C=500 2.91 ms (≤ 10) |
+| 3. Image | builds; parity 0 inside `distroless/cc-debian13`; 91.9 MB |
+
+Latency in µs, B = 1 (`onnx/latency.json`):
+
+| Model | Threads | Conc. | Calls/s | p50 | p99 | max |
+|---|---|---|---|---|---|---|
+| encoder L=50 | 1 | 1 | 2,624 | 338 | 684 | 6,590 |
+| encoder L=50 | 1 | 4 | 9,068 | 365 | 1,021 | 25,174 |
+| encoder L=50 | 1 | 8 | 8,816 | 462 | 8,510 | 47,103 (noisy) |
+| encoder L=50 | default | 4 | 4,310 | 406 | 8,452 | 28,488 |
+| encoder L=200 | 1 | 1 | 618 | 1,521 | 2,408 | 8,883 |
+| encoder L=200 | 1 | 4 | 2,165 | 1,635 | 4,546 | 14,570 |
+| encoder L=200 | default | 4 | 1,279 | 1,640 | 12,433 | 26,263 |
+| ranker C=500 | 1 | 1 | 3,275 | 271 | 550 | 5,818 |
+| ranker C=500 | 1 | 4 | 10,503 | 288 | 2,905 | 8,881 |
+| ranker C=500 | default | 4 | 7,214 | 252 | 7,864 | 24,341 |
+| pure-Go MLP C=500 | | 1 | 99 | 9,627 | 15,585 | 21,809 |
+| pure-Go dot C=500 | | 1 | 60,702 | 13 | 43 | 4,741 |
+
+- With ONNX Runtime's default thread pool, concurrent callers contend for the 4 CPUs; p99 at concurrency 4 is 2.7 to 8.3 times that with one intra-op thread. Services set intra-op threads to 1 (D015).
+- At concurrency 8 (more callers than CPUs) p99 rises to 8 to 13 ms with one intra-op thread and 13 to 21 ms with the default.
+- The pure-Go MLP is a plain scalar loop, about 35 times slower than ONNX Runtime; it serves only as a parity reference.
+- Image build: the cloud session intercepts TLS with its own CA, so the build stage ran with two extra lines trusting that CA (`onnx/image-build.txt`); the committed Dockerfile is unchanged.
+
+#### R2: fail; the fallback is adopted
+
+recall@100 and the highest single-thread p99 over ef ∈ {120, 200, 400, 800} (`ann/*.json`):
+
+| Set | Index | M / efC | recall@100 at ef = 120 / 200 / 400 / 800 | p99 at ef = 800 | Build |
+|---|---|---|---|---|---|
+| synth | coder/hnsw | 16 / 200 | 0.061 at every ef | 0.92 ms | 249 s |
+| synth | coder/hnsw | 32 / 400 | 0.112 at every ef | 0.92 ms | 495 s |
+| synth | faiss | 16 / 200 | 0.996 / 1.000 / 1.000 / 1.000 | 1.34 ms | 322 s |
+| synth | faiss | 32 / 400 | 0.999 / 1.000 / 1.000 / 1.000 | 2.02 ms | 976 s |
+| glove | coder/hnsw | 16 / 200 | 0.032 at every ef | 0.89 ms | 347 s |
+| glove | coder/hnsw | 32 / 400 | 0.053 at every ef | 1.12 ms | 759 s |
+| glove | faiss | 16 / 200 | 0.719 / 0.778 / 0.844 / 0.896 | 3.43 ms | 666 s |
+| glove | faiss | 32 / 400 | 0.801 / 0.859 / 0.920 / 0.961 | 6.59 ms | 2,159 s |
+| synth | exact (Go) | | 1.000 | p99 87 ms | |
+| glove | exact (Go) | | 1.000 | p99 161 ms | |
+
+- coder/hnsw v0.6.1 does not reach recall@100 ≥ 0.95 at any ef, on either set, with either setting; the criterion fails. Its recall does not change with ef because its layer search keeps only k results and stops after the first expansion that does not improve the best distance; ef only bounds the candidate queue (`graph.go`, `layerNode.search`). Its GC criterion holds: the longest pause in any query phase is at most 0.33 ms, and heap after build is 1.4 to 2.6 GiB.
+- faiss with the same settings reaches 1.000 on synth, so the data, ground truth and recall code agree;; on glove its recall is lower at every ef.
+- On glove, faiss reaches recall@100 ≥ 0.95 only at M = 32, ef = 800, with p99 6.59 ms. The single-thread p99 ≤ 5 ms part of the criterion is therefore not met there by the outside reference either. This is recorded as found; the criterion is unchanged and applies to the hand-written index in M2.
+- Noise: three coder/hnsw points on glove M = 32 stayed flagged after three attempts (marked noisy in the JSON). The faiss runs are bracketed but not rerun; the baseline before glove faiss M = 32 was 911,710 ns, 11% over the reference, so that run is flagged. faiss is the outside reference and does not enter the criterion.
+- Settings: `Ml = 1/ln M`. coder/hnsw has no separate efConstruction; it builds with `EfSearch`, which was set to efConstruction during the build.

@@ -5,9 +5,9 @@ Check off each item when it is done. All tests must pass at the end of every mil
 ## M0 Research and risk checks
 - [x] SPEC, DECISIONS, TASKS
 - [x] Benchmark and evaluation protocol in docs/BENCHMARKS.md, fixed before any result
-- [ ] ONNX Runtime from Go: parity, latency, image (experiments/m0/onnx)
-- [ ] Pure-Go HNSW against exact search and faiss on 1M-scale vectors (experiments/m0/ann)
-- [ ] Record the outcomes against the criteria; adopt the fallbacks where a criterion fails
+- [x] ONNX Runtime from Go: parity, latency, image (experiments/m0/onnx)
+- [x] Pure-Go HNSW against exact search and faiss on 1M-scale vectors (experiments/m0/ann)
+- [x] Record the outcomes against the criteria; adopt the fallbacks where a criterion fails
 
 ## M1 Single-node request path
 - [ ] go.mod, Makefile, golangci-lint, CI
@@ -21,8 +21,8 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] `cmd/loadgen` and its coordinated-omission test (property 7)
 
 ## M2 Models, ANN, degradation, swaps
-- [ ] User encoder and ranker through ONNX Runtime (or the M0 fallback)
-- [ ] HNSW retrieval (library or hand-written per M0)
+- [ ] User encoder and ranker through ONNX Runtime, one intra-op thread (D015)
+- [ ] Hand-written HNSW (D016), measured with the R2 protocol
 - [ ] Per-stage deadlines and degradation reasons in responses
 - [ ] Result cache keyed by versions and arm; property test 5
 - [ ] Two-phase bundle swap; property test 4
