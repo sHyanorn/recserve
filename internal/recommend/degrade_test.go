@@ -304,13 +304,16 @@ func TestBudgetsBoundStages(t *testing.T) {
 					t.Fatal(err)
 				}
 				p.rankWith, p.Budgets = linearRanker, c.budgets
+				// waited runs from the request's start: a stage's budget starts
+				// before its hook runs, by a goroutine's start for a shard
+				// under the retrieval budget.
 				var mu sync.Mutex
 				ran, waited := false, time.Duration(0)
+				start := time.Now()
 				p.stall = func(ctx context.Context, stage string, _ int) error {
 					if stage != c.stage {
 						return nil
 					}
-					start := time.Now()
 					var err error
 					select {
 					case <-ctx.Done():
