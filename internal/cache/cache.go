@@ -37,8 +37,9 @@ type entry[V any] struct {
 }
 
 // New returns a cache of at most size entries, each kept for ttl, changed
-// by up to Jitter either way.
+// by up to Jitter either way. A cache of size 0 or less stores nothing.
 func New[V any](size int, ttl time.Duration) *Cache[V] {
+	size = max(size, 0)
 	return &Cache[V]{
 		size: size, ttl: ttl, entries: make(map[Key]*list.Element, size), order: list.New(),
 		now: time.Now, rand: rand.Float64,
@@ -67,6 +68,9 @@ func (c *Cache[V]) Get(k Key) (V, bool) {
 // Put stores v under k, evicting the least recently used entry if the
 // cache is full.
 func (c *Cache[V]) Put(k Key, v V) {
+	if c.size == 0 {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ttl := time.Duration(float64(c.ttl) * (1 + Jitter*(2*c.rand()-1)))

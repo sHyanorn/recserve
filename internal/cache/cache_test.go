@@ -85,3 +85,13 @@ func TestConcurrentUse(t *testing.T) {
 		t.Fatalf("%d entries, want 64", c.Len())
 	}
 }
+
+func TestNoSizeStoresNothing(t *testing.T) {
+	for _, size := range []int{0, -1} {
+		c := New[int](size, time.Hour)
+		c.Put(key(1), 1)
+		if _, ok := c.Get(key(1)); ok || c.Len() != 0 {
+			t.Fatalf("size %d: stored an entry", size)
+		}
+	}
+}
