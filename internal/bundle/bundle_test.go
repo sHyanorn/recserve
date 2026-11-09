@@ -4,105 +4,33 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/sHyanorn/recserve/internal/bundle/bundletest"
 	"github.com/sHyanorn/recserve/internal/npy"
 	"github.com/sHyanorn/recserve/internal/onnx"
 	"github.com/sHyanorn/recserve/internal/onnx/onnxtest"
-	"github.com/sHyanorn/recserve/internal/vec"
 )
 
 // The test bundle has the items of the test encoder mean.onnx: item i's
 // vector is (cos i, sin i) / i.
-const testItems = onnxtest.MeanItems
+const testItems = bundletest.Items
 
 func testVectors() []float32 { return onnxtest.MeanVectors() }
 
-// goldenLine is a correct golden case for history over the given item
-// vectors: the user vector is the mean of the last maxSeqLen items,
-// computed here independently of any encoder.
-func goldenLine(t testing.TB, vectors []float32, maxSeqLen int, history []int32) string {
-	t.Helper()
-	m, err := vec.NewMatrix(2, vectors)
-	if err != nil {
-		t.Fatal(err)
-	}
-	uv, err := New(Manifest{Dim: 2, MaxSeqLen: maxSeqLen}, []string{""}, m, nil, nil).UserVector(context.Background(), history)
-	if err != nil {
-		t.Fatal(err)
-	}
-	seen := map[int32]bool{}
-	for _, id := range history {
-		seen[id] = true
-	}
-	var top []int32
-	for _, h := range m.TopK(uv, 10, func(id int32) bool { return seen[id] }) {
-		top = append(top, h.ID)
-	}
-	return string(marshal(t, map[string]any{"history": history, "user_emb": uv, "top10": top})) + "\n"
-}
+var (
+	goldenLine  = bundletest.GoldenLine
+	marshal     = bundletest.Marshal
+	writeBundle = func(t *testing.T, edits ...editFunc) string { t.Helper(); return bundletest.Write(t, edits...) }
+)
 
-func marshal(t testing.TB, v any) []byte {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
-}
-
-type editFunc func(files map[string][]byte, m map[string]any)
-
-// writeBundle writes a 12-item, 2-dimensional bundle with user_encoder mean
-// and returns its directory. The edits, in order, may change the files and
-// manifest before checksums are written.
-func writeBundle(t *testing.T, edits ...editFunc) string {
-	t.Helper()
-	var ids strings.Builder
-	for i := 1; i <= testItems; i++ {
-		fmt.Fprintf(&ids, "item%d\n", i)
-	}
-	files := map[string][]byte{
-		"items.ids":    []byte(ids.String()),
-		"items.npy":    npy.Encode([]int{testItems + 1, 2}, testVectors(), nil),
-		"popular.npy":  npy.Encode([]int{2}, nil, []int64{3, 1}),
-		"golden.jsonl": []byte(goldenLine(t, testVectors(), 50, []int32{1}) + goldenLine(t, testVectors(), 50, []int32{2, 5})),
-	}
-	cooc := make([]int64, (testItems+1)*CoocWidth)
-	cooc[1*CoocWidth], cooc[1*CoocWidth+1] = 3, 2
-	files["cooc_ids.npy"] = npy.Encode([]int{testItems + 1, CoocWidth}, nil, cooc)
-	m := map[string]any{
-		"format_version": 1, "model_version": "test", "dataset": "test", "train_cutoff_ts": 100,
-		"item_count": testItems, "dim": 2, "metric": "dot", "normalized": false, "max_seq_len": 50,
-		"pad_id": 0, "user_encoder": "mean",
-	}
-	for _, edit := range edits {
-		edit(files, m)
-	}
-	dir := t.TempDir()
-	sums := map[string]string{}
-	for name, data := range files {
-		sum := sha256.Sum256(data)
-		sums[name] = hex.EncodeToString(sum[:])
-		if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	m["sha256"] = sums
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), marshal(t, m), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
+type editFunc = bundletest.Edit
 
 // withEncoder makes the bundle use the named test model as its user encoder.
 func withEncoder(t testing.TB, model string) editFunc {

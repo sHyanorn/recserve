@@ -37,7 +37,7 @@ func testServer(t *testing.T) (*Server, *httptest.Server) {
 	b := bundle.New(bundle.Manifest{ModelVersion: "v1", ItemCount: 4, Dim: 2, MaxSeqLen: 50},
 		[]string{"", "a", "b", "c", "d"}, m, nil, []int32{4, 3})
 	store := history.NewMemory()
-	s := New(pipeline(t, b, store), store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s := New(live(t, b, store), store, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	s.Now = func() time.Time { return time.UnixMilli(1000) }
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
@@ -51,6 +51,12 @@ func pipeline(t *testing.T, b *bundle.Bundle, h history.Store) *recommend.Pipeli
 		t.Fatal(err)
 	}
 	return p
+}
+
+// live serves a pipeline over b and h.
+func live(t *testing.T, b *bundle.Bundle, h history.Store) *recommend.Live {
+	t.Helper()
+	return recommend.NewLive(pipeline(t, b, h), slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 func post(t *testing.T, url, body string) (int, map[string]any) {
@@ -228,7 +234,7 @@ func TestRankerTruncationIsCounted(t *testing.T) {
 	if err := store.Append(context.Background(), evs); err != nil {
 		t.Fatal(err)
 	}
-	s := New(pipeline(t, b, store), store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s := New(live(t, b, store), store, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 	for range 2 {
@@ -296,7 +302,7 @@ func degradedServer(t *testing.T, h history.Store, log io.Writer) *Server {
 	}
 	b := bundle.New(bundle.Manifest{ModelVersion: "v1", ItemCount: 4, Dim: 2, MaxSeqLen: 50},
 		[]string{"", "a", "b", "c", "d"}, m, nil, []int32{4, 3})
-	return New(pipeline(t, b, h), h, slog.New(slog.NewTextHandler(log, nil)))
+	return New(live(t, b, h), h, slog.New(slog.NewTextHandler(log, nil)))
 }
 
 // With the store failing, the response is 200, uses the request's recent
@@ -386,7 +392,7 @@ func TestEncoderErrorDegrades(t *testing.T) {
 		t.Fatal(err)
 	}
 	var log bytes.Buffer
-	s := New(pipeline(t, b, store), store, slog.New(slog.NewTextHandler(&log, nil)))
+	s := New(live(t, b, store), store, slog.New(slog.NewTextHandler(&log, nil)))
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 	code, out := post(t, ts.URL+"/v1/recommend", `{"user_id":"u","k":2,"ts":5}`)
@@ -411,7 +417,12 @@ func TestEncoderErrorDegrades(t *testing.T) {
 func TestCacheLookupsAreCounted(t *testing.T) {
 	s, ts := testServer(t)
 	post(t, ts.URL+"/v1/recommend", `{"user_id":"u","k":2}`)
-	s.Pipeline.Cache = cache.New[recommend.Response](10, time.Hour)
+	p, release, err := s.Live.Acquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	p.Cache = cache.New[recommend.Response](10, time.Hour)
 	for range 3 {
 		if code, out := post(t, ts.URL+"/v1/recommend", `{"user_id":"u","k":2}`); code != http.StatusOK || len(ids(out)) != 2 {
 			t.Fatalf("%d %v", code, out)

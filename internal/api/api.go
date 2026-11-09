@@ -29,10 +29,13 @@ const MaxEvents = 1000
 
 // Server holds the handlers' dependencies.
 type Server struct {
-	Pipeline *recommend.Pipeline
-	History  history.Store
-	Now      func() time.Time
-	Log      *slog.Logger
+	Live    *recommend.Live
+	History history.Store
+	// Prepare loads, verifies and indexes the bundle in a directory, for
+	// POST /v1/admin/swap; nil refuses swaps.
+	Prepare func(dir string) (*recommend.Pipeline, error)
+	Now     func() time.Time
+	Log     *slog.Logger
 
 	ready           atomic.Bool
 	requests        *prometheus.CounterVec
@@ -41,12 +44,13 @@ type Server struct {
 	rankerDropped   prometheus.Counter
 	degraded        *prometheus.CounterVec
 	cacheLookups    *prometheus.CounterVec
+	swaps           *prometheus.CounterVec
 	reg             *prometheus.Registry
 }
 
 // New returns a server that is not ready until SetReady(true).
-func New(p *recommend.Pipeline, h history.Store, log *slog.Logger) *Server {
-	s := &Server{Pipeline: p, History: h, Now: time.Now, Log: log, reg: prometheus.NewRegistry()}
+func New(l *recommend.Live, h history.Store, log *slog.Logger) *Server {
+	s := &Server{Live: l, History: h, Now: time.Now, Log: log, reg: prometheus.NewRegistry()}
 	s.requests = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "recserve_http_requests_total", Help: "HTTP requests by route and status code.",
 	}, []string{"route", "code"})
@@ -69,7 +73,13 @@ func New(p *recommend.Pipeline, h history.Store, log *slog.Logger) *Server {
 	s.cacheLookups = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "recserve_cache_lookups_total", Help: "Result cache lookups by result: hit or miss.",
 	}, []string{"result"})
-	s.reg.MustRegister(s.requests, s.latency, s.rankerTruncated, s.rankerDropped, s.degraded, s.cacheLookups,
+	s.swaps = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "recserve_swaps_total", Help: "Bundle swaps by result: ok, rejected (the bundle failed to prepare or is already active) or busy (another swap was running).",
+	}, []string{"result"})
+	for _, r := range []string{swapOK, swapRejected, swapBusy} {
+		s.swaps.WithLabelValues(r)
+	}
+	s.reg.MustRegister(s.requests, s.latency, s.rankerTruncated, s.rankerDropped, s.degraded, s.cacheLookups, s.swaps,
 		collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return s
 }
@@ -94,6 +104,14 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
+// AdminHandler returns the handler of the admin API, for a listener of its
+// own: it has no authentication.
+func (s *Server) AdminHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("POST /v1/admin/swap", s.instrument("admin_swap", s.swap))
+	return mux
+}
+
 type statusWriter struct {
 	http.ResponseWriter
 	code int
@@ -112,8 +130,11 @@ func (s *Server) instrument(route string, h func(http.ResponseWriter, *http.Requ
 		if err := h(sw, r); err != nil {
 			code := http.StatusInternalServerError
 			var be badRequest
+			var he httpError
 			var tooLarge *http.MaxBytesError
 			switch {
+			case errors.As(err, &he):
+				code = he.code
 			case errors.As(err, &tooLarge):
 				code = http.StatusRequestEntityTooLarge
 			case errors.As(err, &be):
@@ -137,6 +158,14 @@ func (s *Server) instrument(route string, h func(http.ResponseWriter, *http.Requ
 type badRequest struct{ error }
 
 func (b badRequest) Unwrap() error { return b.error }
+
+// httpError is an error answered with its own status code, not logged.
+type httpError struct {
+	code int
+	error
+}
+
+func (e httpError) Unwrap() error { return e.error }
 
 // statusClientClosed is recorded when the client went away before the reply (nginx's 499).
 const statusClientClosed = 499
@@ -203,7 +232,7 @@ func (s *Server) recommend(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	resp, err := s.Pipeline.Recommend(r.Context(), req)
+	resp, err := s.Live.Recommend(r.Context(), req)
 	if err != nil {
 		return err
 	}
@@ -254,18 +283,14 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) error {
 	if len(in.Events) == 0 || len(in.Events) > MaxEvents {
 		return badRequest{fmt.Errorf("events must hold 1..%d events", MaxEvents)}
 	}
-	var out EventsResponse
-	evs := make([]history.Event, 0, len(in.Events))
 	for i, e := range in.Events {
 		if e.UserID == "" || e.ItemID == "" || e.TS <= 0 {
 			return badRequest{fmt.Errorf("event %d: user_id, item_id and a positive ts are required", i)}
 		}
-		item, ok := s.Pipeline.Bundle.Lookup(e.ItemID)
-		if !ok {
-			out.UnknownItems++
-			continue
-		}
-		evs = append(evs, history.Event{ID: history.EventID(e.UserID, e.ItemID, e.TS, e.Kind), User: e.UserID, Item: item, TS: e.TS})
+	}
+	evs, out, err := s.lookupEvents(in.Events)
+	if err != nil {
+		return err
 	}
 	if err := s.History.Append(r.Context(), evs); err != nil {
 		return err
@@ -273,3 +298,86 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) error {
 	out.Accepted = len(evs)
 	return writeJSON(w, http.StatusAccepted, out)
 }
+
+// lookupEvents maps the events' items to internal IDs with the active
+// bundle, which it holds only while it looks them up; every bundle a swap
+// accepts has the same IDs.
+func (s *Server) lookupEvents(in []Event) ([]history.Event, EventsResponse, error) {
+	p, release, err := s.Live.Acquire()
+	if err != nil {
+		return nil, EventsResponse{}, err
+	}
+	defer release()
+	var out EventsResponse
+	evs := make([]history.Event, 0, len(in))
+	for _, e := range in {
+		item, ok := p.Bundle.Lookup(e.ItemID)
+		if !ok {
+			out.UnknownItems++
+			continue
+		}
+		evs = append(evs, history.Event{ID: history.EventID(e.UserID, e.ItemID, e.TS, e.Kind), User: e.UserID, Item: item, TS: e.TS})
+	}
+	return evs, out, nil
+}
+
+// Results of a swap, as recserve_swaps_total counts them.
+const (
+	swapOK       = "ok"
+	swapRejected = "rejected"
+	swapBusy     = "busy"
+)
+
+// SwapRequest is the body of POST /v1/admin/swap.
+type SwapRequest struct {
+	Bundle string `json:"bundle"` // the bundle's directory on the gateway's file system
+}
+
+// SwapResponse reports a completed swap.
+type SwapResponse struct {
+	ModelVersion string  `json:"model_version"`
+	Previous     string  `json:"previous"`
+	PrepareMS    float64 `json:"prepare_ms"` // loading, verifying and indexing the bundle
+	DrainMS      float64 `json:"drain_ms"`   // from activation until the previous bundle was closed
+}
+
+// swap prepares the bundle in the requested directory and activates it:
+// 409 while another swap runs or if its version is active, 422 if it fails
+// to load or verify; the active bundle then stays.
+func (s *Server) swap(w http.ResponseWriter, r *http.Request) error {
+	var in SwapRequest
+	if err := decode(r.Body, &in); err != nil {
+		return err
+	}
+	if in.Bundle == "" {
+		return badRequest{errors.New("bundle is required")}
+	}
+	if s.Prepare == nil {
+		return httpError{http.StatusNotImplemented, errors.New("swaps are not configured")}
+	}
+	res, err := s.Live.Swap(func() (*recommend.Pipeline, error) { return s.Prepare(in.Bundle) })
+	switch {
+	case errors.Is(err, recommend.ErrSwapInProgress):
+		s.swaps.WithLabelValues(swapBusy).Inc()
+		return httpError{http.StatusConflict, err}
+	case errors.Is(err, recommend.ErrLiveClosed):
+		return httpError{http.StatusServiceUnavailable, err}
+	case err != nil:
+		s.swaps.WithLabelValues(swapRejected).Inc()
+		s.Log.Warn("swap rejected", "bundle", in.Bundle, "err", err)
+		code := http.StatusUnprocessableEntity
+		if errors.Is(err, recommend.ErrActive) {
+			code = http.StatusConflict
+		}
+		return httpError{code, err}
+	}
+	s.swaps.WithLabelValues(swapOK).Inc()
+	s.Log.Info("bundle swapped", "bundle", in.Bundle, "model_version", res.Version, "previous", res.Previous,
+		"prepare", res.Prepare, "drain", res.Drain)
+	return writeJSON(w, http.StatusOK, SwapResponse{
+		ModelVersion: res.Version, Previous: res.Previous,
+		PrepareMS: ms(res.Prepare), DrainMS: ms(res.Drain),
+	})
+}
+
+func ms(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }

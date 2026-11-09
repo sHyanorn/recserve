@@ -72,7 +72,7 @@ All load tests run on one 4-vCPU VM. Kafka, Valkey, the shards and their replica
 - **ingest** is a Kafka consumer group that applies events to the user histories in Valkey (§7, properties 8 and 9).
 - **Valkey** holds each user's recent events as a sorted set (member: item and event ID, score: event time; D023 on retention) and the result cache. Item features stay in the gateway: they are part of the bundle, immutable per version, and a request reads about 500 of them (D020).
 - **annshard** holds one shard of the item vectors. Items are assigned to shards by hash of their internal ID.
-- **Versions.** A bundle version names the vectors, the ID map and the models together. A swap is two-phase: every shard loads and verifies the new version (prepare), then the gateway activates it and pins each request to one version; shards keep the previous version until no request uses it.
+- **Versions.** A bundle version names the vectors, the ID map and the models together. A swap is two-phase: every shard loads and verifies the new version (prepare), then the gateway activates it and pins each request to one version; shards keep the previous version until no request uses it. Until M4 the shards live in the gateway, which prepares the bundle, its golden cases, cutoff and shard indexes in the background, activates it with one atomic store, and closes the previous bundle once no request holds it; the new bundle must have the same item IDs, since the history store holds internal IDs until M3 (D031).
 
 ## 5. Request path and latency budget
 
@@ -99,7 +99,7 @@ Each stage runs under its own deadline, set by the gateway flags `-budget-histor
 |---|---|---|
 | POST | `/v1/recommend` | `{"user_id", "k", "ts"?, "exclude"?, "recent"?}` → items, scores, arm, versions, degraded reasons (§5), coverage |
 | POST | `/v1/events` | Append user events (`user_id`, `item_id`, `ts`, `kind`); 202 once the broker has acknowledged them |
-| POST | `/v1/admin/swap` | Prepare and activate a bundle version |
+| POST | `/v1/admin/swap` | `{"bundle": dir}`: prepare and activate the bundle in a directory → version, previous version, prepare and drain times; 409 while another swap runs or if the version is active, 422 if the bundle fails to load or verify. Served on its own listener (`-admin-addr`, 127.0.0.1:8081 by default), without authentication |
 | GET | `/livez`, `/readyz`, `/metrics` | Liveness (the process serves), readiness (a bundle is active and the instance is not draining), Prometheus metrics |
 
 `recent` is the client's own list of the user's latest item IDs, oldest first, at most 500; it is used only when the stored history cannot be read, and IDs the bundle does not know are ignored. `coverage` is `{"shards", "answered"}`: the shards searched for vector retrieval and those that answered in time; it is null when vector retrieval did not run (no user vector, or the encoder failed). An event's ID is a hash of its four fields, so an identical event sent twice is one event. Readiness does not depend on Valkey or Kafka: their failure is handled by degradation, and failing readiness on it would take every instance out of service at once.
@@ -113,7 +113,7 @@ Each property is an executable test; those marked * also run against a deliberat
 1. * Features use only events strictly before the request timestamp (property test against a naive scan)
 2. * No response contains an item from the user's history before the request, or the same item twice
 3. * A/B assignment is uniform (chi-square over 1M IDs), stable across processes and restarts (golden cases), and matches the configured split within tolerance; the broken variant assigns with an in-process random seed
-4. * During concurrent queries and repeated swaps, every returned score recomputes exactly from the vectors of the version the response names
+4. * During concurrent queries and repeated swaps, every returned score recomputes exactly from the vectors of the version the response names; the broken variant scores with the bundle active when scoring starts
 5. * The cache never serves a result from another index or model version, including right after a swap
 6. * Scatter-gather top-k in exact mode equals single-node exact top-k item by item on small data; ties break by internal ID ascending
 7. * The load generator charges a server stall to every request it delayed (coordinated omission)

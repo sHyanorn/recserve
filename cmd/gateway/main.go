@@ -1,4 +1,5 @@
-// Command gateway serves recommendations from one bundle (docs/SPEC.md).
+// Command gateway serves recommendations from one bundle at a time and
+// swaps bundles through its admin API (docs/SPEC.md).
 package main
 
 import (
@@ -25,8 +26,12 @@ import (
 	"github.com/sHyanorn/recserve/internal/shard"
 )
 
+// defaultAdminAddr keeps the admin API, which has no authentication, on this host.
+const defaultAdminAddr = "127.0.0.1:8081"
+
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
+	adminAddr := flag.String("admin-addr", defaultAdminAddr, "admin API listen address (POST /v1/admin/swap), without authentication; empty for none")
 	dir := flag.String("bundle", "", "bundle directory")
 	testSplit := flag.String("test-split", "", "test split file; its first event bounds the bundle's train cutoff")
 	preload := flag.String("preload", "", "comma-separated split files whose events are loaded into the history store at start")
@@ -46,13 +51,13 @@ func main() {
 	cacheTTL := flag.Duration("cache-ttl", 5*time.Minute, "result cache time to live, changed by up to 10% either way")
 	flag.Parse()
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if err := run(log, *addr, *dir, *testSplit, *preload, *ortLib, shards, budgets, *cacheSize, *cacheTTL, *drain); err != nil {
+	if err := run(log, *addr, *adminAddr, *dir, *testSplit, *preload, *ortLib, shards, budgets, *cacheSize, *cacheTTL, *drain); err != nil {
 		log.Error("gateway stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(log *slog.Logger, addr, dir, testSplit, preload, ortLib string, shards shard.Config, budgets recommend.Budgets, cacheSize int, cacheTTL time.Duration, drain time.Duration) (err error) {
+func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib string, shards shard.Config, budgets recommend.Budgets, cacheSize int, cacheTTL time.Duration, drain time.Duration) (err error) {
 	if dir == "" {
 		return errors.New("-bundle is required")
 	}
@@ -74,45 +79,49 @@ func run(log *slog.Logger, addr, dir, testSplit, preload, ortLib string, shards 
 	} else {
 		log.Warn("no -test-split: the bundle's train cutoff is not checked")
 	}
-	b, err := bundle.Load(dir, opt)
-	if errors.Is(err, onnx.ErrNotInitialized) {
-		return fmt.Errorf("%w (start with -ort-lib)", err)
+	var c *cache.Cache[recommend.Response]
+	if cacheSize > 0 {
+		c = cache.New[recommend.Response](cacheSize, cacheTTL)
 	}
+	store := history.NewMemory()
+	prepare := preparer(opt, store, shards, budgets, c)
+	p, err := prepare(dir)
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, b.Close()) }()
-	store := history.NewMemory()
+	live := recommend.NewLive(p, log)
+	defer func() { err = errors.Join(err, live.Close()) }()
 	if preload != "" {
 		for _, path := range strings.Split(preload, ",") {
-			n, err := preloadHistory(store, b, path)
+			n, err := preloadHistory(store, p.Bundle, path)
 			if err != nil {
 				return err
 			}
 			log.Info("history preloaded", "file", path, "events", n)
 		}
 	}
-	p, err := recommend.New(b, store, shards)
-	if err != nil {
-		return err
+	srv := api.New(live, store, log)
+	srv.Prepare = prepare
+	servers := []*http.Server{{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second}}
+	if adminAddr != "" {
+		servers = append(servers, &http.Server{Addr: adminAddr, Handler: srv.AdminHandler(), ReadHeaderTimeout: 5 * time.Second})
 	}
-	p.Budgets = budgets
-	if cacheSize > 0 {
-		p.Cache = cache.New[recommend.Response](cacheSize, cacheTTL)
-	}
-	srv := api.New(p, store, log)
-	hs := &http.Server{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
+	errc := make(chan error, len(servers))
+	for i, hs := range servers {
+		ln, err := net.Listen("tcp", hs.Addr)
+		if err != nil {
+			return err
+		}
+		if i == 1 && !loopback(ln.Addr()) { // the admin listener
+			log.Warn("the admin API listens beyond this host and has no authentication", "addr", ln.Addr().String())
+		}
+		go func() { errc <- hs.Serve(ln) }()
 	}
-	errc := make(chan error, 1)
-	go func() { errc <- hs.Serve(ln) }()
 	srv.SetReady(true)
-	log.Info("serving", "addr", addr, "model_version", b.ModelVersion, "items", b.ItemCount,
+	log.Info("serving", "addr", addr, "admin_addr", adminAddr, "model_version", p.Bundle.ModelVersion, "items", p.Bundle.ItemCount,
 		"shards", shards.Shards, "shard_mode", shards.Mode, "zero_vectors", p.Shards.Zeroes())
 	select {
 	case err := <-errc:
@@ -122,7 +131,41 @@ func run(log *slog.Logger, addr, dir, testSplit, preload, ortLib string, shards 
 	srv.SetReady(false)
 	sctx, cancel := context.WithTimeout(context.Background(), drain)
 	defer cancel()
-	return hs.Shutdown(sctx)
+	var errs []error
+	for _, hs := range servers {
+		errs = append(errs, hs.Shutdown(sctx))
+	}
+	return errors.Join(errs...)
+}
+
+// preparer returns the function that loads, verifies and indexes the
+// bundle in a directory, for the first bundle and for every swap: the
+// checksums, golden cases and train cutoff are checked against opt, and
+// the vectors split into shards by cfg. The pipelines share store and
+// cache c, and have budgets.
+func preparer(opt bundle.Options, store history.Store, cfg shard.Config, budgets recommend.Budgets, c *cache.Cache[recommend.Response]) func(dir string) (*recommend.Pipeline, error) {
+	return func(dir string) (*recommend.Pipeline, error) {
+		b, err := bundle.Load(dir, opt)
+		if errors.Is(err, onnx.ErrNotInitialized) {
+			return nil, fmt.Errorf("%w (start with -ort-lib)", err)
+		}
+		if err != nil {
+			return nil, err
+		}
+		p, err := recommend.New(b, store, cfg)
+		if err != nil {
+			return nil, errors.Join(err, b.Close())
+		}
+		p.Budgets, p.Cache = budgets, c
+		return p, nil
+	}
+}
+
+// loopback reports whether a listener's address is reachable from this
+// host only.
+func loopback(a net.Addr) bool {
+	t, ok := a.(*net.TCPAddr)
+	return ok && t.IP.IsLoopback()
 }
 
 func preloadHistory(store history.Store, b *bundle.Bundle, path string) (int, error) {

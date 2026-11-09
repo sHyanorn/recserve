@@ -216,6 +216,10 @@ type Pipeline struct {
 	rankWith          Ranker // test only: replaces the bundle's ranker
 	skipSeenFilter    bool   // test only: the broken variant of property 2
 	keyWithoutVersion bool   // test only: the broken variant of property 5
+	// scoreBundle, test only, is the broken variant of property 4: it
+	// returns the bundle whose vectors score the candidates, read again
+	// instead of the one the request started on.
+	scoreBundle func() *bundle.Bundle
 	// stall, test only, runs at the start of a stage under the stage's
 	// context; shard is the shard searched, -1 outside vector retrieval.
 	// An error fails the stage.
@@ -491,6 +495,9 @@ func (p *Pipeline) searchShards(ctx context.Context, uv []float32, seen map[int3
 // one, its best source score.
 func (p *Pipeline) retrievalScores(results [][]vec.Hit, uv []float32, seen map[int32]bool) []vec.Hit {
 	b := p.Bundle
+	if p.scoreBundle != nil {
+		b = p.scoreBundle()
+	}
 	cands := merge(results)
 	scored := make([]vec.Hit, 0, len(cands))
 	for _, c := range cands {

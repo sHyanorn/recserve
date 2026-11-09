@@ -27,13 +27,14 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] In-process shards of the item vectors (`shard.Of`, two by default), exact or HNSW search per shard; property test 6 (D028)
 - [x] Per-stage deadlines and degradation reasons in responses (D029)
 - [x] Result cache keyed by version and history (in memory for now); property test 5 (D030)
-- [ ] Two-phase bundle swap; property test 4
+- [x] Two-phase bundle swap; property test 4 (D031)
 
 ## M3 Event pipeline and shared state
 - [ ] Kafka (KRaft) and Valkey in docker compose (D019, D020)
 - [ ] `/v1/events` produces to the `events` topic, keyed by user, idempotent producer
 - [ ] `cmd/ingest`: consumer group, idempotent apply to Valkey, commit after apply; property tests 8 and 9
 - [ ] History store and result cache on Valkey; singleflight; property test 11. A hit still reads the history to key it (D030); if that costs too much, key by a per-user history version instead
+- [ ] History store keeps raw item IDs, so a swap may change the item IDs; lift the equal-IDs check of D031
 - [ ] Circuit breaker and `history_unavailable` path; property test 10
 - [ ] Integration tests against real Kafka and Valkey containers
 
