@@ -188,7 +188,8 @@ def main(data, out, encoder):
         uv = mean_vector(vecs, hist)
         if sess:
             got = encode(sess, hist)
-            if (diff := float(np.abs(got - uv).max())) > PARITY:
+            diff = float(np.abs(got - uv).max())
+            if not np.isfinite(got).all() or not diff <= PARITY:
                 sys.exit(f"user encoder differs from the mean by {diff} for user {u}")
             uv = got
         golden.append({"history": hist, "user_emb": uv.tolist(), "top10": top_k(vecs, uv, set(hist), 10)})
@@ -205,7 +206,7 @@ def main(data, out, encoder):
         with open(f"{d}/user_encoder.onnx", "wb") as f:
             f.write(enc)
     with open(f"{d}/golden.jsonl", "w") as f:
-        f.writelines(json.dumps(g) + "\n" for g in golden)
+        f.writelines(json.dumps(g, allow_nan=False) + "\n" for g in golden)
     files = sorted(os.listdir(d))
     sums = {name: sha256(f"{d}/{name}") for name in files}
     # The version names every file, so a change of any setting gives a new version.

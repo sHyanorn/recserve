@@ -69,6 +69,9 @@ func (e *Encoder) Encode(ctx context.Context, seq []int32) ([]float32, error) {
 	if len(seq) == 0 {
 		return nil, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	if e.closed {
@@ -89,10 +92,18 @@ func (e *Encoder) Encode(ctx context.Context, seq []int32) ([]float32, error) {
 	if err == nil {
 		out = slices.Clone(c.out[0].(*ort.Tensor[float32]).GetData())
 	}
+	var release error
 	if reusable {
-		err = errors.Join(err, e.free.put(c))
+		release = e.free.put(c)
 	} else {
-		err = errors.Join(err, c.destroy())
+		release = c.destroy()
+	}
+	if release != nil {
+		// Reported as itself, not as the end of ctx the run error may wrap.
+		if err != nil {
+			release = fmt.Errorf("%w, after %s", release, err.Error())
+		}
+		return nil, fmt.Errorf("releasing an encoder call: %w", release)
 	}
 	if err != nil {
 		return nil, err

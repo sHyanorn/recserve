@@ -172,20 +172,17 @@ func TestFreeListIsBounded(t *testing.T) {
 	}
 }
 
-// A context that has ended stops Encode before it takes a call.
+// A context that has ended stops Encode before it takes a call: on a new
+// encoder the free list stays empty.
 func TestEncodeEndedContext(t *testing.T) {
 	e := meanEncoder(t, 4)
-	if _, err := e.Encode(context.Background(), []int32{1}); err != nil {
-		t.Fatal(err)
-	}
-	idle := len(e.free.idle)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := e.Encode(ctx, []int32{1}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
-	if len(e.free.idle) != idle {
-		t.Fatalf("idle calls %d, want %d", len(e.free.idle), idle)
+	if n := len(e.free.idle); n != 0 {
+		t.Fatalf("%d idle calls, want 0", n)
 	}
 }
 

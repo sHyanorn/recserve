@@ -269,7 +269,17 @@ func TestLoadRejectsONNX(t *testing.T) {
 			f["items.npy"] = npy.Encode([]int{testItems + 1, 2}, swapped, nil)
 			f["golden.jsonl"] = []byte(goldenLine(t, swapped, 50, []int32{1}))
 		}, "user vector differs"},
-		"other model": {withEncoder(t, "slow.onnx"), "golden 0"},
+		"other model": {withEncoder(t, "slow.onnx"), "Invalid input name: item_seq"},
+		"zero output": {withEncoder(t, "zero.onnx"), "output is zero"},
+		// Item 13 is past the encoder's table, and no golden case uses it.
+		"unknown item": {func(f map[string][]byte, m map[string]any) {
+			v := append(testVectors(), 0.5, 0.5)
+			f["items.ids"] = append(f["items.ids"], "item13\n"...)
+			f["items.npy"] = npy.Encode([]int{testItems + 2, 2}, v, nil)
+			f["cooc_ids.npy"] = npy.Encode([]int{testItems + 2, CoocWidth}, nil, make([]int64, (testItems+2)*CoocWidth))
+			f["golden.jsonl"] = []byte(goldenLine(t, v, 50, []int32{1}))
+			m["item_count"] = testItems + 1
+		}, "items 1 and 13"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

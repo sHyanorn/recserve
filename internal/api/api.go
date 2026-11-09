@@ -103,7 +103,9 @@ func (s *Server) instrument(route string, h func(http.ResponseWriter, *http.Requ
 			default:
 				s.Log.Error("request failed", "route", route, "err", err)
 			}
-			writeJSON(sw, code, map[string]string{"error": err.Error()})
+			if err := writeJSON(sw, code, map[string]string{"error": err.Error()}); err != nil {
+				s.Log.Error("writing an error response failed", "route", route, "err", err)
+			}
 		}
 		s.requests.WithLabelValues(route, strconv.Itoa(sw.code)).Inc()
 		s.latency.WithLabelValues(route).Observe(time.Since(start).Seconds())
@@ -117,10 +119,17 @@ func (b badRequest) Unwrap() error { return b.error }
 // statusClientClosed is recorded when the client went away before the reply (nginx's 499).
 const statusClientClosed = 499
 
-func writeJSON(w http.ResponseWriter, code int, v any) {
+// writeJSON writes v as the body with the given status, or nothing if v
+// cannot be encoded.
+func writeJSON(w http.ResponseWriter, code int, v any) error {
+	body, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v) //nolint:errcheck // the status line is sent; a failed write means the client has gone
+	_, _ = w.Write(append(body, '\n')) //nolint:errcheck // the status line is sent; a failed write means the client has gone
+	return nil
 }
 
 // decode reads exactly one JSON value with no unknown fields.
@@ -173,8 +182,7 @@ func (s *Server) recommend(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	writeJSON(w, http.StatusOK, resp)
-	return nil
+	return writeJSON(w, http.StatusOK, resp)
 }
 
 // Event is one event in POST /v1/events.
@@ -221,6 +229,5 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	out.Accepted = len(evs)
-	writeJSON(w, http.StatusAccepted, out)
-	return nil
+	return writeJSON(w, http.StatusAccepted, out)
 }

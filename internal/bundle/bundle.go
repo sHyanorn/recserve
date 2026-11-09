@@ -195,6 +195,11 @@ func (b *Bundle) load(opt Options) error {
 		if b.Encoder, err = onnx.NewEncoder(model, m.MaxSeqLen, m.Dim); err != nil {
 			return fmt.Errorf("user_encoder.onnx: %w", err)
 		}
+		// The golden cases use few IDs; the highest one shows that the
+		// encoder knows every item.
+		if _, err := b.Encoder.Encode(context.Background(), []int32{1, int32(m.ItemCount)}); err != nil {
+			return fmt.Errorf("user_encoder.onnx: items 1 and %d: %w", m.ItemCount, err)
+		}
 	}
 
 	golden, err := need("golden.jsonl")
@@ -298,22 +303,27 @@ func New(m Manifest, ids []string, vectors vec.Matrix, cooc, popular []int32) *B
 // encoder's output for the last MaxSeqLen items, or their mean if the bundle
 // has no encoder. It is nil when the history is empty or the vector is zero
 // (items without training data have zero vectors), so the caller falls back
-// to sources that need no user vector. An encoder error is returned; if ctx
-// ends during the encoder run, the error wraps ctx.Err().
+// to sources that need no user vector. An encoder error is returned, also
+// a zero output for items that have vectors; if ctx ends during the encoder
+// run, the error wraps ctx.Err().
 func (b *Bundle) UserVector(ctx context.Context, history []int32) ([]float32, error) {
 	if len(history) > b.MaxSeqLen {
 		history = history[len(history)-b.MaxSeqLen:]
 	}
+	zero := func(v []float32) bool { return !slices.ContainsFunc(v, func(x float32) bool { return x != 0 }) }
 	var uv []float32
 	if b.Encoder != nil {
 		var err error
 		if uv, err = b.Encoder.Encode(ctx, history); err != nil {
 			return nil, err
 		}
+		if zero(uv) && slices.ContainsFunc(history, func(id int32) bool { return b.InvNorms[id] != 0 }) {
+			return nil, errors.New("user encoder output is zero for items that have vectors")
+		}
 	} else {
 		uv = b.Vectors.Mean(history)
 	}
-	if !slices.ContainsFunc(uv, func(v float32) bool { return v != 0 }) {
+	if zero(uv) {
 		return nil, nil
 	}
 	return uv, nil

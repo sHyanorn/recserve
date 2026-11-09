@@ -127,7 +127,7 @@ A bundle is a directory `bundle/<version>/`:
 | `manifest.json` | `format_version`, `model_version`, `dataset`, `train_cutoff_ts` (latest event time used in training), `item_count`, `dim`, `metric` (`dot`), `normalized`, `max_seq_len`, `pad_id` (0), `user_encoder` (`mean` or `onnx`), build parameters, sha256 of every other file |
 | `items.ids` | One raw item ID per line; line i is internal ID i, starting at 1 |
 | `items.npy` | float32, (item_count + 1) × D, little-endian; row i is internal ID i, row 0 is padding and all zeros |
-| `user_encoder.onnx` | With `user_encoder: onnx`: input `item_seq` int64 [B, L], left-padded with 0; output `user_emb` float32 [B, D]. The service passes B = 1 and L = `max_seq_len`: the last `max_seq_len` history items. With `mean`, absent: the user vector is the mean of the last `max_seq_len` history items' vectors. A user vector of zeros counts as none. Score = dot product |
+| `user_encoder.onnx` | With `user_encoder: onnx`: input `item_seq` int64 [B, L], left-padded with 0; output `user_emb` float32 [B, D]. The service passes B = 1 and L = `max_seq_len`: the last `max_seq_len` history items. With `mean`, absent: the user vector is the mean of the last `max_seq_len` history items' vectors. A user vector of zeros counts as none; from an encoder given items whose vectors are not zero, it is an error. Score = dot product |
 | `ranker.onnx` | Optional |
 | `cooc_ids.npy`, `cooc_counts.npy` | Optional. int64 and float32, (item_count + 1) × 50: each item's most frequent co-occurring items and their counts, 0-padded |
 | `popular.npy` | Optional. int64: the most popular internal IDs, best first |

@@ -95,15 +95,17 @@ func run(ctx context.Context, sess *ort.DynamicAdvancedSession, c *call) (reusab
 		return true, err
 	}
 	// ctx ended during the run: the flag may be set even if the run finished.
+	// A failure to set or clear it is reported as itself, not as ctx's end,
+	// so that callers do not take it for a timeout or a cancellation.
 	<-fired
-	if err != nil {
-		err = fmt.Errorf("%w: %w", ctx.Err(), err)
-	}
 	if terminateErr != nil {
-		return false, errors.Join(err, fmt.Errorf("terminate: %w", terminateErr))
+		return false, errors.Join(fmt.Errorf("terminate: %w", terminateErr), err)
 	}
 	if uerr := c.opts.UnsetTerminate(); uerr != nil {
-		return false, errors.Join(err, fmt.Errorf("unset terminate: %w", uerr))
+		return false, errors.Join(fmt.Errorf("unset terminate: %w", uerr), err)
+	}
+	if err != nil {
+		err = fmt.Errorf("%w: %w", ctx.Err(), err)
 	}
 	return true, err
 }

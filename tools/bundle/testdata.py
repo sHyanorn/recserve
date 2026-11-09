@@ -3,7 +3,8 @@
 usage: testdata.py DIR   (DIR is internal/onnx/onnxtest/testdata)
 
 mean.onnx is build.py's mean encoder over 12 items of 2 dimensions, item i
-being (cos i, sin i) / i (onnxtest.MeanVectors). slow.onnx applies Sin 300
+being (cos i, sin i) / i (onnxtest.MeanVectors); zero.onnx is the same graph
+over zero vectors, so its output is always zero. slow.onnx applies Sin 300
 times to a float32 vector x of any length, giving y; a run on a long vector
 lasts long enough to be terminated. The same inputs give the same bytes.
 """
@@ -39,7 +40,11 @@ def slow():
 
 
 def main(d):
-    models = {"mean.onnx": mean_encoder(mean_vectors()), "slow.onnx": slow()}
+    models = {
+        "mean.onnx": mean_encoder(mean_vectors()),
+        "zero.onnx": mean_encoder(np.zeros((MEAN_ITEMS + 1, 2), dtype=np.float32)),
+        "slow.onnx": slow(),
+    }
     sums = []
     for name, m in models.items():
         data = m.SerializeToString()

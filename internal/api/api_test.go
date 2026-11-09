@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -149,4 +150,16 @@ func FuzzParseRecommend(f *testing.F) {
 			t.Fatalf("accepted invalid request %+v", req)
 		}
 	})
+}
+
+// A value that cannot be encoded fails writeJSON before anything is written,
+// so the caller can still send an error status.
+func TestWriteJSONWritesNothingOnFailure(t *testing.T) {
+	rec := httptest.NewRecorder()
+	if err := writeJSON(rec, http.StatusOK, map[string]float64{"score": math.NaN()}); err == nil {
+		t.Fatal("NaN encoded")
+	}
+	if rec.Body.Len() != 0 || rec.Header().Get("Content-Type") != "" {
+		t.Fatalf("wrote %q with headers %v", rec.Body.String(), rec.Header())
+	}
 }

@@ -18,6 +18,10 @@ from build import encode, mean_vector, session, sha256, top_k
 TOL = 1e-4
 
 
+def reject(name):
+    sys.exit(f"golden.jsonl: {name} is not a number")
+
+
 def main(d):
     with open(f"{d}/manifest.json") as f:
         m = json.load(f)
@@ -36,13 +40,15 @@ def main(d):
         low = 0 if name == "cooc_ids.npy" else 1
         if ids_.dtype != np.int64 or ids_.min(initial=low) < low or ids_.max(initial=0) > m["item_count"]:
             sys.exit(f"{name}: dtype or ID range")
+    if m["user_encoder"] not in ("mean", "onnx"):
+        sys.exit(f"unsupported user_encoder {m['user_encoder']!r}")
     if (m["user_encoder"] == "onnx") != ("user_encoder.onnx" in m["sha256"]):
         sys.exit(f"user_encoder {m['user_encoder']!r} and user_encoder.onnx do not match")
     if m["user_encoder"] == "onnx":
         with open(f"{d}/user_encoder.onnx", "rb") as f:
             sess = session(f.read())
     with open(f"{d}/golden.jsonl") as f:
-        cases = [json.loads(line) for line in f]
+        cases = [json.loads(line, parse_constant=reject) for line in f]
     for n, c in enumerate(cases):
         if not c["history"] or min(c["history"]) < 1 or max(c["history"]) > m["item_count"]:
             sys.exit(f"golden {n}: history IDs out of range")
@@ -50,8 +56,10 @@ def main(d):
             uv = encode(sess, c["history"], m["max_seq_len"])
         else:
             uv = mean_vector(vecs, c["history"], m["max_seq_len"])
+        if not np.isfinite(uv).all() or not np.any(uv):
+            sys.exit(f"golden {n}: the user vector is not finite, or zero, which counts as none")
         diff = float(np.max(np.abs(uv - np.array(c["user_emb"], dtype=np.float32))))
-        if diff > TOL:
+        if not diff <= TOL:
             sys.exit(f"golden {n}: user vector differs by {diff}")
         if top_k(vecs, uv, set(c["history"]), 10) != c["top10"]:
             sys.exit(f"golden {n}: top-10 differs")
