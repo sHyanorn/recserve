@@ -80,7 +80,7 @@ R2 failed, so M2 writes HNSW by hand. It is measured with the R2 protocol above:
 - the recall@100 and p99 curve over all ef values, beside faiss's curve
 - p99 at the lowest ef reaching recall@100 ≥ 0.95, through scatter-gather over two shards (two annshard processes, each with half the base vectors and its own index, built with the same settings; the merged top-100 is scored against the full ground truth)
 
-The index is still used in M3 and later, with its measured p99 stated wherever retrieval latency is reported. **If any other part fails**, retrieval at 1M-scale stays on exact search, the shard tier serves exact search, and the hand-written index is reported as a negative result.
+The index is still used in later milestones, with its measured p99 stated wherever retrieval latency is reported. **If any other part fails**, retrieval at 1M-scale stays on exact search, the shard tier serves exact search, and the hand-written index is reported as a negative result.
 
 ## Retrieval quality
 
@@ -131,6 +131,26 @@ The share of degraded responses is reported per run, and runs above 1% are marke
 - The headline (D005) is the highest rate at which all three runs are valid and unflagged with p99 ≤ 50 ms.
 
 **Cross-check.** One rate is also driven by vegeta at the same constant rate, and the two p99 values are reported side by side.
+
+## Fault injection under load
+
+Faults (D021), each in its own run: one shard replica killed; 50 ms of added latency on every connection to one shard; Valkey unavailable; the ingest consumer paused, with `/v1/events` writes at 10% of requests.
+
+**Run.** One rate: half the headline rate of the cache-off sweep. 30 s warmup, 60 s healthy, 60 s with the fault, then the fault is removed and the run continues for 120 s. Three runs per fault. Noise baseline before and after.
+
+**Reported per run**, for each of the three phases and as a time series in 1 s windows:
+
+- p50, p99 and max latency from the due time
+- error rate (HTTP 5xx and transport errors) and 503 rate
+- share of degraded responses, by reason, and mean shard coverage
+- recovery time: from fault removal until the 10 s rolling p99 is within 1.2 times the healthy phase's p99 and the degraded share is within 1 percentage point of the healthy phase's
+- consumer pause only: consumer lag and the time to drain it after resuming; and whether every user history after the run equals the one built from all produced events (property 9)
+
+**Pass criteria** are added to this section and committed before the first fault run (M6). They are not changed after results exist.
+
+## Kubernetes rollout check
+
+On kind (D022), loadgen sends a fixed rate of 100 requests/s for 5 minutes while, after 60 s, `kubectl rollout restart` runs on the gateway, and, after 180 s, a bundle swap is triggered. **Pass** if no request fails (HTTP 5xx, 503 or transport error) and every response names a single bundle version. Latency is reported but is not part of the check, since the control plane shares the CPUs.
 
 ## Results
 

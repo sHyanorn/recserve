@@ -18,9 +18,12 @@ An online recommendation and search serving system written in Go. A request goes
 - Prometheus metrics and OpenTelemetry tracing
 - Index and model hot swap: a new version loads and verifies in the background, then all shards switch atomically; no request mixes versions
 - Sharded vector tier: shards with replicas, scatter-gather with per-shard deadlines, hedged requests, replica failover
-- Event ingestion (`POST /v1/events`) that updates user histories online
+- Event ingestion through a Kafka-protocol topic: `POST /v1/events` produces to it, keyed by user; an ingest consumer applies events to the user histories at least once, idempotently, and resumes from its committed offsets after a restart
+- User histories and the result cache in Valkey, shared by all gateway instances; stampede protection with singleflight; degradation when Valkey is unavailable
+- Fault injection under load: a dead shard replica, shard latency, Valkey unavailable, a stalled consumer
+- Deployment on a local kind cluster with readiness and liveness probes, resource limits and an HPA, and a check that a rolling update and a model swap under load produce no errors
 - Reproducible open-loop load generator and a benchmark report
-- docker compose that starts the whole system with one command
+- docker compose that starts the whole system with one command; Kubernetes manifests for kind
 
 ### Optional
 
@@ -37,6 +40,8 @@ An online recommendation and search serving system written in Go. A request goes
 
 The catalog served is Amazon Reviews 2023 Video_Games, 5-core: 25.6k items (137.2k before filtering). Exact search over that many 64-dimensional vectors takes about 2 ms on one core (scaled from the 1M-vector measurement in M0), so at this size neither ANN nor sharding is needed; the service shards it anyway to exercise the mechanism. ANN and shard performance is measured separately on 1M-scale vectors (glove-100-angular and synthetic vectors, D008), and the report says which figures come from which.
 
+All load tests run on one 4-vCPU VM. Kafka, Valkey, the shards and their replicas, the gateway, the ingest consumer and the load generator share its CPUs and memory, so the figures show behavior under load and relative effects (a fault, a cache, a degradation); they do not predict the capacity of a real multi-machine deployment. Headline figures come from docker compose; the kind cluster is used to check deployment behavior, not for throughput, since its own control plane runs on the same CPUs.
+
 ## 4. Architecture
 
 ```
@@ -44,8 +49,11 @@ The catalog served is Amazon Reviews 2023 Video_Games, 5-core: 25.6k items (137.
                           │
         ┌─────────────────▼──────────────────────────────┐
         │ gateway (stateless, N instances)                │
-        │  rate limit → A/B arm → cache                   │
-        │  features: user history before request ts       │
+        │  rate limit → A/B arm → cache ◄─────────────────┼── Valkey: result cache,
+        │  features: user history before request ts ◄─────┼── user histories
+        │  POST /v1/events ───────────────────────────────┼─► Kafka topic `events`
+        │                                                 │   (keyed by user) ──► ingest
+        │                                                 │   consumer ──► Valkey
         │  user encoder (ONNX)                            │
         │  retrieval fan-out ──────────┐                  │
         │    co-occurrence, popularity │ (in memory)      │
@@ -60,7 +68,9 @@ The catalog served is Amazon Reviews 2023 Video_Games, 5-core: 25.6k items (137.
      └───────────────┘          └───────────────┘   versioned index snapshot
 ```
 
-- **gateway** holds the feature store, co-occurrence table, popularity list and models in memory, loaded from versioned snapshots; it is stateless across requests apart from its cache.
+- **gateway** holds item features, the co-occurrence table, the popularity list and the models in memory, loaded from versioned bundles; per-user state lives in Valkey, so gateway instances are interchangeable.
+- **ingest** is a Kafka consumer group that applies events to the user histories in Valkey (§7, properties 8 and 9).
+- **Valkey** holds each user's recent events as a sorted set (member: item and event ID, score: event time, capped at the latest 200) and the result cache. Item features stay in the gateway: they are part of the bundle, immutable per version, and a request reads about 500 of them (D020).
 - **annshard** holds one shard of the item vectors. Items are assigned to shards by hash of their internal ID.
 - **Versions.** A bundle version names the vectors, the ID map and the models together. A swap is two-phase: every shard loads and verifies the new version (prepare), then the gateway activates it and pins each request to one version; shards keep the previous version until no request uses it.
 
@@ -69,7 +79,7 @@ The catalog served is Amazon Reviews 2023 Video_Games, 5-core: 25.6k items (137.
 | Stage | p99 budget | On timeout |
 |---|---|---|
 | Rate limit, A/B, cache lookup | 1 ms | — |
-| Feature lookup | 3 ms | request fails (500) |
+| Feature lookup (Valkey) | 3 ms | history from the request only, reason `history_unavailable` |
 | User encoder | 5 ms | vector retrieval skipped |
 | Retrieval (parallel; shard deadline 15 ms) | 15 ms | source skipped, partial shards reported |
 | Ranking (500 candidates) | 15 ms | retrieval order kept |
@@ -83,10 +93,12 @@ The service target is a server-side p99 of 50 ms; the headline figure is the hig
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/v1/recommend` | `{"user_id", "k", "ts"?, "exclude"?}` → items, scores, arm, versions, degraded reasons, coverage |
-| POST | `/v1/events` | Append user events (`user_id`, `item_id`, `ts`, `kind`) |
+| POST | `/v1/recommend` | `{"user_id", "k", "ts"?, "exclude"?, "recent"?}` → items, scores, arm, versions, degraded reasons, coverage |
+| POST | `/v1/events` | Append user events (`user_id`, `item_id`, `ts`, `kind`); 202 once the broker has acknowledged them |
 | POST | `/v1/admin/swap` | Prepare and activate a bundle version |
-| GET | `/healthz`, `/metrics` | Health and Prometheus metrics |
+| GET | `/livez`, `/readyz`, `/metrics` | Liveness (the process serves), readiness (a bundle is active and the instance is not draining), Prometheus metrics |
+
+`recent` is the client's own list of the user's latest item IDs; it is used only when the stored history cannot be read. An event's ID is a hash of its four fields, so an identical event sent twice is one event. Readiness does not depend on Valkey or Kafka: their failure is handled by degradation, and failing readiness on it would take every instance out of service at once.
 
 `ts` defaults to the server clock; benchmarks and evaluation pass the event time from the dataset so the same request always sees the same history.
 
@@ -98,9 +110,13 @@ Each property is an executable test; those marked * also run against a deliberat
 2. * No response contains an item from the user's history before the request, or the same item twice
 3. * A/B assignment is uniform (chi-square over 1M IDs), stable across processes and restarts (golden cases), and matches the configured split within tolerance; the broken variant assigns with an in-process random seed
 4. * During concurrent queries and repeated swaps, every returned score recomputes exactly from the vectors of the version the response names
-5. * The cache never serves a result from another index or model version
+5. * The cache never serves a result from another index or model version, including right after a swap
 6. * Scatter-gather top-k in exact mode equals single-node exact top-k item by item on small data; ties break by internal ID ascending
 7. * The load generator charges a server stall to every request it delayed (coordinated omission)
+8. * Delivering any event more than once, in any order relative to other events, leaves every user history and every response unchanged; the broken variant appends without the event ID
+9. * After the ingest consumer is killed at random points and restarted, every user history equals the one built by applying each produced event exactly once
+10. * With Valkey unavailable, every response is 200, uses only the request's `recent` items as history, reports `history_unavailable`, and is never written to the cache, also after Valkey returns; the broken variant caches it
+11. * Concurrent identical requests that miss the cache compute the result once per gateway instance (singleflight)
 
 ## 8. Model bundle contract with seqrec-lab
 
@@ -124,12 +140,13 @@ Data is downloaded by `make data` and never committed. Development and benchmark
 ## 10. Testing strategy
 
 - Unit and table-driven tests for every stage; property tests for section 7; fuzzing for request parsing and the bundle loader
-- Fault injection: slow and dead shards, slow ranker, failed swaps
+- Fault injection: slow and dead shards, slow ranker, failed swaps, Valkey down, consumer killed; under load per docs/BENCHMARKS.md
+- Integration tests against real Kafka and Valkey containers
 - All tests run under `-race`
 - Benchmarks and evaluation follow docs/BENCHMARKS.md, fixed before results are looked at
 
 ## 11. Deliverables
 
-- Runnable services and images, docker compose
+- Runnable services and images, docker compose, kind manifests
 - README with architecture, results table and quick start
 - docs/BENCHMARKS.md with load-test and retrieval-quality results
