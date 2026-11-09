@@ -81,7 +81,7 @@ All load tests run on one 4-vCPU VM. Kafka, Valkey, the shards and their replica
 | Rate limit, A/B | 1 ms | — |
 | Feature lookup (Valkey), then cache lookup | 3 ms | history from the request's `recent` only: `history_unavailable` |
 | User encoder | 5 ms | vector retrieval skipped: `encoder_timeout`, `encoder_error` |
-| Retrieval (parallel; shard deadline 15 ms) | 15 ms | source skipped: `cooc_timeout`, `cooc_error`, `popular_timeout`, `popular_error`; shards that did not answer skipped: `shards_partial`, or `vector_timeout` (every shard timed out) or `vector_error` (none answered, one failed) |
+| Retrieval (parallel; shard deadline 15 ms) | 15 ms | shards that did not answer skipped: `vector_timeout` (every shard timed out), `vector_error` (none answered, one failed) or `shards_partial` (some answered); source skipped: `cooc_timeout`, `cooc_error`, `popular_timeout`, `popular_error` |
 | Ranking (at most 512 candidates) | 15 ms | retrieval order kept: `ranker_timeout`, `ranker_error` |
 | Re-ranking and filters | 2 ms | — |
 | Other overhead | 9 ms | — |
@@ -147,6 +147,8 @@ H is the request's history: every stored event of the user strictly before the r
 4. `item_norm`: ‖v_i‖ = √(v_i · v_i)
 5. `last_item_cosine`: v_i · v_l / (‖v_i‖ ‖v_l‖), l being the last entry of H; 0 if H is empty or either norm is 0
 6. `log_history_len`: ln(1 + |H|)
+
+When the co-occurrence or popularity source is skipped (§5), `cooc_score` or `popular_score` is 0 for every candidate. `vector_score` depends only on the user vector, so it stays when shards are skipped.
 
 The candidates are the union of the retrieval sources' results without the seen and excluded items. Each has a retrieval score: u · v_i, or without a user vector its best source score (the values above for `cooc_score` and `popular_score`, and their maximum). With a ranker, the 512 candidates with the highest retrieval scores (ties to the lower internal ID) are ranked and the rest are dropped and counted in the metrics; a candidate's score becomes the ranker's. If the ranker times out or fails, the retrieval scores stay. MMR scales the scores to [0, 1] over the candidates (min-max) before weighing them against similarity, so the ranker's scale does not change the diversity weight.
 
