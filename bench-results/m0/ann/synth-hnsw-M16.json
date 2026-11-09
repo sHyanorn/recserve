@@ -1,0 +1,364 @@
+{
+  "build_seconds": 249.498246965,
+  "env": {
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "date": "2026-11-08T23:17:13Z",
+    "go": "go1.27.3",
+    "gomaxprocs": "4",
+    "index": "hnsw",
+    "kernel": "6.18.44-fc-v310",
+    "numcpu": "4",
+    "set": "synth"
+  },
+  "heap_objects_mib": 1368.2786102294922,
+  "points": [
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 10,
+      "k": 10,
+      "recall": 0.040030000000000454,
+      "latency": {
+        "n": 10000,
+        "p50_us": 130.275,
+        "p90_us": 172.281,
+        "p99_us": 225.455,
+        "p999_us": 314.174,
+        "max_us": 358.981
+      },
+      "qps": 7360.972674218148,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0,
+        "gc_cpu_fraction": 0
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 882372.555,
+        "after_ns": 858990.83,
+        "attempt": 2,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 20,
+      "k": 10,
+      "recall": 0.040030000000000454,
+      "latency": {
+        "n": 10000,
+        "p50_us": 142.038,
+        "p90_us": 193.122,
+        "p99_us": 279.834,
+        "p999_us": 793.762,
+        "max_us": 3368.817
+      },
+      "qps": 6637.784674306249,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0,
+        "gc_cpu_fraction": 0
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 807299.665,
+        "after_ns": 799807.145,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 40,
+      "k": 10,
+      "recall": 0.040030000000000454,
+      "latency": {
+        "n": 10000,
+        "p50_us": 151.541,
+        "p90_us": 199.031,
+        "p99_us": 256.423,
+        "p999_us": 330.707,
+        "max_us": 797.051
+      },
+      "qps": 6488.963957492246,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0,
+        "gc_cpu_fraction": 0
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 848611.545,
+        "after_ns": 880339.21,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 80,
+      "k": 10,
+      "recall": 0.040030000000000454,
+      "latency": {
+        "n": 10000,
+        "p50_us": 127.116,
+        "p90_us": 318.472,
+        "p99_us": 463.121,
+        "p999_us": 654.626,
+        "max_us": 21752.037
+      },
+      "qps": 5840.005910926943,
+      "gc": {
+        "num_gc": 1,
+        "max_pause_upper_ms": 0.06553600000000001,
+        "gc_cpu_fraction": 0.011475930992885807
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 800278.62,
+        "after_ns": 873770.995,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 120,
+      "k": 10,
+      "recall": 0.040030000000000454,
+      "latency": {
+        "n": 10000,
+        "p50_us": 135.307,
+        "p90_us": 184.468,
+        "p99_us": 246.301,
+        "p999_us": 684.619,
+        "max_us": 2758.525
+      },
+      "qps": 6910.918484646663,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0,
+        "gc_cpu_fraction": 0
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 859238.895,
+        "after_ns": 830482.675,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 200,
+      "k": 10,
+      "recall": 0.040030000000000454,
+      "latency": {
+        "n": 10000,
+        "p50_us": 159.586,
+        "p90_us": 571.675,
+        "p99_us": 793.29,
+        "p999_us": 2493.046,
+        "max_us": 5001.79
+      },
+      "qps": 4133.516134226421,
+      "gc": {
+        "num_gc": 1,
+        "max_pause_upper_ms": 0.08192,
+        "gc_cpu_fraction": 0.03204611229845631
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 847219.8,
+        "after_ns": 830212.46,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 400,
+      "k": 10,
+      "recall": 0.040030000000000454,
+      "latency": {
+        "n": 10000,
+        "p50_us": 157.733,
+        "p90_us": 214.409,
+        "p99_us": 562.44,
+        "p999_us": 2418.048,
+        "max_us": 5430.971
+      },
+      "qps": 5688.190742705398,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0.098304,
+        "gc_cpu_fraction": 0
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 846310.465,
+        "after_ns": 818160.235,
+        "attempt": 2,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 800,
+      "k": 10,
+      "recall": 0.040030000000000454,
+      "latency": {
+        "n": 10000,
+        "p50_us": 160.407,
+        "p90_us": 478.241,
+        "p99_us": 850.273,
+        "p999_us": 6278.983,
+        "max_us": 7562.604
+      },
+      "qps": 4131.280121375094,
+      "gc": {
+        "num_gc": 1,
+        "max_pause_upper_ms": 0.32768,
+        "gc_cpu_fraction": 0.06289230907476807
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 819303.595,
+        "after_ns": 808605.715,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 120,
+      "k": 100,
+      "recall": 0.060861999999998966,
+      "latency": {
+        "n": 10000,
+        "p50_us": 237.644,
+        "p90_us": 360.604,
+        "p99_us": 601.077,
+        "p999_us": 1603.204,
+        "max_us": 5938.056
+      },
+      "qps": 3729.49906994927,
+      "gc": {
+        "num_gc": 1,
+        "max_pause_upper_ms": 0.08192,
+        "gc_cpu_fraction": 0.04338307371897989
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 831625.33,
+        "after_ns": 838836.145,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 200,
+      "k": 100,
+      "recall": 0.060861999999998966,
+      "latency": {
+        "n": 10000,
+        "p50_us": 245.636,
+        "p90_us": 442.263,
+        "p99_us": 1037.8,
+        "p999_us": 2422.801,
+        "max_us": 7333.278
+      },
+      "qps": 3208.7651851695878,
+      "gc": {
+        "num_gc": 1,
+        "max_pause_upper_ms": 0.098304,
+        "gc_cpu_fraction": 0.044831720475894184
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 790197.125,
+        "after_ns": 806269.155,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 400,
+      "k": 100,
+      "recall": 0.060861999999998966,
+      "latency": {
+        "n": 10000,
+        "p50_us": 262.233,
+        "p90_us": 616.303,
+        "p99_us": 890.38,
+        "p999_us": 1223.812,
+        "max_us": 5111.644
+      },
+      "qps": 3122.047623956727,
+      "gc": {
+        "num_gc": 1,
+        "max_pause_upper_ms": 0.13107200000000002,
+        "gc_cpu_fraction": 0.048237911060505234
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 825297.41,
+        "after_ns": 787323.48,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 800,
+      "k": 100,
+      "recall": 0.060861999999998966,
+      "latency": {
+        "n": 10000,
+        "p50_us": 267.215,
+        "p90_us": 638.548,
+        "p99_us": 917.334,
+        "p999_us": 1570.965,
+        "max_us": 5904.543
+      },
+      "qps": 2994.2273972620083,
+      "gc": {
+        "num_gc": 1,
+        "max_pause_upper_ms": 0.08192,
+        "gc_cpu_fraction": 0.05138475945154318
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 841250.645,
+        "after_ns": 802857.3,
+        "attempt": 1,
+        "noisy": false
+      }
+    }
+  ]
+}

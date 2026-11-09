@@ -1,0 +1,109 @@
+synth: 1000000 base, 10000 queries, dim 64
+  added 100000 in 18s
+  added 200000 in 39s
+  added 300000 in 1m2s
+  added 400000 in 1m28s
+  added 500000 in 1m53s
+  added 600000 in 2m18s
+  added 700000 in 2m44s
+  added 800000 in 3m11s
+  added 900000 in 3m39s
+  added 1000000 in 4m9s
+build 4m9s, heap objects 1368 MiB
+hnsw M=16 ef=10 k=10 recall=0.0400 p50=130us p99=225us qps=7361 gcmax=0.00ms gccpu=0.000 noisy=false
+hnsw M=16 ef=20 k=10 recall=0.0400 p50=142us p99=280us qps=6638 gcmax=0.00ms gccpu=0.000 noisy=false
+hnsw M=16 ef=40 k=10 recall=0.0400 p50=152us p99=256us qps=6489 gcmax=0.00ms gccpu=0.000 noisy=false
+hnsw M=16 ef=80 k=10 recall=0.0400 p50=127us p99=463us qps=5840 gcmax=0.07ms gccpu=0.011 noisy=false
+hnsw M=16 ef=120 k=10 recall=0.0400 p50=135us p99=246us qps=6911 gcmax=0.00ms gccpu=0.000 noisy=false
+hnsw M=16 ef=200 k=10 recall=0.0400 p50=160us p99=793us qps=4134 gcmax=0.08ms gccpu=0.032 noisy=false
+hnsw M=16 ef=400 k=10 recall=0.0400 p50=158us p99=562us qps=5688 gcmax=0.10ms gccpu=0.000 noisy=false
+hnsw M=16 ef=800 k=10 recall=0.0400 p50=160us p99=850us qps=4131 gcmax=0.33ms gccpu=0.063 noisy=false
+hnsw M=16 ef=120 k=100 recall=0.0609 p50=238us p99=601us qps=3729 gcmax=0.08ms gccpu=0.043 noisy=false
+hnsw M=16 ef=200 k=100 recall=0.0609 p50=246us p99=1038us qps=3209 gcmax=0.10ms gccpu=0.045 noisy=false
+hnsw M=16 ef=400 k=100 recall=0.0609 p50=262us p99=890us qps=3122 gcmax=0.13ms gccpu=0.048 noisy=false
+hnsw M=16 ef=800 k=100 recall=0.0609 p50=267us p99=917us qps=2994 gcmax=0.08ms gccpu=0.051 noisy=false
+synth: 1000000 base, 10000 queries, dim 64
+exact k=100 recall=1.0000 recall@10=1.0000 p50=61051us p99=87354us noisy=false
+reference 811429 ns per pass, runs [811428.84]
+build 322s
+{'ef': 10, 'k': 10, 'p50_us': 58.309999985795, 'p99_us': 135.30799969885265, 'qps': 15024.067895700558}
+{'ef': 20, 'k': 10, 'p50_us': 88.34999971440993, 'p99_us': 182.06499953521416, 'qps': 10079.351509040396}
+{'ef': 40, 'k': 10, 'p50_us': 126.17599986697314, 'p99_us': 247.76200007181615, 'qps': 7677.54370489471}
+{'ef': 80, 'k': 10, 'p50_us': 147.8120002502692, 'p99_us': 274.02900013839826, 'qps': 6216.405352701479}
+{'ef': 120, 'k': 10, 'p50_us': 191.41299981129123, 'p99_us': 313.665000248875, 'qps': 4928.052724234129}
+{'ef': 200, 'k': 10, 'p50_us': 297.30699952779105, 'p99_us': 506.9030003141961, 'qps': 3138.762559659587}
+{'ef': 400, 'k': 10, 'p50_us': 482.6059994229581, 'p99_us': 774.7640001980471, 'qps': 1943.4412830258923}
+{'ef': 800, 'k': 10, 'p50_us': 907.2130005733925, 'p99_us': 1396.4929994472186, 'qps': 1052.9656768654443}
+{'ef': 120, 'k': 100, 'p50_us': 217.28100000473205, 'p99_us': 381.50699947436806, 'qps': 4271.684127151886}
+{'ef': 200, 'k': 100, 'p50_us': 364.90500042418716, 'p99_us': 592.0940002397401, 'qps': 2706.921589245923}
+{'ef': 400, 'k': 100, 'p50_us': 532.5550000634394, 'p99_us': 778.2700004099752, 'qps': 1816.5606896969432}
+{'ef': 800, 'k': 100, 'p50_us': 988.6049992928747, 'p99_us': 1339.8860000961577, 'qps': 1001.3311889081036}
+reference 870143 ns per pass, runs [870143.26]
+synth: 1000000 base, 10000 queries, dim 64
+faiss M=16 ef=10 k=10 recall=0.6720
+faiss M=16 ef=20 k=10 recall=0.8564
+faiss M=16 ef=40 k=10 recall=0.9668
+faiss M=16 ef=80 k=10 recall=0.9966
+faiss M=16 ef=120 k=10 recall=0.9990
+faiss M=16 ef=200 k=10 recall=0.9999
+faiss M=16 ef=400 k=10 recall=0.9999
+faiss M=16 ef=800 k=10 recall=1.0000
+faiss M=16 ef=120 k=100 recall=0.9963
+faiss M=16 ef=200 k=100 recall=0.9996
+faiss M=16 ef=400 k=100 recall=0.9999
+faiss M=16 ef=800 k=100 recall=1.0000
+glove: 1183514 base, 10000 queries, dim 100
+  added 100000 in 19s
+  added 200000 in 44s
+  added 300000 in 1m10s
+  added 400000 in 1m39s
+  added 500000 in 2m7s
+  added 600000 in 2m37s
+  added 700000 in 3m9s
+  added 800000 in 3m41s
+  added 900000 in 4m13s
+  added 1000000 in 4m49s
+  added 1100000 in 5m21s
+build 5m47s, heap objects 1772 MiB
+hnsw M=16 ef=10 k=10 recall=0.0245 p50=124us p99=212us qps=7762 gcmax=0.00ms gccpu=0.000 noisy=false
+hnsw M=16 ef=20 k=10 recall=0.0245 p50=133us p99=309us qps=6619 gcmax=0.06ms gccpu=0.000 noisy=false
+hnsw M=16 ef=40 k=10 recall=0.0245 p50=119us p99=175us qps=8276 gcmax=0.00ms gccpu=0.000 noisy=false
+hnsw M=16 ef=80 k=10 recall=0.0245 p50=125us p99=214us qps=7669 gcmax=0.00ms gccpu=0.000 noisy=false
+hnsw M=16 ef=120 k=10 recall=0.0245 p50=168us p99=274us qps=5867 gcmax=0.00ms gccpu=0.000 noisy=false
+hnsw M=16 ef=200 k=10 recall=0.0245 p50=166us p99=714us qps=4449 gcmax=0.08ms gccpu=0.019 noisy=false
+hnsw M=16 ef=400 k=10 recall=0.0245 p50=156us p99=602us qps=5611 gcmax=0.10ms gccpu=0.000 noisy=false
+hnsw M=16 ef=800 k=10 recall=0.0245 p50=177us p99=1019us qps=3594 gcmax=0.10ms gccpu=0.084 noisy=false
+hnsw M=16 ef=120 k=100 recall=0.0319 p50=246us p99=395us qps=3931 gcmax=0.00ms gccpu=0.000 noisy=false
+hnsw M=16 ef=200 k=100 recall=0.0319 p50=239us p99=417us qps=3959 gcmax=0.00ms gccpu=0.000 noisy=false
+hnsw M=16 ef=400 k=100 recall=0.0319 p50=245us p99=809us qps=3483 gcmax=0.06ms gccpu=0.028 noisy=false
+hnsw M=16 ef=800 k=100 recall=0.0319 p50=316us p99=887us qps=2729 gcmax=0.10ms gccpu=0.056 noisy=false
+glove: 1183514 base, 10000 queries, dim 100
+exact k=100 recall=1.0000 recall@10=1.0000 p50=112662us p99=160552us noisy=false
+reference 860832 ns per pass, runs [860831.715]
+build 666s
+{'ef': 10, 'k': 10, 'p50_us': 48.70799966738559, 'p99_us': 120.55800016241847, 'qps': 18035.2453493485}
+{'ef': 20, 'k': 10, 'p50_us': 77.53299996693386, 'p99_us': 179.76699928112794, 'qps': 11620.084552012597}
+{'ef': 40, 'k': 10, 'p50_us': 136.02299986814614, 'p99_us': 314.6400003970484, 'qps': 6704.888352060068}
+{'ef': 80, 'k': 10, 'p50_us': 254.59399967076024, 'p99_us': 509.3810004836996, 'qps': 3583.6990494629176}
+{'ef': 120, 'k': 10, 'p50_us': 365.95799974747933, 'p99_us': 725.6700000652927, 'qps': 2505.4366038854523}
+{'ef': 200, 'k': 10, 'p50_us': 562.4870000247029, 'p99_us': 973.4679997563944, 'qps': 1681.21709033419}
+{'ef': 400, 'k': 10, 'p50_us': 1017.5829993386287, 'p99_us': 1684.3009998410707, 'qps': 965.5599834035847}
+{'ef': 800, 'k': 10, 'p50_us': 2166.784000110056, 'p99_us': 3463.55500005302, 'qps': 445.27549112549}
+{'ef': 120, 'k': 100, 'p50_us': 435.7899997557979, 'p99_us': 769.8010003878153, 'qps': 2163.752898556052}
+{'ef': 200, 'k': 100, 'p50_us': 597.7580003673211, 'p99_us': 1152.8889999681269, 'qps': 1548.1841226042623}
+{'ef': 400, 'k': 100, 'p50_us': 1056.1429999143002, 'p99_us': 1676.8199993748567, 'qps': 933.7659163801636}
+{'ef': 800, 'k': 100, 'p50_us': 2154.673999939405, 'p99_us': 3433.3089997744537, 'qps': 454.97108133628655}
+reference 844691 ns per pass, runs [844691.24]
+glove: 1183514 base, 10000 queries, dim 100
+faiss M=16 ef=10 k=10 recall=0.4758
+faiss M=16 ef=20 k=10 recall=0.6007
+faiss M=16 ef=40 k=10 recall=0.7061
+faiss M=16 ef=80 k=10 recall=0.7883
+faiss M=16 ef=120 k=10 recall=0.8259
+faiss M=16 ef=200 k=10 recall=0.8652
+faiss M=16 ef=400 k=10 recall=0.9085
+faiss M=16 ef=800 k=10 recall=0.9414
+faiss M=16 ef=120 k=100 recall=0.7185
+faiss M=16 ef=200 k=100 recall=0.7780
+faiss M=16 ef=400 k=100 recall=0.8438
+faiss M=16 ef=800 k=100 recall=0.8961

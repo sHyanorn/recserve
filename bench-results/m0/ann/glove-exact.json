@@ -1,0 +1,41 @@
+{
+  "env": {
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "date": "2026-11-08T23:52:13Z",
+    "go": "go1.27.3",
+    "gomaxprocs": "4",
+    "index": "exact",
+    "kernel": "6.18.44-fc-v310",
+    "numcpu": "4",
+    "set": "glove"
+  },
+  "points": [
+    {
+      "index": "exact",
+      "k": 100,
+      "recall": 1,
+      "latency": {
+        "n": 10000,
+        "p50_us": 112662.093,
+        "p90_us": 137714.742,
+        "p99_us": 160551.814,
+        "p999_us": 181257.022,
+        "max_us": 219463.6
+      },
+      "qps": 8.456409940238883,
+      "gc": {
+        "num_gc": 9,
+        "max_pause_upper_ms": 0.26214400000000004,
+        "gc_cpu_fraction": 0.000002428054614357589
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 844754.58,
+        "after_ns": 849250.005,
+        "attempt": 1,
+        "noisy": false
+      },
+      "recall_at_10": 1
+    }
+  ]
+}

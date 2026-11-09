@@ -1,0 +1,364 @@
+{
+  "build_seconds": 346.761099054,
+  "env": {
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "date": "2026-11-08T23:42:47Z",
+    "go": "go1.27.3",
+    "gomaxprocs": "4",
+    "index": "hnsw",
+    "kernel": "6.18.44-fc-v310",
+    "numcpu": "4",
+    "set": "glove"
+  },
+  "heap_objects_mib": 1772.0433349609375,
+  "points": [
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 10,
+      "k": 10,
+      "recall": 0.024459999999999645,
+      "latency": {
+        "n": 10000,
+        "p50_us": 124.076,
+        "p90_us": 160.648,
+        "p99_us": 211.79,
+        "p999_us": 300.759,
+        "max_us": 1369.294
+      },
+      "qps": 7761.8035255884415,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0,
+        "gc_cpu_fraction": 0
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 789612.61,
+        "after_ns": 791483.505,
+        "attempt": 3,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 20,
+      "k": 10,
+      "recall": 0.024459999999999645,
+      "latency": {
+        "n": 10000,
+        "p50_us": 133.054,
+        "p90_us": 219.273,
+        "p99_us": 308.86,
+        "p999_us": 394.135,
+        "max_us": 19771.548
+      },
+      "qps": 6618.8509840163015,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0.057344,
+        "gc_cpu_fraction": 0
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 780041.975,
+        "after_ns": 782640.275,
+        "attempt": 3,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 40,
+      "k": 10,
+      "recall": 0.024459999999999645,
+      "latency": {
+        "n": 10000,
+        "p50_us": 119.335,
+        "p90_us": 145.069,
+        "p99_us": 175.278,
+        "p999_us": 211.942,
+        "max_us": 290.634
+      },
+      "qps": 8276.016422950162,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0,
+        "gc_cpu_fraction": 0
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 781027.6,
+        "after_ns": 778732.105,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 80,
+      "k": 10,
+      "recall": 0.024459999999999645,
+      "latency": {
+        "n": 10000,
+        "p50_us": 125.459,
+        "p90_us": 162.016,
+        "p99_us": 214.033,
+        "p999_us": 315.527,
+        "max_us": 2567.187
+      },
+      "qps": 7668.979811965879,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0,
+        "gc_cpu_fraction": 0
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 899297.59,
+        "after_ns": 794203.95,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 120,
+      "k": 10,
+      "recall": 0.024459999999999645,
+      "latency": {
+        "n": 10000,
+        "p50_us": 167.546,
+        "p90_us": 209.851,
+        "p99_us": 273.63,
+        "p999_us": 526.088,
+        "max_us": 1063.374
+      },
+      "qps": 5866.662424835066,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0,
+        "gc_cpu_fraction": 0
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 826234.9,
+        "after_ns": 874701.45,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 200,
+      "k": 10,
+      "recall": 0.024459999999999645,
+      "latency": {
+        "n": 10000,
+        "p50_us": 166.38,
+        "p90_us": 575.789,
+        "p99_us": 714.178,
+        "p999_us": 1200.292,
+        "max_us": 1947.85
+      },
+      "qps": 4448.753455633754,
+      "gc": {
+        "num_gc": 1,
+        "max_pause_upper_ms": 0.08192,
+        "gc_cpu_fraction": 0.018791981198081
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 800639.77,
+        "after_ns": 893608.71,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 400,
+      "k": 10,
+      "recall": 0.024459999999999645,
+      "latency": {
+        "n": 10000,
+        "p50_us": 156.347,
+        "p90_us": 214.218,
+        "p99_us": 602.456,
+        "p999_us": 928.59,
+        "max_us": 5431.648
+      },
+      "qps": 5610.991109685897,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0.098304,
+        "gc_cpu_fraction": 0
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 791361.06,
+        "after_ns": 810852.53,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 800,
+      "k": 10,
+      "recall": 0.024459999999999645,
+      "latency": {
+        "n": 10000,
+        "p50_us": 176.858,
+        "p90_us": 528.832,
+        "p99_us": 1018.529,
+        "p999_us": 5911.472,
+        "max_us": 7401.155
+      },
+      "qps": 3594.339523125777,
+      "gc": {
+        "num_gc": 1,
+        "max_pause_upper_ms": 0.098304,
+        "gc_cpu_fraction": 0.08353588562411916
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 827882.85,
+        "after_ns": 829533.22,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 120,
+      "k": 100,
+      "recall": 0.0319109999999993,
+      "latency": {
+        "n": 10000,
+        "p50_us": 246.325,
+        "p90_us": 303.855,
+        "p99_us": 394.565,
+        "p999_us": 645.454,
+        "max_us": 1828.707
+      },
+      "qps": 3930.9720320565907,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0,
+        "gc_cpu_fraction": 0
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 820923.92,
+        "after_ns": 782241.655,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 200,
+      "k": 100,
+      "recall": 0.0319109999999993,
+      "latency": {
+        "n": 10000,
+        "p50_us": 238.618,
+        "p90_us": 311.097,
+        "p99_us": 416.675,
+        "p999_us": 1280.67,
+        "max_us": 3692.379
+      },
+      "qps": 3959.3825678166004,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0,
+        "gc_cpu_fraction": 0
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 790602.495,
+        "after_ns": 793770.575,
+        "attempt": 2,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 400,
+      "k": 100,
+      "recall": 0.0319109999999993,
+      "latency": {
+        "n": 10000,
+        "p50_us": 244.615,
+        "p90_us": 359.03,
+        "p99_us": 808.722,
+        "p999_us": 1990.522,
+        "max_us": 4810.096
+      },
+      "qps": 3482.5105450837204,
+      "gc": {
+        "num_gc": 1,
+        "max_pause_upper_ms": 0.057344,
+        "gc_cpu_fraction": 0.02845470051987736
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 816113.465,
+        "after_ns": 809624.25,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "coder/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 800,
+      "k": 100,
+      "recall": 0.0319109999999993,
+      "latency": {
+        "n": 10000,
+        "p50_us": 315.808,
+        "p90_us": 619.005,
+        "p99_us": 887.2,
+        "p999_us": 1415.467,
+        "max_us": 2746.102
+      },
+      "qps": 2728.5818800223183,
+      "gc": {
+        "num_gc": 1,
+        "max_pause_upper_ms": 0.098304,
+        "gc_cpu_fraction": 0.05576918159076152
+      },
+      "noise": {
+        "reference_ns": 820984,
+        "before_ns": 791180.08,
+        "after_ns": 837938.31,
+        "attempt": 1,
+        "noisy": false
+      }
+    }
+  ]
+}
