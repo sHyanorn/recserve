@@ -57,6 +57,14 @@ def main(d):
     if m["user_encoder"] == "onnx":
         with open(f"{d}/user_encoder.onnx", "rb") as f:
             sess = session(f.read())
+        # The golden cases use few IDs; the highest one shows that the encoder
+        # knows every item. A call takes at most max_seq_len items.
+        probe, L = [1, m["item_count"]], m["max_seq_len"]
+        for i in range(0, len(probe), L):
+            try:
+                encode(sess, probe[i : i + L], L)
+            except Exception as e:  # ONNX Runtime raises its own error types
+                sys.exit(f"user_encoder.onnx: items {probe[i : i + L]}: {e}")
     if "ranker.onnx" in m["sha256"]:
         if m.get("ranker_features") != RANKER_FEATURES:
             sys.exit(f"ranker_features {m.get('ranker_features')}, the service computes {RANKER_FEATURES}")
