@@ -46,6 +46,6 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] Report with charts
 
 ## M6 Integration and evaluation
-- [ ] Load seqrec-lab's exported bundle
+- [ ] Load seqrec-lab's exported bundle; reject one whose `train_cutoff_ts` is not before the first test event
 - [ ] Quality evaluation with each degradation forced
 - [ ] README

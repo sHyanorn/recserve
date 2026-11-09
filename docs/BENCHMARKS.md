@@ -8,12 +8,12 @@ Every result directory under `bench-results/` holds an `env.txt` with: CPU model
 
 ## Noise baseline
 
-`experiments/m0/noise` (later `cmd/noisebase`) runs a fixed single-core workload: a dot product of a 64-dimensional float32 query against 16,384 float32 vectors, repeated for 200 passes, timed 30 times; the result is the median time of one pass.
+`experiments/m0/cmd/noise` (later `cmd/noisebase`) runs a fixed single-core workload: a dot product of a 64-dimensional float32 query against 16,384 float32 vectors, repeated for 200 passes, timed 30 times; the result is the median time of one pass.
 
 - **Reference.** At the start of a benchmark session, on an idle machine, the baseline runs 10 times; the median is the session reference.
 - **Per run.** The baseline runs right before and right after each benchmark run, pinned to the CPU the measured process uses (or the first one, if it uses several).
 - **Flag.** A run is flagged when either baseline is more than 10% slower than the reference. A flagged run is rerun, at most twice; if all three attempts are flagged, the last one is reported and marked "noisy".
-- The baselines of every run are kept in its result file.
+- The baselines of the reported attempt and its attempt number are kept in its result file.
 
 ## M0 risk checks
 
@@ -46,7 +46,7 @@ The checks run on the benchmark VM. Each has a pass criterion set here; if it fa
 
 **Data** (downloaded by script, never committed):
 
-- glove-100-angular from ann-benchmarks: base vectors, 10,000 queries, ground truth. Vectors are L2-normalized, and inner product is the similarity.
+- glove-100-angular from ann-benchmarks: base vectors and 10,000 queries. Vectors are L2-normalized, and inner product is the similarity. Ground truth is recomputed by brute force (faiss `IndexFlatIP`); its overlap with the file's neighbors is printed by `prep.py`.
 - Synthetic: 1,000,000 base and 10,000 query vectors of 64 dimensions from a mixture of 1,000 Gaussians (seed 1), L2-normalized; exact ground truth computed by brute force.
 
 **Indexes:**
@@ -58,9 +58,9 @@ The checks run on the benchmark VM. Each has a pass criterion set here; if it fa
 **Measurements**, one query at a time on one thread, as ann-benchmarks does:
 
 - ef ∈ {10, 20, 40, 80, 120, 200, 400, 800} (only ef ≥ k for each k)
-- recall@10 and recall@100, with the ann-benchmarks definition: a returned item counts if its distance is at most the distance of the true k-th neighbor, so ties do not lower recall
+- recall@10 and recall@100, defined as in ann-benchmarks: a returned item counts if it is at least as similar as the true k-th neighbor, so ties do not lower recall. The tolerance is 1e-5 on inner product (ann-benchmarks uses 1e-3 on distance)
 - per-query latency p50 and p99 over the 10,000 queries, after one warm pass over 1,000 queries
-- build time, heap in use after build (runtime/metrics), and for the Go indexes the GC pauses (`/sched/pauses/total/gc:seconds`) and GC CPU fraction over the query phase
+- build time, heap in use after build (runtime/metrics), and for the Go indexes the GC pauses (`/sched/pauses/total/gc:seconds`) and GC cycles over the query phase (D017)
 - the noise baseline brackets each index and dataset
 
 **Pass** if on both datasets coder/hnsw has an ef with recall@100 ≥ 0.95 and single-thread p99 ≤ 5 ms, and its longest GC pause during the query phase is ≤ 5 ms.
@@ -74,7 +74,7 @@ The checks run on the benchmark VM. Each has a pass criterion set here; if it fa
 
 ## Recommendation quality
 
-- **Split.** The Amazon 2023 Video_Games 5-core timestamp split (D013), the split seqrec-lab uses for this dataset where they coincide.
+- **Split.** The Amazon 2023 Video_Games 5-core timestamp split (D013). seqrec-lab splits the same data its own way, so an exported bundle is evaluated only if its `train_cutoff_ts` is before the first test event; the loader checks this.
 - **Requests.** One request per test event: the user, k = 20, and `ts` = the event's timestamp, with the user's history before `ts` loaded.
 - **Metrics.** Recall@10, Recall@20 and NDCG@10 of the held-out item over the full catalog, no negative sampling. Items in the user's history are excluded from every candidate list, the reference's included.
 - **Conditions.**

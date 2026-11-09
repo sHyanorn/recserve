@@ -17,7 +17,7 @@ Format: ID, date, decision, rationale, alternatives. Append new decisions at the
 ## D003 Two process kinds: gateway and annshard
 - Date: 2026-11-08
 - Decision: The gateway is stateless across requests and runs the whole request path; it keeps the feature store, co-occurrence table, popularity list and models in memory. annshard holds one shard of item vectors and answers nearest-neighbor queries. Ranking runs in the gateway process
-- Rationale: Only vector search grows with the catalog and benefits from sharding. Features and co-occurrence for these datasets fit in memory, and a separate feature or ranking service would add a network hop to every request without showing anything new. Vespa splits stateless containers from stateful content nodes the same way; x-algorithm runs its whole pipeline in one service
+- Rationale: Only vector search grows with the catalog and benefits from sharding. Features and co-occurrence for these datasets fit in memory, and a separate feature or ranking service would add a network hop to every request without showing anything new. Vespa splits stateless containers from stateful content nodes the same way
 - Alternatives: a feature service and a ranking service (more hops, more processes to operate); one process with everything (no distribution to show)
 
 ## D004 A static cluster layout
@@ -41,13 +41,13 @@ Format: ID, date, decision, rationale, alternatives. Append new decisions at the
 ## D007 ANN library chosen by the M0 check
 - Date: 2026-11-08
 - Decision: Use `github.com/coder/hnsw` (CC0) if it meets the M0 criterion; otherwise write HNSW by hand with adjacency in flat int32 arrays
-- Rationale: coder/hnsw is the only maintained pure-Go HNSW found. faiss and hnswlib would need cgo bindings that are stale (go-faiss, last release 2021) or do not exist (hnswlib); USearch's Go binding has no release tag and needs a separately installed C library
+- Rationale: coder/hnsw is the only maintained pure-Go HNSW found. faiss and hnswlib need cgo bindings, which are stale (go-faiss, last release 2021) or unreleased (evan176/hnswgo, no tags); USearch's Go binding has no release tag and needs a separately installed C library
 - Alternatives: cgo to faiss (a second native library to ship)
 
 ## D008 ANN performance on 1M-scale vectors; end to end on real data
 - Date: 2026-11-08
 - Decision: ANN and shard benchmarks use glove-100-angular from ann-benchmarks (1,183,514 vectors, 100 dimensions, ground truth included) and seeded synthetic vectors (1M × 64, Gaussian mixture). End-to-end benchmarks and quality evaluation use the real catalogs. glove-100-angular is built by ann-benchmarks (MIT) from Stanford's `glove.twitter.27B.100d` vectors, which the GloVe README releases under the ODC Public Domain Dedication and License (PDDL)
-- Rationale: The real catalogs have at most 137.2k items, too few for ANN to matter (SPEC §3). glove-100 has published results to compare with; synthetic vectors scale freely. Neither is committed
+- Rationale: The real catalogs have at most 25.6k items (Video_Games 5-core), too few for ANN to matter (SPEC §3). glove-100 has published results to compare with; synthetic vectors scale freely. Neither is committed
 - Alternatives: synthetic vectors only (no outside reference point); Deep1B subsets (license not checked)
 
 ## D009 An open-loop load generator of our own, on separate CPUs
@@ -65,7 +65,7 @@ Format: ID, date, decision, rationale, alternatives. Append new decisions at the
 ## D011 Data by script only; no public demo by default
 - Date: 2026-11-08
 - Decision: Scripts download the data; nothing derived from rows is committed. There is no public online demo. If one is built later, it uses KuaiRec (Zenodo: CC-BY-4.0; the GitHub repository says CC BY-SA 4.0; the stricter terms apply) with attribution
-- Rationale: MovieLens allows research use only and forbids redistribution without permission. Steam (UCSD) and Amazon Reviews 2023 state no data license
+- Rationale: GroupLens does not typically permit public redistribution of MovieLens, and its READMEs forbid commercial use without permission. Steam (UCSD) and Amazon Reviews 2023 state no data license
 - Alternatives: a MovieLens demo (redistribution of derived titles and vectors is close to what its terms forbid)
 
 ## D012 Images on distroless/cc, pinned by digest
@@ -77,7 +77,7 @@ Format: ID, date, decision, rationale, alternatives. Append new decisions at the
 ## D013 Development data: Amazon Reviews 2023 Video_Games
 - Date: 2026-11-08
 - Decision: M1 onward develops and benchmarks on Amazon Reviews 2023 Video_Games, the 5-core timestamp split published by the dataset authors (`benchmark/5core/timestamp/`), with item metadata from `meta_Video_Games`. MovieLens and Steam are optional and run only on a local machine
-- Rationale: From the cloud sessions files.grouplens.org could not be reached, and cseweb.ucsd.edu (Steam) sends an incomplete certificate chain that standard clients reject; mcauleylab.ucsd.edu serves the Amazon files. Video_Games is one of seqrec-lab's datasets, and a published split lets both projects use the same boundaries
+- Rationale: From the cloud sessions files.grouplens.org could not be reached, and cseweb.ucsd.edu (Steam) sends an incomplete certificate chain that standard clients reject; mcauleylab.ucsd.edu serves the Amazon files. Video_Games is one of seqrec-lab's datasets. seqrec-lab builds its own split, so the bundle's `train_cutoff_ts` must precede recserve's test period, and the loader enforces it
 - Alternatives: KuaiRec (licensed for a demo, but not among seqrec-lab's datasets); Steam (not reachable from the cloud sessions)
 
 ## D014 Every benchmark run is bracketed by a noise baseline
@@ -96,4 +96,10 @@ Format: ID, date, decision, rationale, alternatives. Append new decisions at the
 - Date: 2026-11-09
 - Decision: R2 failed, so D007's fallback applies: M2 implements HNSW (Malkov and Yashunin) in the service, with vectors in one float32 array, neighbor lists in flat int32 arrays per layer, beam search bounded by ef, and the neighbor-selection heuristic. It is measured in M2 with the R2 protocol unchanged, against the same exact and faiss baselines
 - Rationale: coder/hnsw v0.6.1 reached recall@100 of at most 0.112 at every ef on both sets and both settings, while faiss reached 1.000 on the synthetic set with the same settings. Its layer search keeps only k results and stops at the first expansion without improvement, so ef has no effect on recall. Patching it would mean replacing its search and its pointer-map graph, which is most of the library
-- Alternatives: patch coder/hnsw (most of it replaced anyway); cgo to faiss (a second native library, rejected in D007); exact search only (enough for the 137.2k-item catalogs, but leaves the 1M-scale tier without an index)
+- Alternatives: patch coder/hnsw (most of it replaced anyway); cgo to faiss (a second native library, rejected in D007); exact search only (enough for the 25.6k-item catalog, but leaves the 1M-scale tier without an index)
+
+## D017 Measurement corrections after the first M0 results
+- Date: 2026-11-09
+- Decision: (1) The GC CPU fraction is no longer measured; GC is judged by stop-the-world pauses and cycle counts. (2) Medians are true medians (mean of the two middle values) for the noise baseline and its reference. (3) The baselines around faiss runs are checked against the reference like any other run. (4) A result file keeps the baselines of the reported attempt only. (5) coder/hnsw is built with `Ml = 1/M`, and its R2 runs are repeated under a new session reference
+- Rationale: (1) The runtime updates `/cpu/classes/*` only when a GC cycle ends, so over a query phase with zero or one cycle the fraction is 0 or covers the wrong interval. (2) The upper median was used by mistake; recomputing all committed baselines with the true median changes no flag. (3) Those baselines were recorded but not compared. (4) That is what the code does; the protocol text said otherwise. (5) coder/hnsw's `Ml` is the probability of promoting a node one layer up, 1/M in the paper's terms; 1/ln M made about 15 layers instead of 6 and inflated build time and heap. None of these changes a pass criterion
+- Alternatives: keep the first coder/hnsw results (build time and heap measured on a wrongly shaped graph)

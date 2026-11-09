@@ -35,7 +35,7 @@ An online recommendation and search serving system written in Go. A request goes
 
 ## 3. Scale, stated plainly
 
-The largest catalog among the project's datasets is Amazon Reviews 2023 Video_Games with 137.2k items. Exact search over that many 64-dimensional vectors takes milliseconds on one core, so at this size neither ANN nor sharding is needed; the service shards it anyway to exercise the mechanism. ANN and shard performance is measured separately on 1M-scale vectors (glove-100-angular and synthetic vectors, D008), and the report says which figures come from which.
+The catalog served is Amazon Reviews 2023 Video_Games, 5-core: 25.6k items (137.2k before filtering). Exact search over that many 64-dimensional vectors takes about 2 ms on one core (scaled from the 1M-vector measurement in M0), so at this size neither ANN nor sharding is needed; the service shards it anyway to exercise the mechanism. ANN and shard performance is measured separately on 1M-scale vectors (glove-100-angular and synthetic vectors, D008), and the report says which figures come from which.
 
 ## 4. Architecture
 
