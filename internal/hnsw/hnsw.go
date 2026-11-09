@@ -206,6 +206,8 @@ type searcher struct {
 	sel     []item
 	ov      []item // overflow candidates of a neighbor's list
 	ovSel   []item
+	ids     []int32
+	ids2    []int32
 }
 
 func (x *Index) newSearcher() *searcher { return &searcher{visited: make([]uint16, x.n)} }
@@ -331,10 +333,17 @@ func (x *Index) insert(s *searcher, i int32) {
 	for layer := min(level, top); layer >= 0; layer-- {
 		x.searchLayer(s, q, s.eps, x.efc, layer, nil)
 		s.w = sortedNear(s.w, s.res)
+		// In a parallel build a node inserted at the same time may already
+		// link to i, so i can find itself (faiss skips it the same way).
+		s.w = slices.DeleteFunc(s.w, func(it item) bool { return it.id == i })
 		s.sel = x.selectNeighbors(s.w, x.m, s.sel)
-		x.setLinks(i, layer, s.sel)
+		s.ids = s.ids[:0]
 		for _, e := range s.sel {
-			x.addLink(s, e.id, i, layer)
+			s.ids = append(s.ids, e.id)
+		}
+		x.connect(s, i, layer, s.ids)
+		for _, e := range s.sel {
+			x.connect(s, e.id, layer, []int32{i})
 		}
 		s.eps = append(s.eps[:0], s.w...) // ep ← W
 	}
@@ -346,39 +355,39 @@ func (x *Index) insert(s *searcher, i int32) {
 	}
 }
 
-func (x *Index) setLinks(i int32, layer int, nbrs []item) {
-	if x.locks != nil {
-		x.locks[i].Lock()
-		defer x.locks[i].Unlock()
-	}
-	l := x.list(i, layer)
-	l[0] = int32(len(nbrs))
-	for k, it := range nbrs {
-		l[1+k] = it.id
-	}
-}
-
-// addLink adds a link from e to i on layer; a full list selects again from
-// its links and i with Algorithm 4.
-func (x *Index) addLink(s *searcher, e, i int32, layer int) {
+// connect adds links from e to the nodes in add on layer, skipping those
+// already linked. A list that would overflow selects again from its links
+// and the new ones with Algorithm 4. In a serial build a new node's list is
+// empty when it is connected; in a parallel build other nodes may have
+// linked to it already, and two nodes may select each other.
+func (x *Index) connect(s *searcher, e int32, layer int, add []int32) {
 	if x.locks != nil {
 		x.locks[e].Lock()
 		defer x.locks[e].Unlock()
 	}
 	l := x.list(e, layer)
-	n := int(l[0])
-	if n < x.capacity(layer) {
-		l[1+n] = i
-		l[0]++
+	limit := x.capacity(layer)
+	s.ids2 = s.ids2[:0]
+	for _, j := range add {
+		if j != e && !slices.Contains(l[1:1+l[0]], j) {
+			if int(l[0]) < limit {
+				l[1+l[0]] = j
+				l[0]++
+			} else {
+				s.ids2 = append(s.ids2, j)
+			}
+		}
+	}
+	if len(s.ids2) == 0 {
 		return
 	}
 	ev := x.vec(e)
-	s.ov = append(s.ov[:0], item{-vec.Dot32(ev, x.vec(i)), i})
-	for _, j := range l[1 : 1+n] {
+	s.ov = s.ov[:0]
+	for _, j := range append(s.ids2, l[1:1+l[0]]...) {
 		s.ov = append(s.ov, item{-vec.Dot32(ev, x.vec(j)), j})
 	}
 	slices.SortFunc(s.ov, cmpItems)
-	s.ovSel = x.selectNeighbors(s.ov, x.capacity(layer), s.ovSel)
+	s.ovSel = x.selectNeighbors(s.ov, limit, s.ovSel)
 	l[0] = int32(len(s.ovSel))
 	for k, it := range s.ovSel {
 		l[1+k] = it.id

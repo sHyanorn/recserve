@@ -314,6 +314,14 @@ func TestParallelBuild(t *testing.T) {
 	if n := reachable(par); float64(n) < minReachable*float64(par.n) {
 		t.Fatalf("%d of %d nodes reachable", n, par.n)
 	}
+	// Small builds with many workers make concurrent inserts meet often.
+	for seed := range uint64(20) {
+		d := newDataset(seed, 1500, 1, 8, 30, 0.1)
+		ix := mustBuild(t, d, Config{M: 4, EfConstruction: 24, Seed: seed, Workers: 8}, mutation{})
+		if err := ix.Check(); err != nil {
+			t.Fatalf("seed %d: %v", seed, err)
+		}
+	}
 	for _, ef := range []int{10, 40} {
 		rs, rp := loose.recall(serial, looseK, ef, false), loose.recall(par, looseK, ef, false)
 		t.Logf("ef=%d recall serial %.4f parallel %.4f", ef, rs, rp)
