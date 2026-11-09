@@ -36,12 +36,14 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] History store and result cache on Valkey; singleflight; property test 11. A hit still reads the history to key it (D030); if that costs too much, key by a per-user history version instead
 - [ ] History store keeps raw item IDs, so a swap may change the item IDs; lift the equal-IDs check of D031
 - [ ] Circuit breaker and `history_unavailable` path; property test 10
+- [ ] Count the result cache lookup of a request that fails after it; today only answered requests are counted
 - [ ] Integration tests against real Kafka and Valkey containers
 
 ## M4 Sharded vector tier
 - [ ] annshard service over gRPC
 - [ ] Scatter-gather over gRPC with per-shard deadlines, partial results and coverage, merging as the in-process shards do; property test 6 rerun over gRPC (D028)
 - [ ] Replica failover and hedged requests
+- [ ] `hnsw.Read` checks only the arrays' shapes; check link targets, counts and levels before a shard serves an index from a file
 - [ ] Fault tests: slow shard, dead replica, failed swap
 
 ## M5 Operations and deployment
@@ -53,12 +55,15 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] Graceful shutdown: readiness flip, preStop wait, drain, offset commit
 - [ ] Zero-error check under load through a rollout restart and a bundle swap
 - [ ] Logistic-regression ranker over the six features of SPEC §8, trained in `tools/bundle` and exported as `ranker.onnx` (D027), before M6. Its bundle carries a feature consistency golden: Python and Go compute the features of the same fixed requests, and the largest difference must be at most 1e-6
+- [ ] With that ranker, the load check changes more than row 0: several rows, and rows past the first, must leave the other rows' scores unchanged
+- [ ] An ONNX Runtime error that coincides with the end of the stage's context is reported as a timeout, since the call wraps the context's error; classify it by the error the run returned
 
 ## M6 Benchmarks and fault injection
 - [ ] Fault-injection pass criteria committed to docs/BENCHMARKS.md before any fault run
 - [ ] Load sweeps per docs/BENCHMARKS.md
 - [ ] Fault runs with toxiproxy and container control (D021)
 - [ ] ANN and sharded recall and latency on glove-100 and synthetic vectors
+- [ ] `annbench` in shards mode labels results with the `-m` and `-efc` flags even when it reuses graph files built with other values; record the graphs' own parameters
 - [ ] Latency during bundle swaps under load, and the cause of its largest values, GC or CPU contention with prepare (D031)
 - [ ] Profiles and at least one optimization backed by before/after data
   - Candidate: SIMD inner product in the HNSW search; on glove the p99 is 1.3 to 2.4 times faiss's at equal recall on the same machine (BENCHMARKS, M2), and `vec.Dot32` is scalar Go
@@ -66,5 +71,6 @@ Check off each item when it is done. All tests must pass at the end of every mil
 
 ## M7 Integration and evaluation
 - [ ] Load seqrec-lab's exported bundle; reject one whose `train_cutoff_ts` is not before the first test event
+- [ ] Golden top-10 lists may hold items whose vector is zero, which the shards leave out (D028); decide with seqrec-lab whether its export excludes them, so a golden case matches what the service retrieves
 - [ ] Quality evaluation with each degradation forced
 - [ ] README
