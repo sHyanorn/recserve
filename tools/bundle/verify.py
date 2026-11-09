@@ -28,9 +28,18 @@ def main(d):
     vecs = np.load(f"{d}/items.npy")
     if len(ids) != m["item_count"] or vecs.shape != (m["item_count"] + 1, m["dim"]) or vecs.dtype != np.float32:
         sys.exit(f"shape mismatch: {len(ids)} ids, vectors {vecs.shape} {vecs.dtype}")
+    if np.any(vecs[0] != 0):
+        sys.exit("padding row 0 is not zero")
+    for name in ("cooc_ids.npy", "popular.npy"):
+        ids_ = np.load(f"{d}/{name}")
+        low = 0 if name == "cooc_ids.npy" else 1
+        if ids_.dtype != np.int64 or ids_.min(initial=low) < low or ids_.max(initial=0) > m["item_count"]:
+            sys.exit(f"{name}: dtype or ID range")
     with open(f"{d}/golden.jsonl") as f:
         cases = [json.loads(line) for line in f]
     for n, c in enumerate(cases):
+        if not c["history"] or min(c["history"]) < 1 or max(c["history"]) > m["item_count"]:
+            sys.exit(f"golden {n}: history IDs out of range")
         uv = mean_vector(vecs, c["history"])
         diff = float(np.max(np.abs(uv - np.array(c["user_emb"], dtype=np.float32))))
         if diff > TOL:

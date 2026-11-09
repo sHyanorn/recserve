@@ -40,7 +40,7 @@ func randomPipeline(r *rand.Rand, n, users int) *Pipeline {
 	store := history.NewMemory()
 	var events []history.Event
 	for u := range users {
-		for e := range r.IntN(3 * n) {
+		for e := range r.IntN(300) {
 			item := int32(1 + r.IntN(n))
 			ts := int64(r.IntN(100))
 			events = append(events, history.Event{ID: uint64(u<<20 | e), User: fmt.Sprint("u", u), Item: item, TS: ts})
@@ -66,9 +66,9 @@ func checkProperty2(seed uint64, cases int, broken bool) error {
 			if err != nil {
 				return err
 			}
-			// Everything stored for the user before ts; the store keeps the latest history.Cap.
+			// Everything stored for the user before ts.
 			banned := map[string]bool{exclude[0]: true}
-			kept, _ := p.History.Before(ctx, user, ts, history.Cap)
+			kept, _ := p.History.Before(ctx, user, ts, 0)
 			for _, id := range kept {
 				banned[p.Bundle.IDs[id]] = true
 			}
@@ -119,5 +119,37 @@ func TestRejectsBadK(t *testing.T) {
 		if _, err := p.Recommend(context.Background(), Request{User: "u0", K: k, TS: 50}); err == nil {
 			t.Errorf("k=%d accepted", k)
 		}
+	}
+}
+
+// A history whose items all have zero vectors (no training data) gives no
+// user vector, so popularity decides instead of arbitrary zero scores.
+func TestZeroVectorHistoryFallsBackToPopularity(t *testing.T) {
+	m, _ := vec.NewMatrix(2, []float32{0, 0, 0, 0, 1, 0, 0, 1})
+	b := bundle.New(bundle.Manifest{ModelVersion: "t", ItemCount: 3, Dim: 2, MaxSeqLen: 5}, []string{"", "a", "b", "c"}, m, nil, []int32{3, 2})
+	store := history.NewMemory()
+	_ = store.Append(context.Background(), []history.Event{{ID: 1, User: "u", Item: 1, TS: 1}})
+	resp, err := (&Pipeline{Bundle: b, History: store}).Recommend(context.Background(), Request{User: "u", K: 2, TS: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Items) != 2 || resp.Items[0].ID != "c" || resp.Items[1].ID != "b" {
+		t.Fatalf("got %v, want c then b", resp.Items)
+	}
+}
+
+// The request path passes the request time to the store unchanged: an event
+// at exactly that time is not history yet, so its item may be recommended.
+func TestEventAtRequestTimeIsNotHistory(t *testing.T) {
+	m, _ := vec.NewMatrix(2, []float32{0, 0, 1, 0, 0, 1})
+	b := bundle.New(bundle.Manifest{ModelVersion: "t", ItemCount: 2, Dim: 2, MaxSeqLen: 5}, []string{"", "a", "b"}, m, nil, []int32{1, 2})
+	store := history.NewMemory()
+	_ = store.Append(context.Background(), []history.Event{{ID: 1, User: "u", Item: 1, TS: 5}})
+	resp, err := (&Pipeline{Bundle: b, History: store}).Recommend(context.Background(), Request{User: "u", K: 1, TS: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Items) != 1 || resp.Items[0].ID != "a" {
+		t.Fatalf("got %v, want a (popular, and its event is not before ts)", resp.Items)
 	}
 }

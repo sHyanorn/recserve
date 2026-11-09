@@ -23,4 +23,4 @@ data: ## Download the Amazon 2023 Video_Games split and metadata into DATA
 	scripts/data.sh $(DATA)
 
 bundle: ## Build the baseline bundle into DATA/bundle (needs uv)
-	cd tools/bundle && uv run python build.py $(abspath $(DATA)) $(abspath $(DATA))/bundle
+	cd tools/bundle && uv run --locked python build.py $(abspath $(DATA)) $(abspath $(DATA))/bundle

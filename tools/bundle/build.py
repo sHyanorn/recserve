@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 
 # One BLAS thread, as implicit recommends; set before numpy loads.
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
@@ -79,17 +80,21 @@ def main(data, out):
     item_ix = {item: n + 1 for n, item in enumerate(items)}  # 0 is padding
     n = len(items) + 1
 
+    # ALS sees only train users and items, so the valid and test splits
+    # cannot change the model; items without train events get zero vectors.
     users = sorted({u for u, _, _ in train})
     user_ix = {u: n for n, u in enumerate(users)}
+    train_items = sorted({item_ix[i] for _, i, _ in train})
+    col = {iid: n for n, iid in enumerate(train_items)}
     rows = np.array([user_ix[u] for u, _, _ in train])
-    cols = np.array([item_ix[i] for _, i, _ in train])
-    ui = sp.csr_matrix((np.ones(len(train), dtype=np.float32), (rows, cols)), shape=(len(users), n))
+    cols = np.array([col[item_ix[i]] for _, i, _ in train])
+    ui = sp.csr_matrix((np.ones(len(train), dtype=np.float32), (rows, cols)), shape=(len(users), len(train_items)))
     ui.sum_duplicates()
     ui.data[:] = 1.0
     model = implicit.cpu.als.AlternatingLeastSquares(**ALS, random_state=SEED, num_threads=1)
     model.fit(ui, show_progress=False)
-    vecs = np.ascontiguousarray(model.item_factors, dtype=np.float32)
-    vecs[0] = 0
+    vecs = np.zeros((n, DIM), dtype=np.float32)
+    vecs[train_items] = model.item_factors
 
     seqs = sequences(train, item_ix)
     pair = defaultdict(Counter)
@@ -113,14 +118,16 @@ def main(data, out):
     rng = np.random.default_rng(SEED)
     test_users = sorted({u for u, _, _ in test if u in seqs})
     golden = []
-    for u in rng.choice(test_users, size=GOLDEN_CASES, replace=False):
-        hist = seqs[str(u)][-MAX_SEQ_LEN:]
+    # Half the cases from users with the longest histories, so the window of the last MAX_SEQ_LEN items is exercised.
+    longest = sorted(test_users, key=lambda u: (-len(seqs[u]), u))[: GOLDEN_CASES // 2]
+    rest = sorted(set(test_users) - set(longest))
+    for u in longest + list(rng.choice(rest, size=GOLDEN_CASES - len(longest), replace=False)):
+        hist = seqs[str(u)]
         uv = mean_vector(vecs, hist)
         golden.append({"history": hist, "user_emb": uv.tolist(), "top10": top_k(vecs, uv, set(hist), 10)})
 
-    version = hashlib.sha256(vecs.tobytes()).hexdigest()[:12]
-    d = os.path.join(out, version)
-    os.makedirs(d, exist_ok=True)
+    os.makedirs(out, exist_ok=True)
+    d = tempfile.mkdtemp(dir=out)
     with open(f"{d}/items.ids", "w") as f:
         f.writelines(i + "\n" for i in items)
     np.save(f"{d}/items.npy", vecs)
@@ -130,6 +137,9 @@ def main(data, out):
     with open(f"{d}/golden.jsonl", "w") as f:
         f.writelines(json.dumps(g) + "\n" for g in golden)
     files = sorted(os.listdir(d))
+    sums = {name: sha256(f"{d}/{name}") for name in files}
+    # The version names every file, so a change of any setting gives a new version.
+    version = hashlib.sha256("".join(f"{k}{v}" for k, v in sums.items()).encode()).hexdigest()[:12]
     manifest = {
         "format_version": 1,
         "model_version": version,
@@ -143,10 +153,14 @@ def main(data, out):
         "pad_id": 0,
         "user_encoder": "mean",
         "build": {"seed": SEED, "als": ALS, "implicit": implicit.__version__, "cooc_window": COOC_WINDOW, "popular_days": POPULAR_DAYS},
-        "sha256": {name: sha256(f"{d}/{name}") for name in files if name != "manifest.json"},
+        "sha256": sums,
     }
     with open(f"{d}/manifest.json", "w") as f:
         json.dump(manifest, f, indent=2)
+    final = os.path.join(out, version)
+    if os.path.exists(final):
+        sys.exit(f"{final} exists")
+    os.rename(d, final)
     print(version)
 
 

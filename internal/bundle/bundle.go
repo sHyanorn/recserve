@@ -174,6 +174,9 @@ func load(dir string, opt Options) (*Bundle, error) {
 		if b.Popular, err = idArray(data, m.ItemCount, nil); err != nil {
 			return nil, fmt.Errorf("popular.npy: %w", err)
 		}
+		if slices.Contains(b.Popular, 0) {
+			return nil, errors.New("popular.npy: padding ID 0")
+		}
 	}
 
 	golden, err := need("golden.jsonl")
@@ -218,8 +221,13 @@ func (b *Bundle) checkGolden(data []byte) error {
 	n := 0
 	for sc.Scan() {
 		var c goldenCase
-		if err := json.Unmarshal(sc.Bytes(), &c); err != nil {
+		d := json.NewDecoder(bytes.NewReader(sc.Bytes()))
+		d.DisallowUnknownFields()
+		if err := d.Decode(&c); err != nil {
 			return fmt.Errorf("golden %d: %w", n, err)
+		}
+		if len(c.History) == 0 || len(c.UserEmb) != b.Dim || len(c.Top10) != 10 {
+			return fmt.Errorf("golden %d: needs a history, %d user_emb values and 10 top10 IDs", n, b.Dim)
 		}
 		for _, id := range c.History {
 			if id <= 0 || int(id) > b.ItemCount {
@@ -268,12 +276,19 @@ func New(m Manifest, ids []string, vectors vec.Matrix, cooc, popular []int32) *B
 	return b
 }
 
-// UserVector is the mean of the vectors of the last MaxSeqLen history items; nil for an empty history.
+// UserVector is the mean of the vectors of the last MaxSeqLen history items.
+// It is nil when there is no such item or the mean is zero (items without
+// training data have zero vectors), so the caller falls back to sources that
+// need no user vector.
 func (b *Bundle) UserVector(history []int32) []float32 {
 	if len(history) > b.MaxSeqLen {
 		history = history[len(history)-b.MaxSeqLen:]
 	}
-	return b.Vectors.Mean(history)
+	uv := b.Vectors.Mean(history)
+	if !slices.ContainsFunc(uv, func(v float32) bool { return v != 0 }) {
+		return nil
+	}
+	return uv
 }
 
 // Lookup returns the internal ID of a raw item ID.
