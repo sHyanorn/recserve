@@ -95,8 +95,8 @@ Format: ID, date, decision, rationale, alternatives. Append new decisions at the
 ## D016 HNSW written by hand
 - Date: 2026-11-09
 - Decision: R2 failed, so D007's fallback applies: M2 implements HNSW (Malkov and Yashunin) in the service, with vectors in one float32 array, neighbor lists in flat int32 arrays per layer, beam search bounded by ef, and the neighbor-selection heuristic. It is measured in M2 with the R2 protocol unchanged, against the same exact and faiss baselines
-- Rationale: coder/hnsw v0.6.1 reached recall@100 of at most 0.112 at every ef on both sets and both settings, while faiss reached 1.000 on the synthetic set with the same settings. Its layer search keeps only k results and stops at the first expansion without improvement, so ef has no effect on recall. Patching it would mean replacing its search and its pointer-map graph, which is most of the library
-- Alternatives: patch coder/hnsw (most of it replaced anyway); cgo to faiss (a second native library, rejected in D007); exact search only (enough for the 25.6k-item catalog, but leaves the 1M-scale tier without an index)
+- Rationale: coder/hnsw v0.6.1 reached recall@100 of at most 0.064 on both sets and both settings, the same at every ef, while faiss reached 1.000 on the synthetic set with the same settings. Its layer search keeps only k results, stops at the first expansion without improvement, and its heap evicts an arbitrary result. Upstream's untagged fix of the search (36cab60) levels off at recall@100 0.824 on the synthetic set with p99 21 ms at ef = 800, so the graph it builds is the limit too: neighbors are pruned by distance alone, without the selection heuristic
+- Alternatives: upstream coder/hnsw at 36cab60 (untagged, fails the recall target); patch it further (search and graph construction both replaced); cgo to faiss (a second native library, rejected in D007); exact search only (enough for the 25.6k-item catalog, but leaves the 1M-scale tier without an index)
 
 ## D017 Measurement corrections after the first M0 results
 - Date: 2026-11-09

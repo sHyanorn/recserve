@@ -121,7 +121,7 @@ The share of degraded responses is reported per run, and runs above 1% are marke
 
 ### M0 (2026-11-08 and 09)
 
-One cloud VM: Intel Xeon @ 2.10GHz, 4 vCPU, 15 GB, kernel 6.18.44, Go 1.27.3. Session noise reference 820,984 ns per pass (`bench-results/m0/noise-reference.json`); the flag threshold is 903,082 ns. Raw results are in `bench-results/m0`.
+One cloud VM: Intel Xeon @ 2.10GHz, 4 vCPU, 15 GB, kernel 6.18.44, Go 1.27.3. Session noise reference 820,984 ns per pass (`bench-results/m0/noise-reference.json`, upper median; threshold 903,082 ns); for the coder/hnsw rerun 816,650 ns (`noise-reference-2.json`, true median). Raw results are in `bench-results/m0`.
 
 #### R1: pass, with intra-op threads = 1
 
@@ -155,23 +155,25 @@ Latency in µs, B = 1 (`onnx/latency.json`):
 
 #### R2: fail; the fallback is adopted
 
-recall@100 and the highest single-thread p99 over ef ∈ {120, 200, 400, 800} (`ann/*.json`):
+recall@100 by ef, and single-thread p99 at ef = 800 (`ann/*.json`). coder/hnsw rows are the rerun with `Ml = 1/M` under the second session reference, 816,650 ns (D017).
 
 | Set | Index | M / efC | recall@100 at ef = 120 / 200 / 400 / 800 | p99 at ef = 800 | Build |
 |---|---|---|---|---|---|
-| synth | coder/hnsw | 16 / 200 | 0.061 at every ef | 0.92 ms | 249 s |
-| synth | coder/hnsw | 32 / 400 | 0.112 at every ef | 0.92 ms | 495 s |
+| synth | coder/hnsw v0.6.1 | 16 / 200 | 0.035 at every ef | 0.67 ms | 147 s |
+| synth | coder/hnsw v0.6.1 | 32 / 400 | 0.064 at every ef | 0.53 ms | 307 s |
+| synth | coder/hnsw 36cab60 | 16 / 200 | 0.792 / 0.812 / 0.821 / 0.824 | 21.3 ms | 2,929 s |
 | synth | faiss | 16 / 200 | 0.996 / 1.000 / 1.000 / 1.000 | 1.34 ms | 322 s |
 | synth | faiss | 32 / 400 | 0.999 / 1.000 / 1.000 / 1.000 | 2.02 ms | 976 s |
-| glove | coder/hnsw | 16 / 200 | 0.032 at every ef | 0.89 ms | 347 s |
-| glove | coder/hnsw | 32 / 400 | 0.053 at every ef | 1.12 ms | 759 s |
+| glove | coder/hnsw v0.6.1 | 16 / 200 | 0.023 at every ef | 0.54 ms | 169 s |
+| glove | coder/hnsw v0.6.1 | 32 / 400 | 0.033 at every ef | 0.66 ms | 429 s |
 | glove | faiss | 16 / 200 | 0.719 / 0.778 / 0.844 / 0.896 | 3.43 ms | 666 s |
 | glove | faiss | 32 / 400 | 0.801 / 0.859 / 0.920 / 0.961 | 6.59 ms | 2,159 s |
-| synth | exact (Go) | | 1.000 | p99 87 ms | |
-| glove | exact (Go) | | 1.000 | p99 161 ms | |
+| synth | exact (Go) | | 1.000 | 87 ms | |
+| glove | exact (Go) | | 1.000 | 161 ms | |
 
-- coder/hnsw v0.6.1 does not reach recall@100 ≥ 0.95 at any ef, on either set, with either setting; the criterion fails. Its recall does not change with ef because its layer search keeps only k results and stops after the first expansion that does not improve the best distance; ef only bounds the candidate queue (`graph.go`, `layerNode.search`). Its GC criterion holds: the longest pause in any query phase is at most 0.33 ms, and heap after build is 1.4 to 2.6 GiB.
-- faiss with the same settings reaches 1.000 on synth, so the data, ground truth and recall code agree;; on glove its recall is lower at every ef.
+- coder/hnsw v0.6.1, the pinned version, does not reach recall@100 ≥ 0.95 at any ef, on either set, with either setting; the criterion fails. Its recall does not change with ef: its layer search keeps only k results and stops after the first expansion that does not improve the best distance, and its heap's `Max` and `PopLast` take the last array slot of a min-heap, which is not the largest element (`graph.go` `layerNode.search`, `heap/heap.go`). ef only bounds the candidate queue. Its GC criterion holds: the longest pause in any query phase is at most 0.26 ms; heap after build is 1.0 to 2.0 GiB.
+- Upstream fixed both search defects on 2026-06-22 (commit 36cab60, untagged). Measured as extra information outside the criterion: on synth its recall@100 levels off at 0.824 while p99 grows to 21 ms, and its build took 49 min, so it would fail too. Its glove run was stopped by a 2-hour job limit and not repeated.
+- faiss with the same settings reaches 1.000 on synth, so the data, ground truth and recall code agree; on glove its recall is lower at every ef.
 - On glove, faiss reaches recall@100 ≥ 0.95 only at M = 32, ef = 800, with p99 6.59 ms. The single-thread p99 ≤ 5 ms part of the criterion is therefore not met there by the outside reference either. This is recorded as found; the criterion is unchanged and applies to the hand-written index in M2.
-- Noise: three coder/hnsw points on glove M = 32 stayed flagged after three attempts (marked noisy in the JSON). The faiss runs are bracketed but not rerun; the baseline before glove faiss M = 32 was 911,710 ns, 11% over the reference, so that run is flagged. faiss is the outside reference and does not enter the criterion.
-- Settings: `Ml = 1/ln M`. coder/hnsw has no separate efConstruction; it builds with `EfSearch`, which was set to efConstruction during the build.
+- Noise: six coder/hnsw points of synth M = 16 in the rerun stayed flagged after three attempts (marked noisy in the JSON); none of them affects the verdict, which rests on recall. The faiss runs are bracketed but were not rerun; the baseline before glove faiss M = 32 was 911,710 ns, 11% over the first reference, so that run is flagged. faiss is the outside reference and does not enter the criterion.
+- Settings: coder/hnsw has no separate efConstruction; it builds with `EfSearch`, which was set to efConstruction during the build. The faiss latencies include Python's per-call overhead, about 6 to 11 µs. The Go heap figure is live heap after a GC; faiss's figure in its JSON is RSS growth.
