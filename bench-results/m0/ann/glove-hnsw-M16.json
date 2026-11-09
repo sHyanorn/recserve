@@ -1,8 +1,8 @@
 {
-  "build_seconds": 346.761099054,
+  "build_seconds": 168.780461431,
   "env": {
     "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
-    "date": "2026-11-08T23:42:47Z",
+    "date": "2026-11-09T02:30:42Z",
     "go": "go1.27.3",
     "gomaxprocs": "4",
     "index": "hnsw",
@@ -10,7 +10,7 @@
     "numcpu": "4",
     "set": "glove"
   },
-  "heap_objects_mib": 1772.0433349609375,
+  "heap_objects_mib": 1359.0000534057617,
   "points": [
     {
       "index": "coder/hnsw",
@@ -18,26 +18,25 @@
       "ef_construction": 200,
       "ef": 10,
       "k": 10,
-      "recall": 0.024459999999999645,
+      "recall": 0.014669999999999848,
       "latency": {
         "n": 10000,
-        "p50_us": 124.076,
-        "p90_us": 160.648,
-        "p99_us": 211.79,
-        "p999_us": 300.759,
-        "max_us": 1369.294
+        "p50_us": 59.287,
+        "p90_us": 82.003,
+        "p99_us": 113.336,
+        "p999_us": 145.347,
+        "max_us": 474.784
       },
-      "qps": 7761.8035255884415,
+      "qps": 16236.116332533371,
       "gc": {
         "num_gc": 0,
-        "max_pause_upper_ms": 0,
-        "gc_cpu_fraction": 0
+        "max_pause_upper_ms": 0
       },
       "noise": {
-        "reference_ns": 820984,
-        "before_ns": 789612.61,
-        "after_ns": 791483.505,
-        "attempt": 3,
+        "reference_ns": 816649.76875,
+        "before_ns": 623793.665,
+        "after_ns": 655440.7875,
+        "attempt": 1,
         "noisy": false
       }
     },
@@ -47,26 +46,25 @@
       "ef_construction": 200,
       "ef": 20,
       "k": 10,
-      "recall": 0.024459999999999645,
+      "recall": 0.014669999999999848,
       "latency": {
         "n": 10000,
-        "p50_us": 133.054,
-        "p90_us": 219.273,
-        "p99_us": 308.86,
-        "p999_us": 394.135,
-        "max_us": 19771.548
+        "p50_us": 61.243,
+        "p90_us": 87.48,
+        "p99_us": 132.996,
+        "p999_us": 215.585,
+        "max_us": 408.917
       },
-      "qps": 6618.8509840163015,
+      "qps": 15444.825444606096,
       "gc": {
         "num_gc": 0,
-        "max_pause_upper_ms": 0.057344,
-        "gc_cpu_fraction": 0
+        "max_pause_upper_ms": 0
       },
       "noise": {
-        "reference_ns": 820984,
-        "before_ns": 780041.975,
-        "after_ns": 782640.275,
-        "attempt": 3,
+        "reference_ns": 816649.76875,
+        "before_ns": 673037.0125,
+        "after_ns": 669004.26,
+        "attempt": 1,
         "noisy": false
       }
     },
@@ -76,25 +74,24 @@
       "ef_construction": 200,
       "ef": 40,
       "k": 10,
-      "recall": 0.024459999999999645,
+      "recall": 0.014669999999999848,
       "latency": {
         "n": 10000,
-        "p50_us": 119.335,
-        "p90_us": 145.069,
-        "p99_us": 175.278,
-        "p999_us": 211.942,
-        "max_us": 290.634
+        "p50_us": 56.856,
+        "p90_us": 77.802,
+        "p99_us": 102.72,
+        "p999_us": 131.76,
+        "max_us": 364.82
       },
-      "qps": 8276.016422950162,
+      "qps": 17029.243180056743,
       "gc": {
         "num_gc": 0,
-        "max_pause_upper_ms": 0,
-        "gc_cpu_fraction": 0
+        "max_pause_upper_ms": 0
       },
       "noise": {
-        "reference_ns": 820984,
-        "before_ns": 781027.6,
-        "after_ns": 778732.105,
+        "reference_ns": 816649.76875,
+        "before_ns": 669741.6725,
+        "after_ns": 665445.6775,
         "attempt": 1,
         "noisy": false
       }
@@ -105,25 +102,24 @@
       "ef_construction": 200,
       "ef": 80,
       "k": 10,
-      "recall": 0.024459999999999645,
+      "recall": 0.014669999999999848,
       "latency": {
         "n": 10000,
-        "p50_us": 125.459,
-        "p90_us": 162.016,
-        "p99_us": 214.033,
-        "p999_us": 315.527,
-        "max_us": 2567.187
+        "p50_us": 57.048,
+        "p90_us": 78.249,
+        "p99_us": 106.796,
+        "p999_us": 133.561,
+        "max_us": 368.59
       },
-      "qps": 7668.979811965879,
+      "qps": 16889.658947741787,
       "gc": {
         "num_gc": 0,
-        "max_pause_upper_ms": 0,
-        "gc_cpu_fraction": 0
+        "max_pause_upper_ms": 0
       },
       "noise": {
-        "reference_ns": 820984,
-        "before_ns": 899297.59,
-        "after_ns": 794203.95,
+        "reference_ns": 816649.76875,
+        "before_ns": 670233.185,
+        "after_ns": 661095.885,
         "attempt": 1,
         "noisy": false
       }
@@ -134,25 +130,24 @@
       "ef_construction": 200,
       "ef": 120,
       "k": 10,
-      "recall": 0.024459999999999645,
+      "recall": 0.014669999999999848,
       "latency": {
         "n": 10000,
-        "p50_us": 167.546,
-        "p90_us": 209.851,
-        "p99_us": 273.63,
-        "p999_us": 526.088,
-        "max_us": 1063.374
+        "p50_us": 62.286,
+        "p90_us": 86.022,
+        "p99_us": 119.308,
+        "p999_us": 194.136,
+        "max_us": 2054.547
       },
-      "qps": 5866.662424835066,
+      "qps": 15353.101396108328,
       "gc": {
         "num_gc": 0,
-        "max_pause_upper_ms": 0,
-        "gc_cpu_fraction": 0
+        "max_pause_upper_ms": 0
       },
       "noise": {
-        "reference_ns": 820984,
-        "before_ns": 826234.9,
-        "after_ns": 874701.45,
+        "reference_ns": 816649.76875,
+        "before_ns": 669773.83,
+        "after_ns": 664500.875,
         "attempt": 1,
         "noisy": false
       }
@@ -163,25 +158,24 @@
       "ef_construction": 200,
       "ef": 200,
       "k": 10,
-      "recall": 0.024459999999999645,
+      "recall": 0.014669999999999848,
       "latency": {
         "n": 10000,
-        "p50_us": 166.38,
-        "p90_us": 575.789,
-        "p99_us": 714.178,
-        "p999_us": 1200.292,
-        "max_us": 1947.85
+        "p50_us": 64.941,
+        "p90_us": 94.445,
+        "p99_us": 141.271,
+        "p999_us": 283.34,
+        "max_us": 1168.373
       },
-      "qps": 4448.753455633754,
+      "qps": 14424.872140024958,
       "gc": {
-        "num_gc": 1,
-        "max_pause_upper_ms": 0.08192,
-        "gc_cpu_fraction": 0.018791981198081
+        "num_gc": 0,
+        "max_pause_upper_ms": 0
       },
       "noise": {
-        "reference_ns": 820984,
-        "before_ns": 800639.77,
-        "after_ns": 893608.71,
+        "reference_ns": 816649.76875,
+        "before_ns": 658692.27,
+        "after_ns": 672809.165,
         "attempt": 1,
         "noisy": false
       }
@@ -192,25 +186,24 @@
       "ef_construction": 200,
       "ef": 400,
       "k": 10,
-      "recall": 0.024459999999999645,
+      "recall": 0.014669999999999848,
       "latency": {
         "n": 10000,
-        "p50_us": 156.347,
-        "p90_us": 214.218,
-        "p99_us": 602.456,
-        "p999_us": 928.59,
-        "max_us": 5431.648
+        "p50_us": 80.614,
+        "p90_us": 264.288,
+        "p99_us": 359.719,
+        "p999_us": 778.617,
+        "max_us": 1553.85
       },
-      "qps": 5610.991109685897,
+      "qps": 8201.255489852763,
       "gc": {
-        "num_gc": 0,
-        "max_pause_upper_ms": 0.098304,
-        "gc_cpu_fraction": 0
+        "num_gc": 1,
+        "max_pause_upper_ms": 0.08192
       },
       "noise": {
-        "reference_ns": 820984,
-        "before_ns": 791361.06,
-        "after_ns": 810852.53,
+        "reference_ns": 816649.76875,
+        "before_ns": 658707.9425,
+        "after_ns": 662609.255,
         "attempt": 1,
         "noisy": false
       }
@@ -221,25 +214,24 @@
       "ef_construction": 200,
       "ef": 800,
       "k": 10,
-      "recall": 0.024459999999999645,
+      "recall": 0.014669999999999848,
       "latency": {
         "n": 10000,
-        "p50_us": 176.858,
-        "p90_us": 528.832,
-        "p99_us": 1018.529,
-        "p999_us": 5911.472,
-        "max_us": 7401.155
+        "p50_us": 79.715,
+        "p90_us": 161.631,
+        "p99_us": 349.673,
+        "p999_us": 707.315,
+        "max_us": 2923.083
       },
-      "qps": 3594.339523125777,
+      "qps": 9823.925257124592,
       "gc": {
-        "num_gc": 1,
-        "max_pause_upper_ms": 0.098304,
-        "gc_cpu_fraction": 0.08353588562411916
+        "num_gc": 0,
+        "max_pause_upper_ms": 0.098304
       },
       "noise": {
-        "reference_ns": 820984,
-        "before_ns": 827882.85,
-        "after_ns": 829533.22,
+        "reference_ns": 816649.76875,
+        "before_ns": 683166.17,
+        "after_ns": 673437.5675,
         "attempt": 1,
         "noisy": false
       }
@@ -250,25 +242,24 @@
       "ef_construction": 200,
       "ef": 120,
       "k": 100,
-      "recall": 0.0319109999999993,
+      "recall": 0.02288899999999994,
       "latency": {
         "n": 10000,
-        "p50_us": 246.325,
-        "p90_us": 303.855,
-        "p99_us": 394.565,
-        "p999_us": 645.454,
-        "max_us": 1828.707
+        "p50_us": 155.738,
+        "p90_us": 194.19,
+        "p99_us": 251.827,
+        "p999_us": 396.786,
+        "max_us": 1299.918
       },
-      "qps": 3930.9720320565907,
+      "qps": 6294.327756014272,
       "gc": {
         "num_gc": 0,
-        "max_pause_upper_ms": 0,
-        "gc_cpu_fraction": 0
+        "max_pause_upper_ms": 0
       },
       "noise": {
-        "reference_ns": 820984,
-        "before_ns": 820923.92,
-        "after_ns": 782241.655,
+        "reference_ns": 816649.76875,
+        "before_ns": 706428.045,
+        "after_ns": 679163.3125,
         "attempt": 1,
         "noisy": false
       }
@@ -279,26 +270,25 @@
       "ef_construction": 200,
       "ef": 200,
       "k": 100,
-      "recall": 0.0319109999999993,
+      "recall": 0.02288899999999994,
       "latency": {
         "n": 10000,
-        "p50_us": 238.618,
-        "p90_us": 311.097,
-        "p99_us": 416.675,
-        "p999_us": 1280.67,
-        "max_us": 3692.379
+        "p50_us": 172.283,
+        "p90_us": 230.507,
+        "p99_us": 316.656,
+        "p999_us": 803.519,
+        "max_us": 5192.266
       },
-      "qps": 3959.3825678166004,
+      "qps": 5528.788387310757,
       "gc": {
         "num_gc": 0,
-        "max_pause_upper_ms": 0,
-        "gc_cpu_fraction": 0
+        "max_pause_upper_ms": 0
       },
       "noise": {
-        "reference_ns": 820984,
-        "before_ns": 790602.495,
-        "after_ns": 793770.575,
-        "attempt": 2,
+        "reference_ns": 816649.76875,
+        "before_ns": 678998.575,
+        "after_ns": 674396.2225,
+        "attempt": 1,
         "noisy": false
       }
     },
@@ -308,25 +298,24 @@
       "ef_construction": 200,
       "ef": 400,
       "k": 100,
-      "recall": 0.0319109999999993,
+      "recall": 0.02288899999999994,
       "latency": {
         "n": 10000,
-        "p50_us": 244.615,
-        "p90_us": 359.03,
-        "p99_us": 808.722,
-        "p999_us": 1990.522,
-        "max_us": 4810.096
+        "p50_us": 173.657,
+        "p90_us": 403.708,
+        "p99_us": 572.622,
+        "p999_us": 1345.831,
+        "max_us": 3225.745
       },
-      "qps": 3482.5105450837204,
+      "qps": 4554.377763912957,
       "gc": {
         "num_gc": 1,
-        "max_pause_upper_ms": 0.057344,
-        "gc_cpu_fraction": 0.02845470051987736
+        "max_pause_upper_ms": 0.08192
       },
       "noise": {
-        "reference_ns": 820984,
-        "before_ns": 816113.465,
-        "after_ns": 809624.25,
+        "reference_ns": 816649.76875,
+        "before_ns": 671778.6425,
+        "after_ns": 643566.8225,
         "attempt": 1,
         "noisy": false
       }
@@ -337,25 +326,24 @@
       "ef_construction": 200,
       "ef": 800,
       "k": 100,
-      "recall": 0.0319109999999993,
+      "recall": 0.02288899999999994,
       "latency": {
         "n": 10000,
-        "p50_us": 315.808,
-        "p90_us": 619.005,
-        "p99_us": 887.2,
-        "p999_us": 1415.467,
-        "max_us": 2746.102
+        "p50_us": 189.776,
+        "p90_us": 382.943,
+        "p99_us": 539.815,
+        "p999_us": 1130.266,
+        "max_us": 4038.944
       },
-      "qps": 2728.5818800223183,
+      "qps": 4356.234101746673,
       "gc": {
         "num_gc": 1,
-        "max_pause_upper_ms": 0.098304,
-        "gc_cpu_fraction": 0.05576918159076152
+        "max_pause_upper_ms": 0.26214400000000004
       },
       "noise": {
-        "reference_ns": 820984,
-        "before_ns": 791180.08,
-        "after_ns": 837938.31,
+        "reference_ns": 816649.76875,
+        "before_ns": 676285.5675,
+        "after_ns": 673018.6975,
         "attempt": 1,
         "noisy": false
       }

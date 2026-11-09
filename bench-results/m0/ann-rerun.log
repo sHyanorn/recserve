@@ -1,0 +1,129 @@
+median 816650 ns per pass, runs [834456.7025 827863.0125 818355.73 1.03636691e+06 793711.21 795298.69 933604.57 795881.87 782979.7425 814943.8075], noisy false
+synth: 1000000 base, 10000 queries, dim 64
+  added 100000 in 10s
+  added 200000 in 22s
+  added 300000 in 35s
+  added 400000 in 49s
+  added 500000 in 1m3s
+  added 600000 in 1m20s
+  added 700000 in 1m36s
+  added 800000 in 1m53s
+  added 900000 in 2m10s
+  added 1000000 in 2m27s
+build 2m27s, heap objects 1017 MiB
+hnsw M=16 ef=10 k=10 recall=0.0222 p50=64us p99=140us qps=14100 gcmax=0.00ms noisy=true
+hnsw M=16 ef=20 k=10 recall=0.0222 p50=66us p99=184us qps=12350 gcmax=0.00ms noisy=true
+hnsw M=16 ef=40 k=10 recall=0.0222 p50=55us p99=104us qps=17461 gcmax=0.00ms noisy=true
+hnsw M=16 ef=80 k=10 recall=0.0222 p50=61us p99=130us qps=14167 gcmax=0.00ms noisy=true
+hnsw M=16 ef=120 k=10 recall=0.0222 p50=59us p99=122us qps=15883 gcmax=0.00ms noisy=true
+hnsw M=16 ef=200 k=10 recall=0.0222 p50=65us p99=143us qps=14333 gcmax=0.00ms noisy=true
+hnsw M=16 ef=400 k=10 recall=0.0222 p50=79us p99=378us qps=7708 gcmax=0.16ms noisy=false
+hnsw M=16 ef=800 k=10 recall=0.0222 p50=78us p99=372us qps=7887 gcmax=0.08ms noisy=false
+hnsw M=16 ef=120 k=100 recall=0.0345 p50=172us p99=390us qps=5377 gcmax=0.00ms noisy=false
+hnsw M=16 ef=200 k=100 recall=0.0345 p50=179us p99=398us qps=5129 gcmax=0.00ms noisy=false
+hnsw M=16 ef=400 k=100 recall=0.0345 p50=171us p99=594us qps=4897 gcmax=0.07ms noisy=false
+hnsw M=16 ef=800 k=100 recall=0.0345 p50=182us p99=665us qps=4385 gcmax=0.07ms noisy=false
+synth: 1000000 base, 10000 queries, dim 64
+  added 100000 in 24s
+  added 200000 in 49s
+  added 300000 in 1m18s
+  added 400000 in 1m46s
+  added 500000 in 2m17s
+  added 600000 in 2m49s
+  added 700000 in 3m22s
+  added 800000 in 3m55s
+  added 900000 in 4m30s
+  added 1000000 in 5m7s
+build 5m7s, heap objects 1559 MiB
+hnsw M=32 ef=10 k=10 recall=0.0567 p50=104us p99=269us qps=8964 gcmax=0.00ms noisy=false
+hnsw M=32 ef=20 k=10 recall=0.0567 p50=103us p99=189us qps=9292 gcmax=0.00ms noisy=false
+hnsw M=32 ef=40 k=10 recall=0.0567 p50=100us p99=187us qps=9643 gcmax=0.00ms noisy=false
+hnsw M=32 ef=80 k=10 recall=0.0567 p50=102us p99=212us qps=9257 gcmax=0.00ms noisy=false
+hnsw M=32 ef=120 k=10 recall=0.0567 p50=100us p99=192us qps=9509 gcmax=0.00ms noisy=false
+hnsw M=32 ef=200 k=10 recall=0.0567 p50=103us p99=175us qps=9434 gcmax=0.00ms noisy=false
+hnsw M=32 ef=400 k=10 recall=0.0567 p50=131us p99=500us qps=5951 gcmax=0.26ms noisy=false
+hnsw M=32 ef=800 k=10 recall=0.0567 p50=112us p99=228us qps=8435 gcmax=0.00ms noisy=false
+hnsw M=32 ef=120 k=100 recall=0.0643 p50=193us p99=544us qps=4466 gcmax=0.00ms noisy=false
+hnsw M=32 ef=200 k=100 recall=0.0643 p50=194us p99=633us qps=4347 gcmax=0.05ms noisy=false
+hnsw M=32 ef=400 k=100 recall=0.0643 p50=175us p99=453us qps=4894 gcmax=0.00ms noisy=false
+hnsw M=32 ef=800 k=100 recall=0.0643 p50=193us p99=525us qps=4433 gcmax=0.06ms noisy=false
+glove: 1183514 base, 10000 queries, dim 100
+  added 100000 in 9s
+  added 200000 in 20s
+  added 300000 in 33s
+  added 400000 in 46s
+  added 500000 in 1m0s
+  added 600000 in 1m15s
+  added 700000 in 1m30s
+  added 800000 in 1m46s
+  added 900000 in 2m2s
+  added 1000000 in 2m18s
+  added 1100000 in 2m35s
+build 2m49s, heap objects 1359 MiB
+hnsw M=16 ef=10 k=10 recall=0.0147 p50=59us p99=113us qps=16236 gcmax=0.00ms noisy=false
+hnsw M=16 ef=20 k=10 recall=0.0147 p50=61us p99=133us qps=15445 gcmax=0.00ms noisy=false
+hnsw M=16 ef=40 k=10 recall=0.0147 p50=57us p99=103us qps=17029 gcmax=0.00ms noisy=false
+hnsw M=16 ef=80 k=10 recall=0.0147 p50=57us p99=107us qps=16890 gcmax=0.00ms noisy=false
+hnsw M=16 ef=120 k=10 recall=0.0147 p50=62us p99=119us qps=15353 gcmax=0.00ms noisy=false
+hnsw M=16 ef=200 k=10 recall=0.0147 p50=65us p99=141us qps=14425 gcmax=0.00ms noisy=false
+hnsw M=16 ef=400 k=10 recall=0.0147 p50=81us p99=360us qps=8201 gcmax=0.08ms noisy=false
+hnsw M=16 ef=800 k=10 recall=0.0147 p50=80us p99=350us qps=9824 gcmax=0.10ms noisy=false
+hnsw M=16 ef=120 k=100 recall=0.0229 p50=156us p99=252us qps=6294 gcmax=0.00ms noisy=false
+hnsw M=16 ef=200 k=100 recall=0.0229 p50=172us p99=317us qps=5529 gcmax=0.00ms noisy=false
+hnsw M=16 ef=400 k=100 recall=0.0229 p50=174us p99=573us qps=4554 gcmax=0.08ms noisy=false
+hnsw M=16 ef=800 k=100 recall=0.0229 p50=190us p99=540us qps=4356 gcmax=0.26ms noisy=false
+glove: 1183514 base, 10000 queries, dim 100
+  added 100000 in 27s
+  added 200000 in 58s
+  added 300000 in 1m29s
+  added 400000 in 2m2s
+  added 500000 in 2m35s
+  added 600000 in 3m9s
+  added 700000 in 3m46s
+  added 800000 in 4m24s
+  added 900000 in 5m6s
+  added 1000000 in 5m48s
+  added 1100000 in 6m31s
+build 7m9s, heap objects 2001 MiB
+hnsw M=32 ef=10 k=10 recall=0.0285 p50=105us p99=297us qps=8602 gcmax=0.00ms noisy=false
+hnsw M=32 ef=20 k=10 recall=0.0285 p50=101us p99=270us qps=9180 gcmax=0.00ms noisy=false
+hnsw M=32 ef=40 k=10 recall=0.0285 p50=105us p99=255us qps=8907 gcmax=0.00ms noisy=false
+hnsw M=32 ef=80 k=10 recall=0.0285 p50=104us p99=242us qps=9039 gcmax=0.00ms noisy=false
+hnsw M=32 ef=120 k=10 recall=0.0285 p50=104us p99=191us qps=9257 gcmax=0.00ms noisy=false
+hnsw M=32 ef=200 k=10 recall=0.0285 p50=111us p99=283us qps=8413 gcmax=0.00ms noisy=false
+hnsw M=32 ef=400 k=10 recall=0.0285 p50=128us p99=326us qps=7171 gcmax=0.00ms noisy=false
+hnsw M=32 ef=800 k=10 recall=0.0285 p50=122us p99=502us qps=5800 gcmax=0.10ms noisy=false
+hnsw M=32 ef=120 k=100 recall=0.0329 p50=177us p99=335us qps=5369 gcmax=0.00ms noisy=false
+hnsw M=32 ef=200 k=100 recall=0.0329 p50=175us p99=324us qps=5393 gcmax=0.00ms noisy=false
+hnsw M=32 ef=400 k=100 recall=0.0329 p50=178us p99=319us qps=5375 gcmax=0.00ms noisy=false
+hnsw M=32 ef=800 k=100 recall=0.0329 p50=207us p99=659us qps=4153 gcmax=0.11ms noisy=false
+synth: 1000000 base, 10000 queries, dim 64
+  added 100000 in 3m25s
+  added 200000 in 8m13s
+  added 300000 in 13m29s
+  added 400000 in 18m10s
+  added 500000 in 22m33s
+  added 600000 in 27m12s
+  added 700000 in 32m16s
+  added 800000 in 37m20s
+  added 900000 in 42m54s
+  added 1000000 in 48m49s
+build 48m49s, heap objects 1017 MiB
+hnsw M=16 ef=10 k=10 recall=0.4920 p50=301us p99=563us qps=3125 gcmax=0.00ms noisy=false
+hnsw M=16 ef=20 k=10 recall=0.6463 p50=523us p99=833us qps=1795 gcmax=0.00ms noisy=false
+hnsw M=16 ef=40 k=10 recall=0.7522 p50=882us p99=1919us qps=1024 gcmax=0.08ms noisy=false
+hnsw M=16 ef=80 k=10 recall=0.8025 p50=1540us p99=2636us qps=603 gcmax=0.11ms noisy=false
+hnsw M=16 ef=120 k=10 recall=0.8138 p50=2120us p99=4364us qps=445 gcmax=0.08ms noisy=false
+hnsw M=16 ef=200 k=10 recall=0.8205 p50=3240us p99=5634us qps=294 gcmax=0.16ms noisy=false
+hnsw M=16 ef=400 k=10 recall=0.8235 p50=6034us p99=11901us qps=153 gcmax=0.23ms noisy=false
+hnsw M=16 ef=800 k=10 recall=0.8243 p50=11106us p99=20150us qps=85 gcmax=0.11ms noisy=false
+hnsw M=16 ef=120 k=100 recall=0.7915 p50=2151us p99=3780us qps=444 gcmax=0.11ms noisy=false
+hnsw M=16 ef=200 k=100 recall=0.8117 p50=3311us p99=5653us qps=286 gcmax=0.10ms noisy=false
+hnsw M=16 ef=400 k=100 recall=0.8212 p50=6032us p99=10253us qps=157 gcmax=0.10ms noisy=false
+hnsw M=16 ef=800 k=100 recall=0.8238 p50=11470us p99=21325us qps=82 gcmax=0.10ms noisy=false
+glove: 1183514 base, 10000 queries, dim 100
+  added 100000 in 5m1s
+  added 200000 in 11m54s
+  added 300000 in 19m14s
+  added 400000 in 27m10s
+stopped at the 2 h background limit while building glove with 36cab60; not rerun
