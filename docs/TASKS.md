@@ -43,7 +43,6 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] annshard service over gRPC
 - [ ] Scatter-gather over gRPC with per-shard deadlines, partial results and coverage, merging as the in-process shards do; property test 6 rerun over gRPC (D028)
 - [ ] Replica failover and hedged requests
-- [ ] `hnsw.Read` checks only the arrays' shapes; check link targets, counts and levels before a shard serves an index from a file
 - [ ] Fault tests: slow shard, dead replica, failed swap
 
 ## M5 Operations and deployment
