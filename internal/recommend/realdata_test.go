@@ -21,6 +21,7 @@ import (
 // items for 1,000 random test users at their first test event, and checks
 // property 2 against everything they rated before it.
 // It also checks that the bundle is rejected when its cutoff reaches the test period.
+// A bundle with an ONNX user encoder needs RECSERVE_ORT_LIB as well.
 func TestRealDataSmoke(t *testing.T) {
 	data, dir := os.Getenv("RECSERVE_DATA"), os.Getenv("RECSERVE_BUNDLE")
 	if data == "" || dir == "" {
@@ -31,10 +32,16 @@ func TestRealDataSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := dataset.FirstTS(test)
+	initORTIfSet(t)
 	b, err := bundle.Load(dir, bundle.Options{FirstTestTS: first})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := b.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	var train []dataset.Row
 	for _, name := range []string{"train", "valid"} {
 		rows, err := dataset.Read(filepath.Join(data, "Video_Games."+name+".csv.gz"))

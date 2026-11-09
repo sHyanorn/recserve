@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/dataset"
 	"github.com/sHyanorn/recserve/internal/history"
+	"github.com/sHyanorn/recserve/internal/onnx"
 	"github.com/sHyanorn/recserve/internal/recommend"
 )
 
@@ -27,17 +29,23 @@ func main() {
 	testSplit := flag.String("test-split", "", "test split file; its first event bounds the bundle's train cutoff")
 	preload := flag.String("preload", "", "comma-separated split files whose events are loaded into the history store at start")
 	drain := flag.Duration("drain", 10*time.Second, "time allowed for in-flight requests at shutdown")
+	ortLib := flag.String("ort-lib", "", "ONNX Runtime shared library (libonnxruntime.so.1.31.x), needed by a bundle with an ONNX user encoder")
 	flag.Parse()
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if err := run(log, *addr, *dir, *testSplit, *preload, *drain); err != nil {
+	if err := run(log, *addr, *dir, *testSplit, *preload, *ortLib, *drain); err != nil {
 		log.Error("gateway stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(log *slog.Logger, addr, dir, testSplit, preload string, drain time.Duration) error {
+func run(log *slog.Logger, addr, dir, testSplit, preload, ortLib string, drain time.Duration) (err error) {
 	if dir == "" {
 		return errors.New("-bundle is required")
+	}
+	if ortLib != "" {
+		if err := onnx.Init(ortLib); err != nil {
+			return err
+		}
 	}
 	var opt bundle.Options
 	if testSplit != "" {
@@ -53,9 +61,13 @@ func run(log *slog.Logger, addr, dir, testSplit, preload string, drain time.Dura
 		log.Warn("no -test-split: the bundle's train cutoff is not checked")
 	}
 	b, err := bundle.Load(dir, opt)
+	if errors.Is(err, onnx.ErrNotInitialized) {
+		return fmt.Errorf("%w (start with -ort-lib)", err)
+	}
 	if err != nil {
 		return err
 	}
+	defer func() { err = errors.Join(err, b.Close()) }()
 	store := history.NewMemory()
 	if preload != "" {
 		for _, path := range strings.Split(preload, ",") {

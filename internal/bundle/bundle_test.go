@@ -1,6 +1,9 @@
 package bundle
 
 import (
+	"bufio"
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,29 +16,30 @@ import (
 	"testing"
 
 	"github.com/sHyanorn/recserve/internal/npy"
+	"github.com/sHyanorn/recserve/internal/onnx"
+	"github.com/sHyanorn/recserve/internal/onnx/onnxtest"
 	"github.com/sHyanorn/recserve/internal/vec"
 )
 
-// testItems is the item count of the test bundle; item i's vector is (cos i, sin i) / i.
-const testItems = 12
+// The test bundle has the items of the test encoder mean.onnx: item i's
+// vector is (cos i, sin i) / i.
+const testItems = onnxtest.MeanItems
 
-func testVectors() []float32 {
-	v := make([]float32, 2*(testItems+1))
-	for i := 1; i <= testItems; i++ {
-		v[2*i], v[2*i+1] = float32(math.Cos(float64(i))/float64(i)), float32(math.Sin(float64(i))/float64(i))
-	}
-	return v
-}
+func testVectors() []float32 { return onnxtest.MeanVectors() }
 
-// goldenLine is a correct golden case for the given history.
-func goldenLine(t testing.TB, history []int32) string {
+// goldenLine is a correct golden case for history over the given item
+// vectors: the user vector is the mean of the last maxSeqLen items,
+// computed here independently of any encoder.
+func goldenLine(t testing.TB, vectors []float32, maxSeqLen int, history []int32) string {
 	t.Helper()
-	m, err := vec.NewMatrix(2, testVectors())
+	m, err := vec.NewMatrix(2, vectors)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := New(Manifest{Dim: 2, MaxSeqLen: 50}, []string{""}, m, nil, nil)
-	uv := b.UserVector(history)
+	uv, err := New(Manifest{Dim: 2, MaxSeqLen: maxSeqLen}, []string{""}, m, nil, nil).UserVector(context.Background(), history)
+	if err != nil {
+		t.Fatal(err)
+	}
 	seen := map[int32]bool{}
 	for _, id := range history {
 		seen[id] = true
@@ -56,9 +60,12 @@ func marshal(t testing.TB, v any) []byte {
 	return b
 }
 
-// writeBundle writes a 12-item, 2-dimensional bundle and returns its directory.
-// edit, if non-nil, may change the files and manifest before checksums are written.
-func writeBundle(t *testing.T, edit func(files map[string][]byte, m map[string]any)) string {
+type editFunc func(files map[string][]byte, m map[string]any)
+
+// writeBundle writes a 12-item, 2-dimensional bundle with user_encoder mean
+// and returns its directory. The edits, in order, may change the files and
+// manifest before checksums are written.
+func writeBundle(t *testing.T, edits ...editFunc) string {
 	t.Helper()
 	var ids strings.Builder
 	for i := 1; i <= testItems; i++ {
@@ -68,7 +75,7 @@ func writeBundle(t *testing.T, edit func(files map[string][]byte, m map[string]a
 		"items.ids":    []byte(ids.String()),
 		"items.npy":    npy.Encode([]int{testItems + 1, 2}, testVectors(), nil),
 		"popular.npy":  npy.Encode([]int{2}, nil, []int64{3, 1}),
-		"golden.jsonl": []byte(goldenLine(t, []int32{1}) + goldenLine(t, []int32{2, 5})),
+		"golden.jsonl": []byte(goldenLine(t, testVectors(), 50, []int32{1}) + goldenLine(t, testVectors(), 50, []int32{2, 5})),
 	}
 	cooc := make([]int64, (testItems+1)*CoocWidth)
 	cooc[1*CoocWidth], cooc[1*CoocWidth+1] = 3, 2
@@ -78,7 +85,7 @@ func writeBundle(t *testing.T, edit func(files map[string][]byte, m map[string]a
 		"item_count": testItems, "dim": 2, "metric": "dot", "normalized": false, "max_seq_len": 50,
 		"pad_id": 0, "user_encoder": "mean",
 	}
-	if edit != nil {
+	for _, edit := range edits {
 		edit(files, m)
 	}
 	dir := t.TempDir()
@@ -97,10 +104,41 @@ func writeBundle(t *testing.T, edit func(files map[string][]byte, m map[string]a
 	return dir
 }
 
-func TestLoad(t *testing.T) {
-	b, err := Load(writeBundle(t, nil), Options{FirstTestTS: 101})
+// withEncoder makes the bundle use the named test model as its user encoder.
+func withEncoder(t testing.TB, model string) editFunc {
+	data := onnxtest.Model(t, model)
+	return func(f map[string][]byte, m map[string]any) {
+		f["user_encoder.onnx"] = data
+		m["user_encoder"] = "onnx"
+	}
+}
+
+// load loads dir and closes the bundle when the test ends.
+func load(t *testing.T, dir string, opt Options) *Bundle {
+	t.Helper()
+	b, err := Load(dir, opt)
 	if err != nil {
 		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := b.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return b
+}
+
+func initORT(t *testing.T) {
+	t.Helper()
+	if err := onnx.Init(onnxtest.Lib(t)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoad(t *testing.T) {
+	b := load(t, writeBundle(t), Options{FirstTestTS: 101})
+	if b.Encoder != nil {
+		t.Fatal("a mean bundle has an encoder")
 	}
 	if id, ok := b.Lookup("item3"); !ok || id != 3 {
 		t.Fatalf("Lookup(item3) = %d, %v", id, ok)
@@ -113,9 +151,53 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+// TestLoadONNX loads a bundle whose user encoder is mean.onnx; its golden
+// cases are means computed in Go, so loading checks the encoder against
+// them. After Close the encoder refuses to run.
+func TestLoadONNX(t *testing.T) {
+	initORT(t)
+	b, err := Load(writeBundle(t, withEncoder(t, "mean.onnx")), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Encoder == nil {
+		t.Fatal("no encoder")
+	}
+	ctx := context.Background()
+	for _, h := range [][]int32{{4}, {1, 2, 3}, {12, 12, 7}} {
+		got, err := b.UserVector(ctx, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := b.Vectors.Mean(h)
+		for j := range want {
+			if math.Abs(float64(got[j]-want[j])) > 1e-5 {
+				t.Fatalf("history %v: encoder %v, mean %v", h, got, want)
+			}
+		}
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.UserVector(ctx, []int32{1}); !errors.Is(err, onnx.ErrClosed) {
+		t.Fatalf("after Close: %v", err)
+	}
+}
+
+// With max_seq_len 3 the golden case of history 1, 1, 1, 2, 2 holds the
+// mean of 1, 2, 2, so it passes only if the history is cut before the
+// encoder runs.
+func TestLoadONNXTruncates(t *testing.T) {
+	initORT(t)
+	load(t, writeBundle(t, withEncoder(t, "mean.onnx"), func(f map[string][]byte, m map[string]any) {
+		m["max_seq_len"] = 3
+		f["golden.jsonl"] = []byte(goldenLine(t, testVectors(), 3, []int32{1, 1, 1, 2, 2}))
+	}), Options{})
+}
+
 func TestLoadRejects(t *testing.T) {
 	cases := map[string]struct {
-		edit func(map[string][]byte, map[string]any)
+		edit editFunc
 		opt  Options
 		want string
 	}{
@@ -147,29 +229,76 @@ func TestLoadRejects(t *testing.T) {
 		"duplicate id": {func(f map[string][]byte, _ map[string]any) {
 			f["items.ids"] = []byte(strings.Replace(string(f["items.ids"]), "item2\n", "item1\n", 1))
 		}, Options{}, "repeats"},
-		"popular range":  {func(f map[string][]byte, _ map[string]any) { f["popular.npy"] = npy.Encode([]int{1}, nil, []int64{99}) }, Options{}, "out of range"},
-		"popular zero":   {func(f map[string][]byte, _ map[string]any) { f["popular.npy"] = npy.Encode([]int{1}, nil, []int64{0}) }, Options{}, "padding ID"},
-		"encoder":        {func(_ map[string][]byte, m map[string]any) { m["user_encoder"] = "onnx" }, Options{}, "unsupported"},
-		"missing vector": {func(f map[string][]byte, _ map[string]any) { delete(f, "items.npy") }, Options{}, "missing"},
+		"popular range":   {func(f map[string][]byte, _ map[string]any) { f["popular.npy"] = npy.Encode([]int{1}, nil, []int64{99}) }, Options{}, "out of range"},
+		"popular zero":    {func(f map[string][]byte, _ map[string]any) { f["popular.npy"] = npy.Encode([]int{1}, nil, []int64{0}) }, Options{}, "padding ID"},
+		"unknown encoder": {func(_ map[string][]byte, m map[string]any) { m["user_encoder"] = "rnn" }, Options{}, "unsupported"},
+		"onnx, no model":  {func(_ map[string][]byte, m map[string]any) { m["user_encoder"] = "onnx" }, Options{}, "user_encoder.onnx missing"},
+		"mean with model": {func(f map[string][]byte, _ map[string]any) { f["user_encoder.onnx"] = []byte("x") }, Options{}, "user_encoder.onnx listed"},
+		"missing vector":  {func(f map[string][]byte, _ map[string]any) { delete(f, "items.npy") }, Options{}, "missing"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := Load(writeBundle(t, tc.edit), tc.opt)
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("err = %v, want %q", err, tc.want)
+			var edits []editFunc
+			if tc.edit != nil {
+				edits = append(edits, tc.edit)
 			}
+			checkRejected(t, writeBundle(t, edits...), tc.opt, tc.want)
 		})
 	}
-	if _, err := Load(writeBundle(t, nil), Options{FirstTestTS: 100}); !errors.Is(err, ErrCutoff) {
+	if _, err := Load(writeBundle(t), Options{FirstTestTS: 100}); !errors.Is(err, ErrCutoff) {
 		t.Fatalf("cutoff error %v is not ErrCutoff", err)
 	}
+}
+
+// TestLoadRejectsONNX covers bundles whose encoder does not reproduce the
+// golden cases.
+func TestLoadRejectsONNX(t *testing.T) {
+	initORT(t)
+	// Items 1 and 2 swapped in items.npy, with golden cases that match it;
+	// the encoder's own table still has them in the original order.
+	swapped := testVectors()
+	swapped[2], swapped[3], swapped[4], swapped[5] = swapped[4], swapped[5], swapped[2], swapped[3]
+	cases := map[string]struct {
+		edit editFunc
+		want string
+	}{
+		"golden vector": {func(f map[string][]byte, _ map[string]any) {
+			f["golden.jsonl"] = editGolden(t, func(c map[string]any) { c["user_emb"].([]any)[1] = 0.5 })
+		}, "user vector differs"},
+		"items reordered": {func(f map[string][]byte, _ map[string]any) {
+			f["items.npy"] = npy.Encode([]int{testItems + 1, 2}, swapped, nil)
+			f["golden.jsonl"] = []byte(goldenLine(t, swapped, 50, []int32{1}))
+		}, "user vector differs"},
+		"other model": {withEncoder(t, "slow.onnx"), "golden 0"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			checkRejected(t, writeBundle(t, withEncoder(t, "mean.onnx"), tc.edit), Options{}, tc.want)
+		})
+	}
+}
+
+func checkRejected(t *testing.T, dir string, opt Options, want string) {
+	t.Helper()
+	b, err := Load(dir, opt)
+	if err == nil {
+		t.Errorf("accepted; want an error with %q", want)
+		if err := b.Close(); err != nil {
+			t.Error(err)
+		}
+		return
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+	t.Logf("rejected: %v", err)
 }
 
 // editGolden returns the golden file of history [1], changed by edit.
 func editGolden(t testing.TB, edit func(map[string]any)) []byte {
 	t.Helper()
 	var c map[string]any
-	if err := json.Unmarshal([]byte(goldenLine(t, []int32{1})), &c); err != nil {
+	if err := json.Unmarshal([]byte(goldenLine(t, testVectors(), 50, []int32{1})), &c); err != nil {
 		t.Fatal(err)
 	}
 	edit(c)
@@ -177,7 +306,7 @@ func editGolden(t testing.TB, edit func(map[string]any)) []byte {
 }
 
 func TestLoadRejectsTamperedFile(t *testing.T) {
-	dir := writeBundle(t, nil)
+	dir := writeBundle(t)
 	if err := os.WriteFile(filepath.Join(dir, "items.ids"), []byte("tampered\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -186,15 +315,48 @@ func TestLoadRejectsTamperedFile(t *testing.T) {
 	}
 }
 
-// TestRealBundle loads the bundle built by tools/bundle when RECSERVE_BUNDLE names its directory.
+// TestRealBundle loads the bundle built by tools/bundle when RECSERVE_BUNDLE
+// names its directory; a bundle with an ONNX user encoder also needs
+// RECSERVE_ORT_LIB. The bundle must have been built on this machine: the
+// user vectors computed here must match its golden ones within 1e-5, the
+// bound for the same machine, tighter than the 1e-4 Load accepts.
 func TestRealBundle(t *testing.T) {
 	dir := os.Getenv("RECSERVE_BUNDLE")
 	if dir == "" {
 		t.Skip("RECSERVE_BUNDLE not set")
 	}
-	b, err := Load(dir, Options{})
+	if lib := os.Getenv("RECSERVE_ORT_LIB"); lib != "" {
+		if err := onnx.Init(lib); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := load(t, dir, Options{})
+	golden, err := os.ReadFile(filepath.Join(dir, "golden.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("%s: %d items, dim %d", b.ModelVersion, b.ItemCount, b.Dim)
+	var worst float64
+	sc := bufio.NewScanner(bytes.NewReader(golden))
+	sc.Buffer(nil, 1<<20)
+	for sc.Scan() {
+		var c goldenCase
+		if err := json.Unmarshal(sc.Bytes(), &c); err != nil {
+			t.Fatal(err)
+		}
+		uv, err := b.UserVector(context.Background(), c.History)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for j, v := range uv {
+			worst = max(worst, math.Abs(float64(v-c.UserEmb[j])))
+		}
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("%s: %d items, dim %d, user encoder %s, largest difference from the golden user vectors %g",
+		b.ModelVersion, b.ItemCount, b.Dim, b.UserEncoder, worst)
+	if worst > 1e-5 {
+		t.Fatalf("user vectors differ from the golden ones by %g", worst)
+	}
 }

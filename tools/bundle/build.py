@@ -1,14 +1,18 @@
 """Build a baseline bundle (docs/SPEC.md §8) from the Video_Games split.
 
-usage: build.py DATA OUT
+usage: build.py DATA OUT [--encoder mean|onnx]
 
 DATA holds the files downloaded by scripts/data.sh. Writes OUT/<version>/
 with item vectors from implicit-feedback ALS trained on the train split, a
 co-occurrence table, a popularity list, golden cases and manifest.json, and
-prints the version. The user encoder is "mean": a user's vector is the mean
-of the vectors of their history items.
+prints the version. A user's vector is the mean of the vectors of their last
+MAX_SEQ_LEN history items. With --encoder mean (the default) the service
+computes it; with --encoder onnx the bundle carries user_encoder.onnx, a
+graph that computes the same mean, and the golden user vectors come from
+running it with ONNX Runtime.
 """
 
+import argparse
 import csv
 import gzip
 import hashlib
@@ -23,7 +27,10 @@ from collections import Counter, defaultdict
 
 import implicit
 import numpy as np
+import onnx
+import onnxruntime as ort
 import scipy.sparse as sp
+from onnx import TensorProto, helper, numpy_helper
 
 SEED = 1  # the only source of randomness: ALS initialization and golden sampling
 DIM = 64
@@ -35,6 +42,8 @@ POPULAR_TOP = 500
 MAX_SEQ_LEN = 50
 GOLDEN_CASES = 20
 DATASET = "amazon2023-video_games-5core-timestamp"
+OPSET, IR_VERSION = 17, 8  # IR version 8 is the one that goes with opset 17
+PARITY = 1e-5  # largest accepted difference between the ONNX encoder and the float64 mean
 
 
 def read_split(data, name):
@@ -50,9 +59,59 @@ def sequences(rows, item_ix):
     return {u: [i for _, i in sorted(v)] for u, v in by_user.items()}
 
 
-def mean_vector(vecs, history):
-    h = history[-MAX_SEQ_LEN:]
+def mean_vector(vecs, history, max_len=MAX_SEQ_LEN):
+    h = history[-max_len:]
     return vecs[h].astype(np.float64).mean(axis=0).astype(np.float32)
+
+
+def model(graph):
+    """A checked model of graph; the same graph always serializes to the same bytes."""
+    m = helper.make_model(graph, opset_imports=[helper.make_opsetid("", OPSET)], producer_name="recserve-bundle")
+    m.ir_version = IR_VERSION
+    onnx.checker.check_model(m, full_check=True)
+    return m
+
+
+def mean_encoder(vecs):
+    """The user encoder of SPEC §8 as a graph: the mean of the rows of vecs
+    named in item_seq int64 [B, L], padding (ID 0, a zero row) left out of the
+    count; output user_emb float32 [B, D]. A row of only padding gives zeros."""
+    nodes = [
+        helper.make_node("Gather", ["items", "item_seq"], ["emb"], axis=0),
+        helper.make_node("ReduceSum", ["emb", "axis1"], ["sum"], keepdims=0),
+        helper.make_node("Greater", ["item_seq", "pad"], ["real"]),
+        helper.make_node("Cast", ["real"], ["realf"], to=TensorProto.FLOAT),
+        helper.make_node("ReduceSum", ["realf", "axis1"], ["count"], keepdims=1),
+        helper.make_node("Max", ["count", "one"], ["divisor"]),
+        helper.make_node("Div", ["sum", "divisor"], ["user_emb"]),
+    ]
+    init = [
+        numpy_helper.from_array(vecs, "items"),
+        numpy_helper.from_array(np.array([1], dtype=np.int64), "axis1"),
+        numpy_helper.from_array(np.array(0, dtype=np.int64), "pad"),
+        numpy_helper.from_array(np.array(1, dtype=np.float32), "one"),
+    ]
+    return model(helper.make_graph(
+        nodes, "mean_encoder",
+        [helper.make_tensor_value_info("item_seq", TensorProto.INT64, ["B", "L"])],
+        [helper.make_tensor_value_info("user_emb", TensorProto.FLOAT, ["B", vecs.shape[1]])],
+        init))
+
+
+def session(model_bytes):
+    """An ONNX Runtime session with one intra-op thread, as the service runs it (D015)."""
+    opts = ort.SessionOptions()
+    opts.intra_op_num_threads = 1
+    return ort.InferenceSession(model_bytes, opts, providers=["CPUExecutionProvider"])
+
+
+def encode(sess, history, max_len=MAX_SEQ_LEN):
+    """Run a user encoder on the last max_len items of history, left-padded
+    with 0 to max_len, as the service calls it (B = 1)."""
+    h = history[-max_len:]
+    seq = np.zeros((1, max_len), dtype=np.int64)
+    seq[0, max_len - len(h):] = h
+    return sess.run(["user_emb"], {"item_seq": seq})[0][0]
 
 
 def top_k(vecs, user_vec, exclude, k):
@@ -72,7 +131,7 @@ def sha256(path):
     return h.hexdigest()
 
 
-def main(data, out):
+def main(data, out, encoder):
     train = read_split(data, "train")
     test = read_split(data, "test")
     valid = read_split(data, "valid")
@@ -115,6 +174,9 @@ def main(data, out):
     recent = Counter(item_ix[i] for _, i, ts in train if ts > cutoff - POPULAR_DAYS * 86_400_000)
     popular = np.array([i for i, _ in sorted(recent.items(), key=lambda kv: (-kv[1], kv[0]))[:POPULAR_TOP]], dtype=np.int64)
 
+    enc = mean_encoder(vecs).SerializeToString() if encoder == "onnx" else None
+    sess = session(enc) if enc else None
+
     rng = np.random.default_rng(SEED)
     test_users = sorted({u for u, _, _ in test if u in seqs})
     golden = []
@@ -124,6 +186,11 @@ def main(data, out):
     for u in longest + list(rng.choice(rest, size=GOLDEN_CASES - len(longest), replace=False)):
         hist = seqs[str(u)]
         uv = mean_vector(vecs, hist)
+        if sess:
+            got = encode(sess, hist)
+            if (diff := float(np.abs(got - uv).max())) > PARITY:
+                sys.exit(f"user encoder differs from the mean by {diff} for user {u}")
+            uv = got
         golden.append({"history": hist, "user_emb": uv.tolist(), "top10": top_k(vecs, uv, set(hist), 10)})
 
     os.makedirs(out, exist_ok=True)
@@ -134,12 +201,18 @@ def main(data, out):
     np.save(f"{d}/cooc_ids.npy", cooc_ids)
     np.save(f"{d}/cooc_counts.npy", cooc_counts)
     np.save(f"{d}/popular.npy", popular)
+    if enc:
+        with open(f"{d}/user_encoder.onnx", "wb") as f:
+            f.write(enc)
     with open(f"{d}/golden.jsonl", "w") as f:
         f.writelines(json.dumps(g) + "\n" for g in golden)
     files = sorted(os.listdir(d))
     sums = {name: sha256(f"{d}/{name}") for name in files}
     # The version names every file, so a change of any setting gives a new version.
     version = hashlib.sha256("".join(f"{k}{v}" for k, v in sums.items()).encode()).hexdigest()[:12]
+    build = {"seed": SEED, "als": ALS, "implicit": implicit.__version__, "cooc_window": COOC_WINDOW, "popular_days": POPULAR_DAYS}
+    if enc:
+        build["user_encoder"] = {"graph": "mean", "opset": OPSET, "onnx": onnx.__version__, "onnxruntime": ort.__version__}
     manifest = {
         "format_version": 1,
         "model_version": version,
@@ -151,8 +224,8 @@ def main(data, out):
         "normalized": False,
         "max_seq_len": MAX_SEQ_LEN,
         "pad_id": 0,
-        "user_encoder": "mean",
-        "build": {"seed": SEED, "als": ALS, "implicit": implicit.__version__, "cooc_window": COOC_WINDOW, "popular_days": POPULAR_DAYS},
+        "user_encoder": encoder,
+        "build": build,
         "sha256": sums,
     }
     with open(f"{d}/manifest.json", "w") as f:
@@ -165,4 +238,9 @@ def main(data, out):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2])
+    p = argparse.ArgumentParser(description="Build a baseline bundle.")
+    p.add_argument("data")
+    p.add_argument("out")
+    p.add_argument("--encoder", choices=["mean", "onnx"], default="mean")
+    a = p.parse_args()
+    main(a.data, a.out, a.encoder)

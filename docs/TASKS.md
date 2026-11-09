@@ -21,7 +21,8 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] `cmd/loadgen` and its coordinated-omission test (property 7)
 
 ## M2 Models, ANN, degradation, swaps
-- [ ] User encoder and ranker through ONNX Runtime, one intra-op thread (D015)
+- [x] User encoder through ONNX Runtime, one intra-op thread (D015, D026)
+- [ ] Ranker contract and its ONNX call path (D015)
 - [x] Hand-written HNSW (D016), measured per docs/BENCHMARKS.md (Hand-written HNSW): synth passes, glove fails on latency only
 - [ ] Per-stage deadlines and degradation reasons in responses
 - [ ] Result cache keyed by versions, arm and history head (in memory for now); property test 5

@@ -80,7 +80,10 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error)
 			seen[id] = true
 		}
 	}
-	uv := b.UserVector(hist)
+	uv, err := b.UserVector(ctx, hist)
+	if err != nil {
+		return Response{}, fmt.Errorf("user vector: %w", err)
+	}
 
 	sources := p.sources(hist, uv, seen)
 	results := make([][]vec.Hit, len(sources))

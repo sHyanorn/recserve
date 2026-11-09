@@ -10,6 +10,8 @@ import (
 
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/history"
+	"github.com/sHyanorn/recserve/internal/onnx"
+	"github.com/sHyanorn/recserve/internal/onnx/onnxtest"
 	"github.com/sHyanorn/recserve/internal/vec"
 )
 
@@ -253,4 +255,67 @@ func storeWith(t testing.TB, events ...history.Event) *history.Memory {
 		t.Fatal(err)
 	}
 	return s
+}
+
+// TestONNXEncoderMatchesMean compares two pipelines over the items of the
+// test encoder mean.onnx, one computing user vectors with it and one with the
+// mean in Go: every response must hold the same items with the same scores
+// within 1e-6. Property 2 holds for the second pipeline (TestProperty2NoSeenOrRepeatedItems),
+// so it holds for the first on these requests too.
+func TestONNXEncoderMatchesMean(t *testing.T) {
+	if err := onnx.Init(onnxtest.Lib(t)); err != nil {
+		t.Fatal(err)
+	}
+	const n, seqLen = onnxtest.MeanItems, 5
+	r := rand.New(rand.NewPCG(5, 6))
+	m := matrix(t, onnxtest.MeanDim, onnxtest.MeanVectors())
+	ids := make([]string, n+1)
+	cooc := make([]int32, (n+1)*bundle.CoocWidth)
+	for i := 1; i <= n; i++ {
+		ids[i] = fmt.Sprint("i", i)
+		for j := range r.IntN(5) {
+			cooc[i*bundle.CoocWidth+j] = int32(1 + r.IntN(n))
+		}
+	}
+	popular := []int32{3, 7, 1}
+	man := bundle.Manifest{ModelVersion: "t", ItemCount: n, Dim: onnxtest.MeanDim, MaxSeqLen: seqLen}
+	enc, err := onnx.NewEncoder(onnxtest.Model(t, "mean.onnx"), seqLen, onnxtest.MeanDim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withEncoder := bundle.New(man, ids, m, cooc, popular)
+	withEncoder.Encoder = enc
+	t.Cleanup(func() {
+		if err := withEncoder.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	var events []history.Event
+	for u := range 20 {
+		for e := range r.IntN(12) {
+			events = append(events, history.Event{ID: uint64(u<<20 | e), User: fmt.Sprint("u", u), Item: int32(1 + r.IntN(n)), TS: int64(r.IntN(100))})
+		}
+	}
+	store := storeWith(t, events...)
+	viaMean := &Pipeline{Bundle: bundle.New(man, ids, m, cooc, popular), History: store}
+	viaONNX := &Pipeline{Bundle: withEncoder, History: store}
+	ctx := context.Background()
+	for c := range 300 {
+		req := Request{User: fmt.Sprint("u", r.IntN(21)), K: 1 + r.IntN(n), TS: int64(r.IntN(110)), Exclude: []string{fmt.Sprint("i", 1+r.IntN(n))}}
+		want, err := viaMean.Recommend(ctx, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := viaONNX.Recommend(ctx, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		same := len(got.Items) == len(want.Items)
+		for i := 0; same && i < len(got.Items); i++ {
+			same = got.Items[i].ID == want.Items[i].ID && math.Abs(got.Items[i].Score-want.Items[i].Score) <= 1e-6
+		}
+		if !same {
+			t.Fatalf("case %d %+v: encoder %v, mean %v", c, req, got.Items, want.Items)
+		}
+	}
 }

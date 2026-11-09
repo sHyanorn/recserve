@@ -9,3 +9,4 @@ __pycache__/
 .venv/
 /bin/
 !internal/npy/testdata/*.npy
+!internal/onnx/onnxtest/testdata/*.onnx

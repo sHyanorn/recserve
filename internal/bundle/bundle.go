@@ -4,6 +4,7 @@ package bundle
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/sHyanorn/recserve/internal/npy"
+	"github.com/sHyanorn/recserve/internal/onnx"
 	"github.com/sHyanorn/recserve/internal/vec"
 )
 
@@ -53,9 +55,10 @@ type Bundle struct {
 	Dir      string
 	IDs      []string // IDs[i] is the raw ID of internal ID i; IDs[0] is ""
 	Vectors  vec.Matrix
-	InvNorms []float32 // 1 / the norm of each row of Vectors, 0 for a zero row
-	Cooc     []int32   // row i holds item i's co-occurring IDs, CoocWidth per row, 0-padded
-	Popular  []int32   // best first
+	InvNorms []float32     // 1 / the norm of each row of Vectors, 0 for a zero row
+	Cooc     []int32       // row i holds item i's co-occurring IDs, CoocWidth per row, 0-padded
+	Popular  []int32       // best first
+	Encoder  *onnx.Encoder // user_encoder.onnx; nil when the user vector is the mean
 
 	index map[string]int32
 }
@@ -68,49 +71,49 @@ type Options struct {
 }
 
 // Load reads dir, verifies every checksum, shape and golden case, and
-// applies the train cutoff check.
+// applies the train cutoff check. A bundle with user_encoder onnx needs
+// ONNX Runtime (onnx.Init) and must be closed when no longer used.
 func Load(dir string, opt Options) (*Bundle, error) {
-	b, err := load(dir, opt)
-	if err != nil {
-		return nil, fmt.Errorf("bundle %s: %w", dir, err)
+	b := &Bundle{Dir: dir}
+	if err := b.load(opt); err != nil {
+		return nil, fmt.Errorf("bundle %s: %w", dir, errors.Join(err, b.Close()))
 	}
 	return b, nil
 }
 
-func load(dir string, opt Options) (*Bundle, error) {
-	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+func (b *Bundle) load(opt Options) error {
+	raw, err := os.ReadFile(filepath.Join(b.Dir, "manifest.json"))
 	if err != nil {
-		return nil, err
+		return err
 	}
-	b := &Bundle{Dir: dir}
 	if err := json.Unmarshal(raw, &b.Manifest); err != nil {
-		return nil, fmt.Errorf("manifest: %w", err)
+		return fmt.Errorf("manifest: %w", err)
 	}
 	m := &b.Manifest
 	switch {
 	case m.FormatVersion != FormatVersion:
-		return nil, fmt.Errorf("format_version %d, want %d", m.FormatVersion, FormatVersion)
-	case m.Metric != "dot" || m.PadID != 0 || m.UserEncoder != "mean":
-		return nil, fmt.Errorf("unsupported metric %q, pad_id %d or user_encoder %q", m.Metric, m.PadID, m.UserEncoder)
+		return fmt.Errorf("format_version %d, want %d", m.FormatVersion, FormatVersion)
+	case m.Metric != "dot" || m.PadID != 0 || (m.UserEncoder != "mean" && m.UserEncoder != "onnx"):
+		return fmt.Errorf("unsupported metric %q, pad_id %d or user_encoder %q", m.Metric, m.PadID, m.UserEncoder)
 	case m.ItemCount <= 0 || m.Dim <= 0 || m.MaxSeqLen <= 0 || m.ModelVersion == "":
-		return nil, errors.New("manifest: item_count, dim, max_seq_len and model_version are required")
+		return errors.New("manifest: item_count, dim, max_seq_len and model_version are required")
 	}
 	if opt.FirstTestTS != 0 && m.TrainCutoffTS >= opt.FirstTestTS {
-		return nil, fmt.Errorf("%w: train_cutoff_ts %d, first test event %d", ErrCutoff, m.TrainCutoffTS, opt.FirstTestTS)
+		return fmt.Errorf("%w: train_cutoff_ts %d, first test event %d", ErrCutoff, m.TrainCutoffTS, opt.FirstTestTS)
 	}
 
 	files := map[string][]byte{}
 	for name, want := range m.SHA256 {
 		if name != filepath.Base(name) || name == "manifest.json" {
-			return nil, fmt.Errorf("manifest lists %q", name)
+			return fmt.Errorf("manifest lists %q", name)
 		}
-		data, err := os.ReadFile(filepath.Join(dir, name))
+		data, err := os.ReadFile(filepath.Join(b.Dir, name))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		sum := sha256.Sum256(data)
 		if hex.EncodeToString(sum[:]) != want {
-			return nil, fmt.Errorf("%s: checksum mismatch", name)
+			return fmt.Errorf("%s: checksum mismatch", name)
 		}
 		files[name] = data
 	}
@@ -124,71 +127,81 @@ func load(dir string, opt Options) (*Bundle, error) {
 
 	ids, err := need("items.ids")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	b.IDs = append([]string{""}, strings.Split(strings.TrimSuffix(string(ids), "\n"), "\n")...)
 	if len(b.IDs) != m.ItemCount+1 {
-		return nil, fmt.Errorf("items.ids has %d lines, item_count is %d", len(b.IDs)-1, m.ItemCount)
+		return fmt.Errorf("items.ids has %d lines, item_count is %d", len(b.IDs)-1, m.ItemCount)
 	}
 	b.index = make(map[string]int32, m.ItemCount)
 	for i, id := range b.IDs[1:] {
 		if id == "" {
-			return nil, fmt.Errorf("items.ids line %d is empty", i+1)
+			return fmt.Errorf("items.ids line %d is empty", i+1)
 		}
 		if _, dup := b.index[id]; dup {
-			return nil, fmt.Errorf("items.ids repeats %q", id)
+			return fmt.Errorf("items.ids repeats %q", id)
 		}
 		b.index[id] = int32(i + 1)
 	}
 
 	data, err := need("items.npy")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	a, err := npy.Parse(data)
 	if err != nil {
-		return nil, fmt.Errorf("items.npy: %w", err)
+		return fmt.Errorf("items.npy: %w", err)
 	}
 	if a.F32 == nil || !slices.Equal(a.Shape, []int{m.ItemCount + 1, m.Dim}) {
-		return nil, fmt.Errorf("items.npy: shape %v, want [%d %d] float32", a.Shape, m.ItemCount+1, m.Dim)
+		return fmt.Errorf("items.npy: shape %v, want [%d %d] float32", a.Shape, m.ItemCount+1, m.Dim)
 	}
 	for _, v := range a.F32 {
 		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
-			return nil, errors.New("items.npy: non-finite value")
+			return errors.New("items.npy: non-finite value")
 		}
 	}
 	if b.Vectors, err = vec.NewMatrix(m.Dim, a.F32); err != nil {
-		return nil, err
+		return err
 	}
 	for _, v := range b.Vectors.Row(0) {
 		if v != 0 {
-			return nil, errors.New("items.npy: padding row is not zero")
+			return errors.New("items.npy: padding row is not zero")
 		}
 	}
 	b.InvNorms = b.Vectors.InvNorms()
 
 	if _, ok := files["cooc_ids.npy"]; ok {
 		if b.Cooc, err = idArray(files["cooc_ids.npy"], m.ItemCount, []int{m.ItemCount + 1, CoocWidth}); err != nil {
-			return nil, fmt.Errorf("cooc_ids.npy: %w", err)
+			return fmt.Errorf("cooc_ids.npy: %w", err)
 		}
 	}
 	if data, ok := files["popular.npy"]; ok {
 		if b.Popular, err = idArray(data, m.ItemCount, nil); err != nil {
-			return nil, fmt.Errorf("popular.npy: %w", err)
+			return fmt.Errorf("popular.npy: %w", err)
 		}
 		if slices.Contains(b.Popular, 0) {
-			return nil, errors.New("popular.npy: padding ID 0")
+			return errors.New("popular.npy: padding ID 0")
+		}
+	}
+
+	if _, listed := files["user_encoder.onnx"]; listed && m.UserEncoder == "mean" {
+		return errors.New("user_encoder.onnx listed for user_encoder mean")
+	}
+	if m.UserEncoder == "onnx" {
+		model, err := need("user_encoder.onnx")
+		if err != nil {
+			return err
+		}
+		if b.Encoder, err = onnx.NewEncoder(model, m.MaxSeqLen, m.Dim); err != nil {
+			return fmt.Errorf("user_encoder.onnx: %w", err)
 		}
 	}
 
 	golden, err := need("golden.jsonl")
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := b.checkGolden(golden); err != nil {
-		return nil, err
-	}
-	return b, nil
+	return b.checkGolden(golden)
 }
 
 // idArray parses an int64 array of internal IDs in [0, itemCount]; shape, if
@@ -236,9 +249,12 @@ func (b *Bundle) checkGolden(data []byte) error {
 				return fmt.Errorf("golden %d: history ID %d out of range", n, id)
 			}
 		}
-		uv := b.UserVector(c.History)
+		uv, err := b.UserVector(context.Background(), c.History)
+		if err != nil {
+			return fmt.Errorf("golden %d: %w", n, err)
+		}
 		if len(uv) != len(c.UserEmb) {
-			return fmt.Errorf("golden %d: user vector has %d values, want %d", n, len(c.UserEmb), len(uv))
+			return fmt.Errorf("golden %d: user vector has %d values, want %d", n, len(uv), len(c.UserEmb))
 		}
 		for j, v := range uv {
 			if d := math.Abs(float64(v - c.UserEmb[j])); d > GoldenTolerance {
@@ -278,19 +294,37 @@ func New(m Manifest, ids []string, vectors vec.Matrix, cooc, popular []int32) *B
 	return b
 }
 
-// UserVector is the mean of the vectors of the last MaxSeqLen history items.
-// It is nil when there is no such item or the mean is zero (items without
-// training data have zero vectors), so the caller falls back to sources that
-// need no user vector.
-func (b *Bundle) UserVector(history []int32) []float32 {
+// UserVector returns the user vector of a history, oldest item first: the
+// encoder's output for the last MaxSeqLen items, or their mean if the bundle
+// has no encoder. It is nil when the history is empty or the vector is zero
+// (items without training data have zero vectors), so the caller falls back
+// to sources that need no user vector. An encoder error is returned; if ctx
+// ends during the encoder run, the error wraps ctx.Err().
+func (b *Bundle) UserVector(ctx context.Context, history []int32) ([]float32, error) {
 	if len(history) > b.MaxSeqLen {
 		history = history[len(history)-b.MaxSeqLen:]
 	}
-	uv := b.Vectors.Mean(history)
+	var uv []float32
+	if b.Encoder != nil {
+		var err error
+		if uv, err = b.Encoder.Encode(ctx, history); err != nil {
+			return nil, err
+		}
+	} else {
+		uv = b.Vectors.Mean(history)
+	}
 	if !slices.ContainsFunc(uv, func(v float32) bool { return v != 0 }) {
+		return nil, nil
+	}
+	return uv, nil
+}
+
+// Close releases the encoder, if any; the bundle must not be used after.
+func (b *Bundle) Close() error {
+	if b.Encoder == nil {
 		return nil
 	}
-	return uv
+	return b.Encoder.Close()
 }
 
 // Lookup returns the internal ID of a raw item ID.

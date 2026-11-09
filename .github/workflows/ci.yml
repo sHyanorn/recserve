@@ -7,11 +7,21 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # Tests that need ONNX Runtime fail instead of skipping when it is missing.
+      RECSERVE_REQUIRE_ORT: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - name: ONNX Runtime 1.31.1
+        run: |
+          curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/ort.tgz" \
+            https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-linux-x64-1.31.1.tgz
+          echo "c849e36a1ef3e22d4ff217b9d1ce4a3cf5b9467b975610913ae959ad5b16bdc9  $RUNNER_TEMP/ort.tgz" | sha256sum -c
+          tar xzf "$RUNNER_TEMP/ort.tgz" -C "$RUNNER_TEMP"
+          echo "RECSERVE_ORT_LIB=$RUNNER_TEMP/onnxruntime-linux-x64-1.31.1/lib/libonnxruntime.so.1.31.1" >> "$GITHUB_ENV"
       - run: go vet ./...
       - run: go test -race ./...
 

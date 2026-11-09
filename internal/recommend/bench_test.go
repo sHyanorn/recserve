@@ -2,6 +2,7 @@ package recommend
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/sHyanorn/recserve/internal/bundle"
+	"github.com/sHyanorn/recserve/internal/onnx"
 	"github.com/sHyanorn/recserve/internal/vec"
 )
 
@@ -20,12 +22,15 @@ type rankCase struct {
 	seen    map[int32]bool
 }
 
-func newRankCase(p *Pipeline, hist []int32) rankCase {
+func newRankCase(b *testing.B, p *Pipeline, hist []int32) rankCase {
 	seen := make(map[int32]bool, len(hist))
 	for _, id := range hist {
 		seen[id] = true
 	}
-	uv := p.Bundle.UserVector(hist)
+	uv, err := p.Bundle.UserVector(context.Background(), hist)
+	if err != nil {
+		b.Fatal(err)
+	}
 	var results [][]vec.Hit
 	for _, src := range p.sources(hist, uv, seen) {
 		results = append(results, src())
@@ -80,7 +85,7 @@ func BenchmarkRank(b *testing.B) {
 		for j := range hist {
 			hist[j] = int32(1 + r.IntN(n))
 		}
-		cases[i] = newRankCase(p, hist)
+		cases[i] = newRankCase(b, p, hist)
 	}
 	benchRank(b, p, cases)
 }
@@ -92,10 +97,16 @@ func BenchmarkRankRealData(b *testing.B) {
 	if dir == "" {
 		b.Skip("RECSERVE_BUNDLE not set")
 	}
+	initORTIfSet(b)
 	bd, err := bundle.Load(dir, bundle.Options{})
 	if err != nil {
 		b.Fatal(err)
 	}
+	b.Cleanup(func() {
+		if err := bd.Close(); err != nil {
+			b.Error(err)
+		}
+	})
 	f, err := os.Open(filepath.Join(dir, "golden.jsonl"))
 	if err != nil {
 		b.Fatal(err)
@@ -112,10 +123,21 @@ func BenchmarkRankRealData(b *testing.B) {
 		if err := json.Unmarshal(sc.Bytes(), &g); err != nil {
 			b.Fatal(err)
 		}
-		cases = append(cases, newRankCase(p, g.History))
+		cases = append(cases, newRankCase(b, p, g.History))
 	}
 	if err := sc.Err(); err != nil {
 		b.Fatal(err)
 	}
 	benchRank(b, p, cases)
+}
+
+// initORTIfSet initializes ONNX Runtime when RECSERVE_ORT_LIB names it, so
+// that real-data tests also load bundles with an ONNX user encoder.
+func initORTIfSet(t testing.TB) {
+	t.Helper()
+	if lib := os.Getenv("RECSERVE_ORT_LIB"); lib != "" {
+		if err := onnx.Init(lib); err != nil {
+			t.Fatal(err)
+		}
+	}
 }

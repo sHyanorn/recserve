@@ -1,5 +1,6 @@
-GO   ?= go
-DATA ?= data
+GO      ?= go
+DATA    ?= data
+ENCODER ?= mean
 
 .DEFAULT_GOAL := help
 .PHONY: help build test lint fmt data bundle
@@ -22,5 +23,5 @@ fmt: ## Format code
 data: ## Download the Amazon 2023 Video_Games split and metadata into DATA
 	scripts/data.sh $(DATA)
 
-bundle: ## Build the baseline bundle into DATA/bundle (needs uv)
-	cd tools/bundle && uv run --locked python build.py $(abspath $(DATA)) $(abspath $(DATA))/bundle
+bundle: ## Build the baseline bundle into DATA/bundle (needs uv); ENCODER=onnx adds user_encoder.onnx
+	cd tools/bundle && uv run --locked python build.py $(abspath $(DATA)) $(abspath $(DATA))/bundle --encoder $(ENCODER)
