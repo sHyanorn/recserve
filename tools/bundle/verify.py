@@ -1,11 +1,12 @@
-"""Verify a bundle directory: checksums, shapes and golden cases.
+"""Verify a bundle directory: checksums, shapes, the ranker and golden cases.
 
 usage: verify.py BUNDLE_DIR
 
 Recomputes every golden case from the files on disk with the same rules the
 service uses (user vector from the last max_seq_len history items, by mean
 or by user_encoder.onnx; exact dot product; history excluded; ties by
-internal ID) and exits non-zero on any mismatch.
+internal ID) and exits non-zero on any mismatch. A ranker must declare the
+service's ranker_features and pass its load check (build.check_ranker).
 """
 
 import json
@@ -13,7 +14,7 @@ import sys
 
 import numpy as np
 
-from build import encode, mean_vector, session, sha256, top_k
+from build import RANKER_FEATURES, check_ranker, encode, mean_vector, session, sha256, top_k
 
 TOL = 1e-4
 
@@ -47,6 +48,14 @@ def main(d):
     if m["user_encoder"] == "onnx":
         with open(f"{d}/user_encoder.onnx", "rb") as f:
             sess = session(f.read())
+    if "ranker.onnx" in m["sha256"]:
+        if m.get("ranker_features") != RANKER_FEATURES:
+            sys.exit(f"ranker_features {m.get('ranker_features')}, the service computes {RANKER_FEATURES}")
+        with open(f"{d}/ranker.onnx", "rb") as f:
+            if msg := check_ranker(session(f.read()), len(RANKER_FEATURES)):
+                sys.exit(f"ranker.onnx: {msg}")
+    elif "ranker_features" in m:
+        sys.exit("ranker_features without ranker.onnx")
     with open(f"{d}/golden.jsonl") as f:
         cases = [json.loads(line, parse_constant=reject) for line in f]
     for n, c in enumerate(cases):
@@ -63,7 +72,8 @@ def main(d):
             sys.exit(f"golden {n}: user vector differs by {diff}")
         if top_k(vecs, uv, set(c["history"]), 10) != c["top10"]:
             sys.exit(f"golden {n}: top-10 differs")
-    print(f"ok: {len(cases)} golden cases, {len(ids)} items, user encoder {m['user_encoder']}")
+    ranker = "yes" if "ranker.onnx" in m["sha256"] else "no"
+    print(f"ok: {len(cases)} golden cases, {len(ids)} items, user encoder {m['user_encoder']}, ranker {ranker}")
 
 
 if __name__ == "__main__":

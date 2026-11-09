@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 
 	ort "github.com/yalue/onnxruntime_go"
@@ -108,6 +109,32 @@ func run(ctx context.Context, sess *ort.DynamicAdvancedSession, c *call) (reusab
 		err = fmt.Errorf("%w: %w", ctx.Err(), err)
 	}
 	return true, err
+}
+
+// release returns c to free, or destroys it if it is not reusable. A
+// failure is reported as itself, not as the end of a context the run error
+// may wrap.
+func release(free *freeList[*call], c *call, reusable bool, runErr error) error {
+	var err error
+	if reusable {
+		err = free.put(c)
+	} else {
+		err = c.destroy()
+	}
+	if err != nil && runErr != nil {
+		err = fmt.Errorf("%w, after %s", err, runErr.Error())
+	}
+	return err
+}
+
+// finite reports whether every value of v is finite.
+func finite(v []float32) bool {
+	for _, x := range v {
+		if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
+			return false
+		}
+	}
+	return true
 }
 
 // freeList keeps up to cap(idle) idle values for reuse; values returned

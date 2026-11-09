@@ -71,3 +71,25 @@ func MeanVectors() []float32 {
 	}
 	return v
 }
+
+// LinearW and LinearB are the weights and bias of linear_ranker.onnx: the
+// score of a row of features x is x · LinearW + LinearB.
+var LinearW = []float32{1, 2, -1, 0.5, 0.25, -0.5}
+
+// LinearB is the bias of linear_ranker.onnx.
+const LinearB = 0.125
+
+// Linear scores rows of len(LinearW) features as linear_ranker.onnx does,
+// up to rounding.
+func Linear(features []float32) []float32 {
+	n := len(features) / len(LinearW)
+	out := make([]float32, n)
+	for i := range n {
+		s := float64(LinearB)
+		for j, w := range LinearW {
+			s += float64(features[i*len(LinearW)+j]) * float64(w)
+		}
+		out[i] = float32(s)
+	}
+	return out
+}

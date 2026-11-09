@@ -45,7 +45,7 @@ func benchRank(b *testing.B, p *Pipeline, cases []rankCase) {
 			i := 0
 			for b.Loop() {
 				c := cases[i%len(cases)]
-				p.rank(c.results, c.uv, c.seen, k)
+				mmr(p.Bundle.Vectors, p.Bundle.InvNorms, p.retrievalScores(c.results, c.uv, c.seen), k, MMRLambda)
 				i++
 			}
 			var cands int

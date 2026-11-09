@@ -82,7 +82,7 @@ All load tests run on one 4-vCPU VM. Kafka, Valkey, the shards and their replica
 | Feature lookup (Valkey) | 3 ms | history from the request only, reason `history_unavailable` |
 | User encoder | 5 ms | vector retrieval skipped |
 | Retrieval (parallel; shard deadline 15 ms) | 15 ms | source skipped, partial shards reported |
-| Ranking (500 candidates) | 15 ms | retrieval order kept |
+| Ranking (at most 512 candidates) | 15 ms | retrieval order kept |
 | Re-ranking and filters | 2 ms | — |
 | Other overhead | 9 ms | — |
 | **Server-side end to end** | **50 ms** | |
@@ -124,16 +124,29 @@ A bundle is a directory `bundle/<version>/`:
 
 | File | Content |
 |---|---|
-| `manifest.json` | `format_version`, `model_version`, `dataset`, `train_cutoff_ts` (latest event time used in training), `item_count`, `dim`, `metric` (`dot`), `normalized`, `max_seq_len`, `pad_id` (0), `user_encoder` (`mean` or `onnx`), build parameters, sha256 of every other file |
+| `manifest.json` | `format_version`, `model_version`, `dataset`, `train_cutoff_ts` (latest event time used in training), `item_count`, `dim`, `metric` (`dot`), `normalized`, `max_seq_len`, `pad_id` (0), `user_encoder` (`mean` or `onnx`), `ranker_features` (with a ranker), build parameters, sha256 of every other file |
 | `items.ids` | One raw item ID per line; line i is internal ID i, starting at 1 |
 | `items.npy` | float32, (item_count + 1) × D, little-endian; row i is internal ID i, row 0 is padding and all zeros |
 | `user_encoder.onnx` | With `user_encoder: onnx`: input `item_seq` int64 [B, L], left-padded with 0; output `user_emb` float32 [B, D]. The service passes B = 1 and L = `max_seq_len`: the last `max_seq_len` history items. With `mean`, absent: the user vector is the mean of the last `max_seq_len` history items' vectors. A user vector of zeros counts as none; from an encoder given items whose vectors are not zero, it is an error. Score = dot product |
-| `ranker.onnx` | Optional |
+| `ranker.onnx` | Optional. Input `features` float32 [C, F], one row per candidate, the columns named by `ranker_features` in the manifest; output `score` float32 [C], higher is better, any finite range. Each row's score must depend on that row only: the service passes C = 512 rows, those past the candidates set to zero. `ranker_features` must equal the list below, in order, and is absent without a ranker |
 | `cooc_ids.npy`, `cooc_counts.npy` | Optional. int64 and float32, (item_count + 1) × 50: each item's most frequent co-occurring items and their counts, 0-padded |
 | `popular.npy` | Optional. int64: the most popular internal IDs, best first |
 | `golden.jsonl` | Sample histories with the expected user vector (from the encoder, if the bundle has one) and top-10 IDs (history excluded, ties by internal ID) |
 
-The service verifies checksums and replays `golden.jsonl` through the user encoder (tolerance 1e-4 on the user vector, exact top-10) before it accepts a bundle, and rejects one whose `train_cutoff_ts` is not before the first test event of the evaluation split; a failure rejects the swap. `tools/bundle` builds the baseline bundle (implicit-feedback ALS on the train split) and verifies a bundle with the same rules in Python.
+### Ranker features
+
+H is the request's history: every stored event of the user strictly before the request time, ordered by time, then event ID, one entry per event (an item may appear more than once). u is the user vector, computed from the last `max_seq_len` entries of H (none if H is empty or the vector is zero); v_i is row i of `items.npy`. Every value is computed in float64 from these float32 inputs and rounded to float32. For candidate i:
+
+1. `vector_score`: u · v_i; 0 without a user vector
+2. `cooc_score`: the largest 1 / ((s + 1)(r + 1)) over the seeds s = 0, 1, …, min(10, |H|) − 1, seed s being the entry H[|H| − 1 − s] (s = 0 is the latest), and the positions r, counted from 0, where i appears in that item's row of `cooc_ids.npy` before the row's first 0; 0 if there is none
+3. `popular_score`: 1 / (r + 1) for the smallest r < 100 with `popular.npy`[r] = i; 0 if there is none
+4. `item_norm`: ‖v_i‖ = √(v_i · v_i)
+5. `last_item_cosine`: v_i · v_l / (‖v_i‖ ‖v_l‖), l being the last entry of H; 0 if H is empty or either norm is 0
+6. `log_history_len`: ln(1 + |H|)
+
+The candidates are the union of the retrieval sources' results without the seen and excluded items. Each has a retrieval score: u · v_i, or without a user vector its best source score (the values above for `cooc_score` and `popular_score`, and their maximum). With a ranker, the 512 candidates with the highest retrieval scores (ties to the lower internal ID) are ranked and the rest are dropped and counted in the metrics; a candidate's score becomes the ranker's. If the ranker times out or fails, the retrieval scores stay. MMR scales the scores to [0, 1] over the candidates (min-max) before weighing them against similarity, so the ranker's scale does not change the diversity weight.
+
+The service verifies checksums and replays `golden.jsonl` through the user encoder (tolerance 1e-4 on the user vector, exact top-10), and runs the ranker twice on 512 rows, all zero, then with row 0 changed, requiring the other rows' scores to stay the same bit for bit, before it accepts a bundle, and rejects one whose `train_cutoff_ts` is not before the first test event of the evaluation split; a failure rejects the swap. `tools/bundle` builds the baseline bundle (implicit-feedback ALS on the train split) and verifies a bundle with the same rules in Python.
 
 ## 9. Data
 

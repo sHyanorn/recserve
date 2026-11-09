@@ -34,10 +34,12 @@ type Server struct {
 	Now      func() time.Time
 	Log      *slog.Logger
 
-	ready    atomic.Bool
-	requests *prometheus.CounterVec
-	latency  *prometheus.HistogramVec
-	reg      *prometheus.Registry
+	ready           atomic.Bool
+	requests        *prometheus.CounterVec
+	latency         *prometheus.HistogramVec
+	rankerTruncated prometheus.Counter
+	rankerDropped   prometheus.Counter
+	reg             *prometheus.Registry
 }
 
 // New returns a server that is not ready until SetReady(true).
@@ -50,7 +52,14 @@ func New(p *recommend.Pipeline, h history.Store, log *slog.Logger) *Server {
 		Name: "recserve_http_request_duration_seconds", Help: "Server-side request duration by route.",
 		Buckets: prometheus.ExponentialBuckets(0.0005, 2, 14),
 	}, []string{"route"})
-	s.reg.MustRegister(s.requests, s.latency, collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	s.rankerTruncated = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "recserve_ranker_truncated_requests_total", Help: "Requests with more candidates than the ranker takes.",
+	})
+	s.rankerDropped = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "recserve_ranker_candidates_dropped_total", Help: "Candidates left out of ranking for want of ranker rows.",
+	})
+	s.reg.MustRegister(s.requests, s.latency, s.rankerTruncated, s.rankerDropped,
+		collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return s
 }
 
@@ -181,6 +190,10 @@ func (s *Server) recommend(w http.ResponseWriter, r *http.Request) error {
 	resp, err := s.Pipeline.Recommend(r.Context(), req)
 	if err != nil {
 		return err
+	}
+	if resp.Dropped > 0 {
+		s.rankerTruncated.Inc()
+		s.rankerDropped.Add(float64(resp.Dropped))
 	}
 	return writeJSON(w, http.StatusOK, resp)
 }

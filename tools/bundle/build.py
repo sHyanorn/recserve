@@ -98,6 +98,46 @@ def mean_encoder(vecs):
         init))
 
 
+# The ranker's input features, in column order (SPEC §8, Ranker features).
+RANKER_FEATURES = ["vector_score", "cooc_score", "popular_score", "item_norm", "last_item_cosine", "log_history_len"]
+# Rows the service passes to the ranker; rows past the candidates are zero.
+RANKER_ROWS = 512
+
+
+def linear_ranker(w, b):
+    """A ranker as a graph: score = features @ w + b, input features float32
+    [C, F], output score float32 [C]."""
+    w = np.asarray(w, dtype=np.float32)
+    nodes = [
+        helper.make_node("MatMul", ["features", "w"], ["wx"]),
+        helper.make_node("Add", ["wx", "b"], ["score"]),
+    ]
+    init = [numpy_helper.from_array(w, "w"), numpy_helper.from_array(np.array(b, dtype=np.float32), "b")]
+    return model(helper.make_graph(
+        nodes, "linear_ranker",
+        [helper.make_tensor_value_info("features", TensorProto.FLOAT, ["C", len(w)])],
+        [helper.make_tensor_value_info("score", TensorProto.FLOAT, ["C"])],
+        init))
+
+
+def check_ranker(sess, n_features):
+    """Run the service's load check on a ranker: RANKER_ROWS rows of zeros,
+    then the same with row 0 set to fixed values; the scores must be finite,
+    one per row, and rows 1 and up must not change, bit for bit. Returns an
+    error message or None."""
+    x = np.zeros((RANKER_ROWS, n_features), dtype=np.float32)
+    zero = sess.run(["score"], {"features": x})[0]
+    x[0] = np.arange(1, n_features + 1, dtype=np.float32) / 4
+    one = sess.run(["score"], {"features": x})[0]
+    if zero.shape != (RANKER_ROWS,) or one.shape != (RANKER_ROWS,) or zero.dtype != np.float32:
+        return f"ranker output {zero.dtype} {zero.shape}, want float32 ({RANKER_ROWS},)"
+    if not (np.isfinite(zero).all() and np.isfinite(one).all()):
+        return "ranker output is not finite"
+    if zero[1:].tobytes() != one[1:].tobytes():
+        return "ranker scores depend on other rows"
+    return None
+
+
 def session(model_bytes):
     """An ONNX Runtime session with one intra-op thread, as the service runs it (D015)."""
     opts = ort.SessionOptions()

@@ -288,6 +288,62 @@ func TestLoadRejectsONNX(t *testing.T) {
 	}
 }
 
+// withRanker adds the named test model as the bundle's ranker, with the
+// service's ranker_features.
+func withRanker(t testing.TB, model string) editFunc {
+	data := onnxtest.Model(t, model)
+	return func(f map[string][]byte, m map[string]any) {
+		f["ranker.onnx"] = data
+		m["ranker_features"] = RankerFeatures
+	}
+}
+
+func TestLoadRanker(t *testing.T) {
+	initORT(t)
+	b, err := Load(writeBundle(t, withRanker(t, "linear_ranker.onnx")), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Ranker == nil || b.Ranker.Rows != RankerRows || b.Ranker.Features != len(RankerFeatures) {
+		t.Fatalf("ranker %+v", b.Ranker)
+	}
+	x := []float32{1, 1, 1, 1, 1, 1}
+	if _, err := b.Ranker.Rank(context.Background(), x); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Ranker.Rank(context.Background(), x); !errors.Is(err, onnx.ErrClosed) {
+		t.Fatalf("after Close: %v", err)
+	}
+}
+
+func TestLoadRejectsRanker(t *testing.T) {
+	initORT(t)
+	features := func(v any) editFunc {
+		return func(_ map[string][]byte, m map[string]any) { m["ranker_features"] = v }
+	}
+	reordered := append([]string{RankerFeatures[1], RankerFeatures[0]}, RankerFeatures[2:]...)
+	cases := map[string]struct {
+		edits []editFunc
+		want  string
+	}{
+		"features missing":   {[]editFunc{withRanker(t, "linear_ranker.onnx"), features(nil)}, "ranker_features"},
+		"features reordered": {[]editFunc{withRanker(t, "linear_ranker.onnx"), features(reordered)}, "ranker_features"},
+		"feature extra":      {[]editFunc{withRanker(t, "linear_ranker.onnx"), features(append(RankerFeatures[:6:6], "x"))}, "ranker_features"},
+		"features alone":     {[]editFunc{features(RankerFeatures)}, "ranker_features without ranker.onnx"},
+		"rows mixed":         {[]editFunc{withRanker(t, "cross_row_ranker.onnx")}, "depends on row 0"},
+		"column output":      {[]editFunc{withRanker(t, "column_ranker.onnx")}, "Invalid rank for output: score"},
+		"other model":        {[]editFunc{withRanker(t, "mean.onnx")}, "Invalid input name: features"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			checkRejected(t, writeBundle(t, tc.edits...), Options{}, tc.want)
+		})
+	}
+}
+
 func checkRejected(t *testing.T, dir string, opt Options, want string) {
 	t.Helper()
 	b, err := Load(dir, opt)

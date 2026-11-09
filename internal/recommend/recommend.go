@@ -1,11 +1,12 @@
 // Package recommend runs the request path: history lookup, retrieval from
-// several sources in parallel, scoring, and re-ranking with the seen-item
-// filter, deduplication and MMR.
+// several sources in parallel, scoring, ranking with the bundle's ranker,
+// and re-ranking with the seen-item filter, deduplication and MMR.
 package recommend
 
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -28,6 +29,19 @@ const (
 	SourcePopular = "popular"
 )
 
+// Degradation reasons reported in a response.
+const (
+	RankerTimeout = "ranker_timeout"
+	RankerError   = "ranker_error"
+)
+
+// The sources' positions in the results of a request.
+const (
+	srcVector = iota
+	srcCooc
+	srcPopular
+)
+
 // Request is one recommendation request.
 type Request struct {
 	User    string
@@ -44,8 +58,19 @@ type Item struct {
 
 // Response is the result of a request.
 type Response struct {
-	Items        []Item `json:"items"`
-	ModelVersion string `json:"model_version"`
+	Items        []Item   `json:"items"`
+	ModelVersion string   `json:"model_version"`
+	Degraded     []string `json:"degraded"` // what was skipped or fell back; empty if nothing
+	// Dropped counts the candidates left out because the ranker takes at
+	// most bundle.RankerRows; they are the ones with the lowest retrieval
+	// scores.
+	Dropped int `json:"-"`
+}
+
+// Ranker scores rows of candidate features, bundle.RankerFeatures in order,
+// one score per row; higher is better.
+type Ranker interface {
+	Rank(ctx context.Context, features []float32) ([]float32, error)
 }
 
 // Pipeline answers requests from one bundle and a history store.
@@ -53,7 +78,18 @@ type Pipeline struct {
 	Bundle  *bundle.Bundle
 	History history.Store
 
-	skipSeenFilter bool // test only: the broken variant of property 2
+	rankWith       Ranker // test only: replaces the bundle's ranker
+	skipSeenFilter bool   // test only: the broken variant of property 2
+}
+
+func (p *Pipeline) ranker() Ranker {
+	if p.rankWith != nil {
+		return p.rankWith
+	}
+	if p.Bundle.Ranker != nil {
+		return p.Bundle.Ranker
+	}
+	return nil
 }
 
 type candidate struct {
@@ -95,17 +131,33 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error)
 	if err := ctx.Err(); err != nil {
 		return Response{}, err
 	}
-	picked := p.rank(results, uv, seen, req.K)
-	resp := Response{Items: make([]Item, len(picked)), ModelVersion: b.ModelVersion}
+	resp := Response{ModelVersion: b.ModelVersion, Degraded: []string{}}
+	scored := p.retrievalScores(results, uv, seen)
+	if rk := p.ranker(); rk != nil && len(scored) > 0 {
+		ranked, dropped, err := p.rank(ctx, rk, scored, results, hist, uv)
+		switch {
+		case err == nil:
+			scored, resp.Dropped = ranked, dropped
+		case errors.Is(ctx.Err(), context.Canceled):
+			return Response{}, err
+		case errors.Is(err, context.DeadlineExceeded):
+			resp.Degraded = append(resp.Degraded, RankerTimeout)
+		default:
+			resp.Degraded = append(resp.Degraded, RankerError)
+		}
+	}
+	picked := mmr(b.Vectors, b.InvNorms, scored, req.K, MMRLambda)
+	resp.Items = make([]Item, len(picked))
 	for i, h := range picked {
 		resp.Items[i] = Item{ID: b.IDs[h.ID], Score: h.Score}
 	}
 	return resp, nil
 }
 
-// rank merges the sources' results, scores each candidate, drops seen items
-// and picks k by MMR.
-func (p *Pipeline) rank(results [][]vec.Hit, uv []float32, seen map[int32]bool, k int) []vec.Hit {
+// retrievalScores merges the sources' results and drops seen items. A
+// candidate's score is its dot product with the user vector, or, without
+// one, its best source score.
+func (p *Pipeline) retrievalScores(results [][]vec.Hit, uv []float32, seen map[int32]bool) []vec.Hit {
 	b := p.Bundle
 	cands := merge(results)
 	scored := make([]vec.Hit, 0, len(cands))
@@ -119,13 +171,79 @@ func (p *Pipeline) rank(results [][]vec.Hit, uv []float32, seen map[int32]bool, 
 	if !p.skipSeenFilter {
 		scored = slices.DeleteFunc(scored, func(h vec.Hit) bool { return seen[h.ID] })
 	}
-	return mmr(b.Vectors, b.InvNorms, scored, k, MMRLambda)
+	return scored
+}
+
+// rank scores the candidates with rk: the bundle.RankerRows best by
+// retrieval score, whose scores become rk's; the rest are dropped, and
+// their number returned.
+func (p *Pipeline) rank(ctx context.Context, rk Ranker, scored []vec.Hit, results [][]vec.Hit, hist []int32, uv []float32) ([]vec.Hit, int, error) {
+	cands := slices.Clone(scored)
+	slices.SortFunc(cands, func(a, b vec.Hit) int { // vec.Better first
+		return cmp.Or(cmp.Compare(b.Score, a.Score), cmp.Compare(a.ID, b.ID))
+	})
+	dropped := max(0, len(cands)-bundle.RankerRows)
+	cands = cands[:len(cands)-dropped]
+	scores, err := rk.Rank(ctx, p.features(cands, results, hist, uv))
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(scores) != len(cands) {
+		return nil, 0, fmt.Errorf("ranker returned %d scores for %d candidates", len(scores), len(cands))
+	}
+	for i, s := range scores {
+		cands[i].Score = float64(s)
+	}
+	return cands, dropped, nil
+}
+
+// features returns the ranker's input for cands, one row per candidate,
+// bundle.RankerFeatures in order (docs/SPEC.md §8). Each value is computed
+// in float64 and rounded to float32.
+func (p *Pipeline) features(cands []vec.Hit, results [][]vec.Hit, hist []int32, uv []float32) []float32 {
+	b := p.Bundle
+	cooc, popular := best(results[srcCooc]), best(results[srcPopular])
+	var last []float32
+	var lastNorm float64
+	if len(hist) > 0 {
+		last = b.Vectors.Row(hist[len(hist)-1])
+		lastNorm = math.Sqrt(vec.Dot(last, last))
+	}
+	histLen := math.Log1p(float64(len(hist)))
+	nf := len(bundle.RankerFeatures)
+	out := make([]float32, len(cands)*nf)
+	for i, c := range cands {
+		row := b.Vectors.Row(c.ID)
+		norm := math.Sqrt(vec.Dot(row, row))
+		var vs, cos float64
+		if uv != nil {
+			vs = vec.Dot(uv, row)
+		}
+		if norm > 0 && lastNorm > 0 {
+			cos = vec.Dot(row, last) / (norm * lastNorm)
+		}
+		f := out[i*nf : (i+1)*nf]
+		f[0], f[1], f[2] = float32(vs), float32(cooc[c.ID]), float32(popular[c.ID])
+		f[3], f[4], f[5] = float32(norm), float32(cos), float32(histLen)
+	}
+	return out
+}
+
+// best returns each ID's highest score among hits.
+func best(hits []vec.Hit) map[int32]float64 {
+	out := make(map[int32]float64, len(hits))
+	for _, h := range hits {
+		if s, ok := out[h.ID]; !ok || h.Score > s {
+			out[h.ID] = h.Score
+		}
+	}
+	return out
 }
 
 // sources returns the retrieval sources; each returns its hits, best first.
 func (p *Pipeline) sources(hist []int32, uv []float32, seen map[int32]bool) []func() []vec.Hit {
 	b := p.Bundle
-	return []func() []vec.Hit{
+	return []func() []vec.Hit{ // in the order of srcVector, srcCooc, srcPopular
 		func() []vec.Hit { // vector
 			if uv == nil {
 				return nil
@@ -156,16 +274,9 @@ func (p *Pipeline) sources(hist []int32, uv []float32, seen map[int32]bool) []fu
 // merge returns the union of the sources' hits, each ID once with its best
 // source score, ordered by ID.
 func merge(results [][]vec.Hit) []candidate {
-	best := map[int32]float64{}
-	for _, hits := range results {
-		for _, h := range hits {
-			if s, ok := best[h.ID]; !ok || h.Score > s {
-				best[h.ID] = h.Score
-			}
-		}
-	}
-	out := make([]candidate, 0, len(best))
-	for id, s := range best {
+	top := best(slices.Concat(results...))
+	out := make([]candidate, 0, len(top))
+	for id, s := range top {
 		out = append(out, candidate{id, s})
 	}
 	slices.SortFunc(out, func(a, b candidate) int { return cmp.Compare(a.id, b.id) })

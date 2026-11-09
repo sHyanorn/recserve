@@ -60,8 +60,9 @@ func randomPipeline(r *rand.Rand, n, users int) (*Pipeline, error) {
 }
 
 // checkProperty2 returns the first response that contains an item from the
-// user's history before the request (or the request's exclusions) or repeats an item.
-func checkProperty2(seed uint64, cases int, broken bool) error {
+// user's history before the request (or the request's exclusions) or repeats
+// an item; rk, if not nil, ranks the candidates.
+func checkProperty2(seed uint64, cases int, broken bool, rk Ranker) error {
 	r := rand.New(rand.NewPCG(seed, 0))
 	ctx := context.Background()
 	for c := range cases {
@@ -69,7 +70,7 @@ func checkProperty2(seed uint64, cases int, broken bool) error {
 		if err != nil {
 			return err
 		}
-		p.skipSeenFilter = broken
+		p.skipSeenFilter, p.rankWith = broken, rk
 		for range 10 {
 			user := fmt.Sprint("u", r.IntN(4))
 			ts := int64(r.IntN(110))
@@ -103,13 +104,13 @@ func checkProperty2(seed uint64, cases int, broken bool) error {
 }
 
 func TestProperty2NoSeenOrRepeatedItems(t *testing.T) {
-	if err := checkProperty2(1, 300, false); err != nil {
+	if err := checkProperty2(1, 300, false, nil); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestProperty2CatchesBrokenVariant(t *testing.T) {
-	if err := checkProperty2(1, 300, true); err == nil {
+	if err := checkProperty2(1, 300, true, nil); err == nil {
 		t.Fatal("the check passed a pipeline without the seen filter")
 	}
 }

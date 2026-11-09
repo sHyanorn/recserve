@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"slices"
 	"sync"
 
@@ -92,26 +91,14 @@ func (e *Encoder) Encode(ctx context.Context, seq []int32) ([]float32, error) {
 	if err == nil {
 		out = slices.Clone(c.out[0].(*ort.Tensor[float32]).GetData())
 	}
-	var release error
-	if reusable {
-		release = e.free.put(c)
-	} else {
-		release = c.destroy()
-	}
-	if release != nil {
-		// Reported as itself, not as the end of ctx the run error may wrap.
-		if err != nil {
-			release = fmt.Errorf("%w, after %s", release, err.Error())
-		}
-		return nil, fmt.Errorf("releasing an encoder call: %w", release)
+	if rerr := release(e.free, c, reusable, err); rerr != nil {
+		return nil, fmt.Errorf("releasing an encoder call: %w", rerr)
 	}
 	if err != nil {
 		return nil, err
 	}
-	for _, v := range out {
-		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
-			return nil, errors.New("user encoder output is not finite")
-		}
+	if !finite(out) {
+		return nil, errors.New("user encoder output is not finite")
 	}
 	return out, nil
 }

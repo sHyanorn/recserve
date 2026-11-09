@@ -32,22 +32,33 @@ var ErrCutoff = errors.New("bundle trained on events from the test period")
 
 // Manifest is manifest.json.
 type Manifest struct {
-	FormatVersion int               `json:"format_version"`
-	ModelVersion  string            `json:"model_version"`
-	Dataset       string            `json:"dataset"`
-	TrainCutoffTS int64             `json:"train_cutoff_ts"`
-	ItemCount     int               `json:"item_count"`
-	Dim           int               `json:"dim"`
-	Metric        string            `json:"metric"`
-	Normalized    bool              `json:"normalized"`
-	MaxSeqLen     int               `json:"max_seq_len"`
-	PadID         int               `json:"pad_id"`
-	UserEncoder   string            `json:"user_encoder"`
-	SHA256        map[string]string `json:"sha256"`
+	FormatVersion int    `json:"format_version"`
+	ModelVersion  string `json:"model_version"`
+	Dataset       string `json:"dataset"`
+	TrainCutoffTS int64  `json:"train_cutoff_ts"`
+	ItemCount     int    `json:"item_count"`
+	Dim           int    `json:"dim"`
+	Metric        string `json:"metric"`
+	Normalized    bool   `json:"normalized"`
+	MaxSeqLen     int    `json:"max_seq_len"`
+	PadID         int    `json:"pad_id"`
+	UserEncoder   string `json:"user_encoder"`
+	// RankerFeatures names the ranker's input columns; it must equal
+	// RankerFeatures when the bundle has ranker.onnx, and be absent otherwise.
+	RankerFeatures []string          `json:"ranker_features,omitempty"`
+	SHA256         map[string]string `json:"sha256"`
 }
 
 // CoocWidth is the number of co-occurring items stored per item.
 const CoocWidth = 50
+
+// RankerFeatures are the ranker's input columns the service computes, in
+// order (docs/SPEC.md §8).
+var RankerFeatures = []string{"vector_score", "cooc_score", "popular_score", "item_norm", "last_item_cosine", "log_history_len"}
+
+// RankerRows is the number of rows every ranker call passes: at most this
+// many candidates are ranked, and the rest of the rows are zero.
+const RankerRows = 512
 
 // Bundle is a loaded, verified bundle.
 type Bundle struct {
@@ -59,6 +70,7 @@ type Bundle struct {
 	Cooc     []int32       // row i holds item i's co-occurring IDs, CoocWidth per row, 0-padded
 	Popular  []int32       // best first
 	Encoder  *onnx.Encoder // user_encoder.onnx; nil when the user vector is the mean
+	Ranker   *onnx.Ranker  // ranker.onnx; nil without one
 
 	index map[string]int32
 }
@@ -71,8 +83,9 @@ type Options struct {
 }
 
 // Load reads dir, verifies every checksum, shape and golden case, and
-// applies the train cutoff check. A bundle with user_encoder onnx needs
-// ONNX Runtime (onnx.Init) and must be closed when no longer used.
+// applies the train cutoff check. A bundle with user_encoder onnx or a
+// ranker needs ONNX Runtime (onnx.Init) and must be closed when no longer
+// used.
 func Load(dir string, opt Options) (*Bundle, error) {
 	b := &Bundle{Dir: dir}
 	if err := b.load(opt); err != nil {
@@ -202,11 +215,55 @@ func (b *Bundle) load(opt Options) error {
 		}
 	}
 
+	if err := b.loadRanker(files["ranker.onnx"]); err != nil {
+		return err
+	}
+
 	golden, err := need("golden.jsonl")
 	if err != nil {
 		return err
 	}
 	return b.checkGolden(golden)
+}
+
+// loadRanker loads ranker.onnx, if listed, and checks that it scores
+// RankerRows rows, finitely, each row independently of the others: the
+// service pads with zero rows, so a ranker that mixes rows would score a
+// candidate differently with different padding. The check scores all-zero
+// rows, then the same with row 0 set to fixed values; the other rows'
+// scores must not change, bit for bit.
+func (b *Bundle) loadRanker(model []byte) error {
+	if model == nil {
+		if len(b.RankerFeatures) != 0 {
+			return errors.New("ranker_features without ranker.onnx")
+		}
+		return nil
+	}
+	if !slices.Equal(b.RankerFeatures, RankerFeatures) {
+		return fmt.Errorf("ranker_features %q, the service computes %q", b.RankerFeatures, RankerFeatures)
+	}
+	var err error
+	if b.Ranker, err = onnx.NewRanker(model, len(RankerFeatures), RankerRows); err != nil {
+		return fmt.Errorf("ranker.onnx: %w", err)
+	}
+	x := make([]float32, RankerRows*len(RankerFeatures))
+	zero, err := b.Ranker.Rank(context.Background(), x)
+	if err != nil {
+		return fmt.Errorf("ranker.onnx: %w", err)
+	}
+	for j := range RankerFeatures {
+		x[j] = float32(j+1) / 4
+	}
+	one, err := b.Ranker.Rank(context.Background(), x)
+	if err != nil {
+		return fmt.Errorf("ranker.onnx: %w", err)
+	}
+	for i := 1; i < RankerRows; i++ {
+		if math.Float32bits(zero[i]) != math.Float32bits(one[i]) {
+			return fmt.Errorf("ranker.onnx: the score of row %d depends on row 0", i)
+		}
+	}
+	return nil
 }
 
 // idArray parses an int64 array of internal IDs in [0, itemCount]; shape, if
@@ -329,12 +386,17 @@ func (b *Bundle) UserVector(ctx context.Context, history []int32) ([]float32, er
 	return uv, nil
 }
 
-// Close releases the encoder, if any; the bundle must not be used after.
+// Close releases the encoder and the ranker, if any; the bundle must not
+// be used after.
 func (b *Bundle) Close() error {
-	if b.Encoder == nil {
-		return nil
+	var errs []error
+	if b.Encoder != nil {
+		errs = append(errs, b.Encoder.Close())
 	}
-	return b.Encoder.Close()
+	if b.Ranker != nil {
+		errs = append(errs, b.Ranker.Close())
+	}
+	return errors.Join(errs...)
 }
 
 // Lookup returns the internal ID of a raw item ID.

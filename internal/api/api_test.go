@@ -2,8 +2,10 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -13,8 +15,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/history"
+	"github.com/sHyanorn/recserve/internal/onnx"
+	"github.com/sHyanorn/recserve/internal/onnx/onnxtest"
 	"github.com/sHyanorn/recserve/internal/recommend"
 	"github.com/sHyanorn/recserve/internal/vec"
 )
@@ -161,5 +167,66 @@ func TestWriteJSONWritesNothingOnFailure(t *testing.T) {
 	}
 	if rec.Body.Len() != 0 || rec.Header().Get("Content-Type") != "" {
 		t.Fatalf("wrote %q with headers %v", rec.Body.String(), rec.Header())
+	}
+}
+
+// A request with more candidates than the ranker takes counts them: 10
+// history items with 50 distinct co-occurring items each, 100 popular items
+// and 200 from vector retrieval make more than bundle.RankerRows.
+func TestRankerTruncationIsCounted(t *testing.T) {
+	if err := onnx.Init(onnxtest.Lib(t)); err != nil {
+		t.Fatal(err)
+	}
+	const n, dim = 3000, 2
+	data := make([]float32, (n+1)*dim)
+	for i := dim; i < len(data); i++ {
+		data[i] = float32(math.Sin(float64(i)))
+	}
+	m, err := vec.NewMatrix(dim, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := make([]string, n+1)
+	cooc := make([]int32, (n+1)*bundle.CoocWidth)
+	for i := 1; i <= n; i++ {
+		raw[i] = fmt.Sprint("i", i)
+		for j := range bundle.CoocWidth {
+			cooc[i*bundle.CoocWidth+j] = int32(1 + (i*bundle.CoocWidth+j)%n)
+		}
+	}
+	popular := make([]int32, recommend.PopularTop)
+	for i := range popular {
+		popular[i] = int32(n - i)
+	}
+	b := bundle.New(bundle.Manifest{ModelVersion: "v1", ItemCount: n, Dim: dim, MaxSeqLen: 50}, raw, m, cooc, popular)
+	if b.Ranker, err = onnx.NewRanker(onnxtest.Model(t, "linear_ranker.onnx"), len(bundle.RankerFeatures), bundle.RankerRows); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := b.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	store := history.NewMemory()
+	var evs []history.Event
+	for i := range recommend.CoocSeeds {
+		evs = append(evs, history.Event{ID: uint64(i), User: "u", Item: int32(1 + 97*i), TS: int64(i)})
+	}
+	if err := store.Append(context.Background(), evs); err != nil {
+		t.Fatal(err)
+	}
+	s := New(&recommend.Pipeline{Bundle: b, History: store}, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	for range 2 {
+		if code, out := post(t, ts.URL+"/v1/recommend", `{"user_id":"u","k":10,"ts":100}`); code != http.StatusOK || len(ids(out)) != 10 {
+			t.Fatalf("%d %v", code, out)
+		}
+	}
+	if got := testutil.ToFloat64(s.rankerTruncated); got != 2 {
+		t.Fatalf("truncated requests %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(s.rankerDropped); got <= 0 || math.Mod(got, 2) != 0 {
+		t.Fatalf("dropped candidates %v, want a positive count, the same for both requests", got)
 	}
 }
