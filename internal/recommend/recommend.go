@@ -82,10 +82,29 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error)
 	}
 	uv := b.UserVector(hist)
 
-	cands, err := p.retrieve(ctx, hist, uv, seen)
-	if err != nil {
+	sources := p.sources(hist, uv, seen)
+	results := make([][]vec.Hit, len(sources))
+	var wg sync.WaitGroup
+	for i, src := range sources {
+		wg.Go(func() { results[i] = src() })
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
 		return Response{}, err
 	}
+	picked := p.rank(results, uv, seen, req.K)
+	resp := Response{Items: make([]Item, len(picked)), ModelVersion: b.ModelVersion}
+	for i, h := range picked {
+		resp.Items[i] = Item{ID: b.IDs[h.ID], Score: h.Score}
+	}
+	return resp, nil
+}
+
+// rank merges the sources' results, scores each candidate, drops seen items
+// and picks k by MMR.
+func (p *Pipeline) rank(results [][]vec.Hit, uv []float32, seen map[int32]bool, k int) []vec.Hit {
+	b := p.Bundle
+	cands := merge(results)
 	scored := make([]vec.Hit, 0, len(cands))
 	for _, c := range cands {
 		s := c.score
@@ -97,19 +116,13 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error)
 	if !p.skipSeenFilter {
 		scored = slices.DeleteFunc(scored, func(h vec.Hit) bool { return seen[h.ID] })
 	}
-	picked := mmr(b.Vectors, scored, req.K, MMRLambda)
-	resp := Response{Items: make([]Item, len(picked)), ModelVersion: b.ModelVersion}
-	for i, h := range picked {
-		resp.Items[i] = Item{ID: b.IDs[h.ID], Score: h.Score}
-	}
-	return resp, nil
+	return mmr(b.Vectors, b.InvNorms, scored, k, MMRLambda)
 }
 
-// retrieve runs the sources in parallel and returns their union, each ID
-// once, keeping the best source score.
-func (p *Pipeline) retrieve(ctx context.Context, hist []int32, uv []float32, seen map[int32]bool) ([]candidate, error) {
+// sources returns the retrieval sources; each returns its hits, best first.
+func (p *Pipeline) sources(hist []int32, uv []float32, seen map[int32]bool) []func() []vec.Hit {
 	b := p.Bundle
-	sources := []func() []vec.Hit{
+	return []func() []vec.Hit{
 		func() []vec.Hit { // vector
 			if uv == nil {
 				return nil
@@ -135,15 +148,11 @@ func (p *Pipeline) retrieve(ctx context.Context, hist []int32, uv []float32, see
 			return out
 		},
 	}
-	results := make([][]vec.Hit, len(sources))
-	var wg sync.WaitGroup
-	for i, src := range sources {
-		wg.Go(func() { results[i] = src() })
-	}
-	wg.Wait()
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+}
+
+// merge returns the union of the sources' hits, each ID once with its best
+// source score, ordered by ID.
+func merge(results [][]vec.Hit) []candidate {
 	best := map[int32]float64{}
 	for _, hits := range results {
 		for _, h := range hits {
@@ -157,14 +166,31 @@ func (p *Pipeline) retrieve(ctx context.Context, hist []int32, uv []float32, see
 		out = append(out, candidate{id, s})
 	}
 	slices.SortFunc(out, func(a, b candidate) int { return cmp.Compare(a.id, b.id) })
-	return out, nil
+	return out
+}
+
+// cosine is the cosine similarity of rows a and b of m, given the inverse
+// row norms; 0 if either row is zero.
+func cosine(m vec.Matrix, inv []float32, a, b int32) float64 {
+	if inv[a] == 0 || inv[b] == 0 {
+		return 0
+	}
+	return float64(vec.Dot32(m.Row(a), m.Row(b)) * inv[a] * inv[b])
 }
 
 // mmr picks k hits by maximal marginal relevance: relevance is the score
 // scaled to [0, 1] over the candidates, redundancy the highest cosine
-// similarity to an already picked item. Ties go to the lower ID.
-func mmr(m vec.Matrix, hits []vec.Hit, k int, lambda float64) []vec.Hit {
-	if len(hits) == 0 {
+// similarity to an already picked item (0 before any pick); inv holds the
+// inverse row norms of m. Ties go to the lower ID.
+//
+// Redundancy only grows as items are picked, so a value computed in an
+// earlier round bounds the current one from above. The candidates sit in a
+// heap ordered by that bound; the top is brought up to date against the
+// items picked since its last update, and is picked once it is up to date
+// and still on top. This picks what recomputing every value each round
+// would, with far fewer similarity computations.
+func mmr(m vec.Matrix, inv []float32, hits []vec.Hit, k int, lambda float64) []vec.Hit {
+	if len(hits) == 0 || k <= 0 {
 		return nil
 	}
 	lo, hi := math.Inf(1), math.Inf(-1)
@@ -177,33 +203,72 @@ func mmr(m vec.Matrix, hits []vec.Hit, k int, lambda float64) []vec.Hit {
 		}
 		return (s - lo) / (hi - lo)
 	}
-	norms := make([]float64, len(hits))
-	for i, h := range hits {
-		norms[i] = math.Sqrt(vec.Dot(m.Row(h.ID), m.Row(h.ID)))
+	value := func(e *mmrEntry) float64 { return lambda*rel(e.hit.Score) - (1-lambda)*e.redundancy }
+	h := make(mmrHeap, len(hits))
+	for i, hit := range hits {
+		h[i] = mmrEntry{hit: hit}
+		h[i].value = value(&h[i])
 	}
-	redundancy := make([]float64, len(hits)) // highest similarity to a picked item
-	used := make([]bool, len(hits))
+	h.init()
 	out := make([]vec.Hit, 0, min(k, len(hits)))
-	for len(out) < k && len(out) < len(hits) {
-		bi, bv := -1, math.Inf(-1)
-		for i, h := range hits {
-			if used[i] {
-				continue
-			}
-			v := lambda*rel(h.Score) - (1-lambda)*redundancy[i]
-			if v > bv || (v == bv && h.ID < hits[bi].ID) {
-				bi, bv = i, v
-			}
+	for len(out) < k && len(h) > 0 {
+		e := &h[0]
+		if e.upTo == len(out) {
+			out = append(out, e.hit)
+			h = h.popTop()
+			continue
 		}
-		used[bi] = true
-		out = append(out, hits[bi])
-		for i, h := range hits {
-			if used[i] || norms[i] == 0 || norms[bi] == 0 {
-				continue
-			}
-			sim := vec.Dot(m.Row(h.ID), m.Row(hits[bi].ID)) / (norms[i] * norms[bi])
-			redundancy[i] = max(redundancy[i], sim)
+		for _, p := range out[e.upTo:] {
+			e.redundancy = max(e.redundancy, cosine(m, inv, e.hit.ID, p.ID))
 		}
+		e.upTo = len(out)
+		e.value = value(e)
+		h.down(0)
 	}
 	return out
+}
+
+type mmrEntry struct {
+	hit        vec.Hit
+	redundancy float64 // highest similarity to the first upTo picked items
+	upTo       int
+	value      float64 // MMR value as of upTo picks: an upper bound on the current one
+}
+
+// mmrHeap is a max-heap by value, then by lower ID.
+type mmrHeap []mmrEntry
+
+func (h mmrHeap) less(i, j int) bool {
+	return h[i].value > h[j].value || (h[i].value == h[j].value && h[i].hit.ID < h[j].hit.ID)
+}
+
+func (h mmrHeap) init() {
+	for i := len(h)/2 - 1; i >= 0; i-- {
+		h.down(i)
+	}
+}
+
+func (h mmrHeap) down(i int) {
+	for {
+		c := 2*i + 1
+		if c >= len(h) {
+			return
+		}
+		if r := c + 1; r < len(h) && h.less(r, c) {
+			c = r
+		}
+		if !h.less(c, i) {
+			return
+		}
+		h[i], h[c] = h[c], h[i]
+		i = c
+	}
+}
+
+func (h mmrHeap) popTop() mmrHeap {
+	n := len(h) - 1
+	h[0] = h[n]
+	h = h[:n]
+	h.down(0)
+	return h
 }

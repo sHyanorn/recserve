@@ -4,6 +4,7 @@ package vec
 import (
 	"container/heap"
 	"fmt"
+	"math"
 )
 
 // Matrix is a row-major float32 matrix; row i is internal item ID i.
@@ -33,6 +34,38 @@ func Dot(a, b []float32) float64 {
 		s += float64(v) * float64(b[i])
 	}
 	return s
+}
+
+// Dot32 is the inner product in float32, over four independent partial
+// sums: about twice as fast as Dot, with float32 rounding. len(b) must be
+// at least len(a).
+func Dot32(a, b []float32) float32 {
+	b = b[:len(a)]
+	var s0, s1, s2, s3 float32
+	i := 0
+	for ; i+4 <= len(a); i += 4 {
+		x, y := a[i:i+4:i+4], b[i:i+4:i+4]
+		s0 += x[0] * y[0]
+		s1 += x[1] * y[1]
+		s2 += x[2] * y[2]
+		s3 += x[3] * y[3]
+	}
+	for ; i < len(a); i++ {
+		s0 += a[i] * b[i]
+	}
+	return (s0 + s1) + (s2 + s3)
+}
+
+// InvNorms returns 1 / the Euclidean norm of every row, 0 for a zero row.
+func (m Matrix) InvNorms() []float32 {
+	out := make([]float32, m.Rows())
+	for i := range out {
+		row := m.Row(int32(i))
+		if n := math.Sqrt(Dot(row, row)); n > 0 {
+			out[i] = float32(1 / n)
+		}
+	}
+	return out
 }
 
 // Mean returns the mean of the given rows, accumulated in float64; nil if ids is empty.

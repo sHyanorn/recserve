@@ -50,11 +50,12 @@ const CoocWidth = 50
 // Bundle is a loaded, verified bundle.
 type Bundle struct {
 	Manifest
-	Dir     string
-	IDs     []string // IDs[i] is the raw ID of internal ID i; IDs[0] is ""
-	Vectors vec.Matrix
-	Cooc    []int32 // row i holds item i's co-occurring IDs, CoocWidth per row, 0-padded
-	Popular []int32 // best first
+	Dir      string
+	IDs      []string // IDs[i] is the raw ID of internal ID i; IDs[0] is ""
+	Vectors  vec.Matrix
+	InvNorms []float32 // 1 / the norm of each row of Vectors, 0 for a zero row
+	Cooc     []int32   // row i holds item i's co-occurring IDs, CoocWidth per row, 0-padded
+	Popular  []int32   // best first
 
 	index map[string]int32
 }
@@ -164,6 +165,7 @@ func load(dir string, opt Options) (*Bundle, error) {
 			return nil, errors.New("items.npy: padding row is not zero")
 		}
 	}
+	b.InvNorms = b.Vectors.InvNorms()
 
 	if _, ok := files["cooc_ids.npy"]; ok {
 		if b.Cooc, err = idArray(files["cooc_ids.npy"], m.ItemCount, []int{m.ItemCount + 1, CoocWidth}); err != nil {
@@ -269,7 +271,7 @@ func (b *Bundle) checkGolden(data []byte) error {
 // New assembles a bundle from parts already in memory, without files or
 // checksums; ids[0] must be "" (padding). For tests and tools.
 func New(m Manifest, ids []string, vectors vec.Matrix, cooc, popular []int32) *Bundle {
-	b := &Bundle{Manifest: m, IDs: ids, Vectors: vectors, Cooc: cooc, Popular: popular, index: make(map[string]int32, len(ids))}
+	b := &Bundle{Manifest: m, IDs: ids, Vectors: vectors, InvNorms: vectors.InvNorms(), Cooc: cooc, Popular: popular, index: make(map[string]int32, len(ids))}
 	for i, id := range ids[1:] {
 		b.index[id] = int32(i + 1)
 	}

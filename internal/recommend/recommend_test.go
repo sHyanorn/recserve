@@ -3,7 +3,9 @@ package recommend
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand/v2"
+	"slices"
 	"testing"
 
 	"github.com/sHyanorn/recserve/internal/bundle"
@@ -104,12 +106,81 @@ func TestMMRPrefersDiversity(t *testing.T) {
 	// relevant; 4 sets the bottom of the relevance range.
 	m, _ := vec.NewMatrix(2, []float32{0, 0, 1, 0, 1, 0, 0, 1, -1, 0})
 	hits := []vec.Hit{{ID: 1, Score: 1}, {ID: 2, Score: 0.99}, {ID: 3, Score: 0.9}, {ID: 4, Score: 0}}
-	got := mmr(m, hits, 2, 0.7)
+	got := mmr(m, m.InvNorms(), hits, 2, 0.7)
 	if got[0].ID != 1 || got[1].ID != 3 {
 		t.Fatalf("got %v, want items 1 then 3", got)
 	}
-	if got := mmr(m, hits, 2, 1); got[1].ID != 2 {
+	if got := mmr(m, m.InvNorms(), hits, 2, 1); got[1].ID != 2 {
 		t.Fatalf("lambda 1 should rank by relevance only, got %v", got)
+	}
+}
+
+// mmrEager is MMR as defined: every round recomputes every remaining
+// candidate's value and picks the highest, ties to the lower ID.
+func mmrEager(m vec.Matrix, inv []float32, hits []vec.Hit, k int, lambda float64) []vec.Hit {
+	if len(hits) == 0 {
+		return nil
+	}
+	lo, hi := math.Inf(1), math.Inf(-1)
+	for _, h := range hits {
+		lo, hi = min(lo, h.Score), max(hi, h.Score)
+	}
+	rel := func(s float64) float64 {
+		if hi == lo {
+			return 1
+		}
+		return (s - lo) / (hi - lo)
+	}
+	redundancy := make([]float64, len(hits))
+	used := make([]bool, len(hits))
+	out := make([]vec.Hit, 0, min(k, len(hits)))
+	for len(out) < k && len(out) < len(hits) {
+		bi, bv := -1, math.Inf(-1)
+		for i, h := range hits {
+			if used[i] {
+				continue
+			}
+			v := lambda*rel(h.Score) - (1-lambda)*redundancy[i]
+			if v > bv || (v == bv && h.ID < hits[bi].ID) {
+				bi, bv = i, v
+			}
+		}
+		used[bi] = true
+		out = append(out, hits[bi])
+		for i, h := range hits {
+			if !used[i] {
+				redundancy[i] = max(redundancy[i], cosine(m, inv, h.ID, hits[bi].ID))
+			}
+		}
+	}
+	return out
+}
+
+// The lazy MMR picks exactly what the eager definition picks, in the same
+// order, including when values tie. Small integer vectors and scores make
+// ties and zero vectors common.
+func TestMMRMatchesEager(t *testing.T) {
+	r := rand.New(rand.NewPCG(3, 4))
+	for trial := range 2000 {
+		n, dim := 1+r.IntN(60), 1+r.IntN(4)
+		data := make([]float32, (n+1)*dim)
+		for i := dim; i < len(data); i++ {
+			data[i] = float32(r.IntN(5) - 2)
+		}
+		m, _ := vec.NewMatrix(dim, data)
+		var hits []vec.Hit
+		for _, id := range r.Perm(n) {
+			if r.IntN(4) > 0 {
+				hits = append(hits, vec.Hit{ID: int32(id + 1), Score: float64(r.IntN(6))})
+			}
+		}
+		k := r.IntN(n + 2)
+		lambda := []float64{0, 0.3, 0.7, 1}[r.IntN(4)]
+		inv := m.InvNorms()
+		got, want := mmr(m, inv, hits, k, lambda), mmrEager(m, inv, hits, k, lambda)
+		if !slices.Equal(got, want) {
+			t.Fatalf("trial %d k=%d lambda=%g: got %v, want %v", trial, k, lambda, got, want)
+		}
 	}
 }
 
