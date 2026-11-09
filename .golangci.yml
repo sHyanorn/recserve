@@ -10,6 +10,9 @@ linters:
     - nolintlint
     - unconvert
   settings:
+    errcheck:
+      # Also report errors assigned to _; an ignored error needs a //nolint with its reason.
+      check-blank: true
     nolintlint:
       require-explanation: true
       require-specific: true

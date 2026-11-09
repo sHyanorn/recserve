@@ -24,12 +24,12 @@ type Row struct {
 const Kind = "rating"
 
 // Read reads a .csv.gz split file.
-func Read(path string) ([]Row, error) {
+func Read(path string) (_ []Row, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }() // read-only
+	defer func() { err = errors.Join(err, f.Close()) }()
 	z, err := gzip.NewReader(f)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)

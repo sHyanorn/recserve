@@ -115,15 +115,19 @@ func Encode(shape []int, f32 []float32, i64 []int64) []byte {
 		pad = 0
 	}
 	h += strings.Repeat(" ", pad) + "\n"
-	var buf bytes.Buffer
-	buf.Write(magic)
-	buf.Write([]byte{1, 0})
-	_ = binary.Write(&buf, binary.LittleEndian, uint16(len(h)))
-	buf.WriteString(h)
+	b := make([]byte, 0, 10+len(h)+4*len(f32)+8*len(i64))
+	b = append(b, magic...)
+	b = append(b, 1, 0)
+	b = binary.LittleEndian.AppendUint16(b, uint16(len(h)))
+	b = append(b, h...)
 	if f32 != nil {
-		_ = binary.Write(&buf, binary.LittleEndian, f32)
-	} else {
-		_ = binary.Write(&buf, binary.LittleEndian, i64)
+		for _, v := range f32 {
+			b = binary.LittleEndian.AppendUint32(b, math.Float32bits(v))
+		}
+		return b
 	}
-	return buf.Bytes()
+	for _, v := range i64 {
+		b = binary.LittleEndian.AppendUint64(b, uint64(v))
+	}
+	return b
 }

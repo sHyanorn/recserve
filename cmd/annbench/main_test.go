@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"math/rand/v2"
@@ -215,10 +216,12 @@ func TestShards(t *testing.T) {
 		reqR, reqW := io.Pipe()
 		repR, repW := io.Pipe()
 		errc := make(chan error, 1)
-		go func() { errc <- serve(s, so, reqR, repW); _ = repW.Close() }()
+		go func() {
+			err := serve(s, so, reqR, repW)
+			errc <- errors.Join(err, repW.Close())
+		}()
 		return &shardConn{w: bufio.NewWriter(reqW), r: bufio.NewReader(repR), done: func() error {
-			_ = reqW.Close()
-			return <-errc
+			return errors.Join(reqW.Close(), <-errc)
 		}}, nil
 	}
 	var first []point

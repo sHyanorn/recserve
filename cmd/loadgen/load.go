@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -139,8 +140,7 @@ func (w *worker) do(ctx context.Context, method, path string, body []byte) (int,
 		return 0, nil, err
 	}
 	data, err := io.ReadAll(res.Body)
-	_ = res.Body.Close() // fully read; nothing left to report
-	return res.StatusCode, data, err
+	return res.StatusCode, data, errors.Join(err, res.Body.Close())
 }
 
 // measure offers cfg's workload and measures it. Request i is due at
@@ -303,6 +303,6 @@ func (d *datasetWorkload) request(i int, b []byte) (string, []byte) {
 
 // appendJSONString appends s as a JSON string.
 func appendJSONString(b []byte, s string) []byte {
-	q, _ := json.Marshal(s) // a string always marshals
+	q, _ := json.Marshal(s) //nolint:errcheck // a string always marshals; invalid UTF-8 becomes U+FFFD
 	return append(b, q...)
 }

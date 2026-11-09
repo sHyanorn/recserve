@@ -15,7 +15,7 @@ import (
 
 // randomPipeline builds a bundle of n items with random vectors (some zero),
 // co-occurrence rows and popularity list, and a store with random histories.
-func randomPipeline(r *rand.Rand, n, users int) *Pipeline {
+func randomPipeline(r *rand.Rand, n, users int) (*Pipeline, error) {
 	const dim = 4
 	data := make([]float32, (n+1)*dim)
 	for i := dim; i < len(data); i++ {
@@ -23,7 +23,10 @@ func randomPipeline(r *rand.Rand, n, users int) *Pipeline {
 			data[i] = float32(r.IntN(7) - 3)
 		}
 	}
-	m, _ := vec.NewMatrix(dim, data)
+	m, err := vec.NewMatrix(dim, data)
+	if err != nil {
+		return nil, err
+	}
 	ids := make([]string, n+1)
 	for i := 1; i <= n; i++ {
 		ids[i] = fmt.Sprint("i", i)
@@ -48,8 +51,10 @@ func randomPipeline(r *rand.Rand, n, users int) *Pipeline {
 			events = append(events, history.Event{ID: uint64(u<<20 | e), User: fmt.Sprint("u", u), Item: item, TS: ts})
 		}
 	}
-	_ = store.Append(context.Background(), events)
-	return &Pipeline{Bundle: b, History: store}
+	if err := store.Append(context.Background(), events); err != nil {
+		return nil, err
+	}
+	return &Pipeline{Bundle: b, History: store}, nil
 }
 
 // checkProperty2 returns the first response that contains an item from the
@@ -58,7 +63,10 @@ func checkProperty2(seed uint64, cases int, broken bool) error {
 	r := rand.New(rand.NewPCG(seed, 0))
 	ctx := context.Background()
 	for c := range cases {
-		p := randomPipeline(r, 2+r.IntN(40), 3)
+		p, err := randomPipeline(r, 2+r.IntN(40), 3)
+		if err != nil {
+			return err
+		}
 		p.skipSeenFilter = broken
 		for range 10 {
 			user := fmt.Sprint("u", r.IntN(4))
@@ -70,7 +78,10 @@ func checkProperty2(seed uint64, cases int, broken bool) error {
 			}
 			// Everything stored for the user before ts.
 			banned := map[string]bool{exclude[0]: true}
-			kept, _ := p.History.Before(ctx, user, ts, 0)
+			kept, err := p.History.Before(ctx, user, ts, 0)
+			if err != nil {
+				return err
+			}
 			for _, id := range kept {
 				banned[p.Bundle.IDs[id]] = true
 			}
@@ -104,7 +115,7 @@ func TestProperty2CatchesBrokenVariant(t *testing.T) {
 func TestMMRPrefersDiversity(t *testing.T) {
 	// Items 1 and 2 point the same way; 3 is orthogonal and a little less
 	// relevant; 4 sets the bottom of the relevance range.
-	m, _ := vec.NewMatrix(2, []float32{0, 0, 1, 0, 1, 0, 0, 1, -1, 0})
+	m := matrix(t, 2, []float32{0, 0, 1, 0, 1, 0, 0, 1, -1, 0})
 	hits := []vec.Hit{{ID: 1, Score: 1}, {ID: 2, Score: 0.99}, {ID: 3, Score: 0.9}, {ID: 4, Score: 0}}
 	got := mmr(m, m.InvNorms(), hits, 2, 0.7)
 	if got[0].ID != 1 || got[1].ID != 3 {
@@ -167,7 +178,7 @@ func TestMMRMatchesEager(t *testing.T) {
 		for i := dim; i < len(data); i++ {
 			data[i] = float32(r.IntN(5) - 2)
 		}
-		m, _ := vec.NewMatrix(dim, data)
+		m := matrix(t, dim, data)
 		var hits []vec.Hit
 		for _, id := range r.Perm(n) {
 			if r.IntN(4) > 0 {
@@ -185,7 +196,10 @@ func TestMMRMatchesEager(t *testing.T) {
 }
 
 func TestRejectsBadK(t *testing.T) {
-	p := randomPipeline(rand.New(rand.NewPCG(1, 1)), 5, 1)
+	p, err := randomPipeline(rand.New(rand.NewPCG(1, 1)), 5, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, k := range []int{0, -1, MaxK + 1} {
 		if _, err := p.Recommend(context.Background(), Request{User: "u0", K: k, TS: 50}); err == nil {
 			t.Errorf("k=%d accepted", k)
@@ -196,10 +210,9 @@ func TestRejectsBadK(t *testing.T) {
 // A history whose items all have zero vectors (no training data) gives no
 // user vector, so popularity decides instead of arbitrary zero scores.
 func TestZeroVectorHistoryFallsBackToPopularity(t *testing.T) {
-	m, _ := vec.NewMatrix(2, []float32{0, 0, 0, 0, 1, 0, 0, 1})
+	m := matrix(t, 2, []float32{0, 0, 0, 0, 1, 0, 0, 1})
 	b := bundle.New(bundle.Manifest{ModelVersion: "t", ItemCount: 3, Dim: 2, MaxSeqLen: 5}, []string{"", "a", "b", "c"}, m, nil, []int32{3, 2})
-	store := history.NewMemory()
-	_ = store.Append(context.Background(), []history.Event{{ID: 1, User: "u", Item: 1, TS: 1}})
+	store := storeWith(t, history.Event{ID: 1, User: "u", Item: 1, TS: 1})
 	resp, err := (&Pipeline{Bundle: b, History: store}).Recommend(context.Background(), Request{User: "u", K: 2, TS: 2})
 	if err != nil {
 		t.Fatal(err)
@@ -212,10 +225,9 @@ func TestZeroVectorHistoryFallsBackToPopularity(t *testing.T) {
 // The request path passes the request time to the store unchanged: an event
 // at exactly that time is not history yet, so its item may be recommended.
 func TestEventAtRequestTimeIsNotHistory(t *testing.T) {
-	m, _ := vec.NewMatrix(2, []float32{0, 0, 1, 0, 0, 1})
+	m := matrix(t, 2, []float32{0, 0, 1, 0, 0, 1})
 	b := bundle.New(bundle.Manifest{ModelVersion: "t", ItemCount: 2, Dim: 2, MaxSeqLen: 5}, []string{"", "a", "b"}, m, nil, []int32{1, 2})
-	store := history.NewMemory()
-	_ = store.Append(context.Background(), []history.Event{{ID: 1, User: "u", Item: 1, TS: 5}})
+	store := storeWith(t, history.Event{ID: 1, User: "u", Item: 1, TS: 5})
 	resp, err := (&Pipeline{Bundle: b, History: store}).Recommend(context.Background(), Request{User: "u", K: 1, TS: 5})
 	if err != nil {
 		t.Fatal(err)
@@ -223,4 +235,22 @@ func TestEventAtRequestTimeIsNotHistory(t *testing.T) {
 	if len(resp.Items) != 1 || resp.Items[0].ID != "a" {
 		t.Fatalf("got %v, want a (popular, and its event is not before ts)", resp.Items)
 	}
+}
+
+func matrix(t testing.TB, dim int, data []float32) vec.Matrix {
+	t.Helper()
+	m, err := vec.NewMatrix(dim, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func storeWith(t testing.TB, events ...history.Event) *history.Memory {
+	t.Helper()
+	s := history.NewMemory()
+	if err := s.Append(context.Background(), events); err != nil {
+		t.Fatal(err)
+	}
+	return s
 }

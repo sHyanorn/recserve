@@ -26,8 +26,10 @@ type Event struct {
 // EventID derives an event's ID from its fields, so an identical event sent twice is one event.
 func EventID(user, item string, ts int64, kind string) uint64 {
 	h := sha256.New()
+	var n [4]byte
 	for _, s := range []string{user, item, strconv.FormatInt(ts, 10), kind} {
-		_ = binary.Write(h, binary.LittleEndian, uint32(len(s)))
+		binary.LittleEndian.PutUint32(n[:], uint32(len(s)))
+		h.Write(n[:])
 		h.Write([]byte(s))
 	}
 	return binary.LittleEndian.Uint64(h.Sum(nil))

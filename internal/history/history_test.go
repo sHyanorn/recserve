@@ -85,12 +85,14 @@ func TestProperty1CatchesBrokenVariant(t *testing.T) {
 
 func TestUsersAreSeparate(t *testing.T) {
 	s, ctx := NewMemory(), context.Background()
-	_ = s.Append(ctx, []Event{{ID: 1, User: "a", Item: 1, TS: 1}, {ID: 2, User: "b", Item: 2, TS: 1}})
-	if got, _ := s.Before(ctx, "a", 2, 10); !slices.Equal(got, []int32{1}) {
-		t.Fatalf("a: %v", got)
+	if err := s.Append(ctx, []Event{{ID: 1, User: "a", Item: 1, TS: 1}, {ID: 2, User: "b", Item: 2, TS: 1}}); err != nil {
+		t.Fatal(err)
 	}
-	if got, _ := s.Before(ctx, "c", 2, 10); len(got) != 0 {
-		t.Fatalf("c: %v", got)
+	for user, want := range map[string][]int32{"a": {1}, "c": nil} {
+		got, err := s.Before(ctx, user, 2, 10)
+		if err != nil || !slices.Equal(got, want) {
+			t.Fatalf("%s: %v, %v", user, got, err)
+		}
 	}
 }
 
@@ -101,14 +103,23 @@ func TestConcurrentAppendAndRead(t *testing.T) {
 		wg.Go(func() {
 			for i := range 500 {
 				u := fmt.Sprint("u", i%10)
-				_ = s.Append(ctx, []Event{{ID: uint64(w*1000 + i), User: u, Item: int32(i), TS: int64(i)}})
-				_, _ = s.Before(ctx, u, int64(i), 50)
+				if err := s.Append(ctx, []Event{{ID: uint64(w*1000 + i), User: u, Item: int32(i), TS: int64(i)}}); err != nil {
+					t.Error(err)
+					return
+				}
+				if _, err := s.Before(ctx, u, int64(i), 50); err != nil {
+					t.Error(err)
+					return
+				}
 			}
 		})
 	}
 	wg.Wait()
 	for i := range 10 {
-		got, _ := s.Before(ctx, fmt.Sprint("u", i), 1<<40, 0)
+		got, err := s.Before(ctx, fmt.Sprint("u", i), 1<<40, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if len(got) != 8*50 {
 			t.Fatalf("user %d has %d events, want %d", i, len(got), 8*50)
 		}

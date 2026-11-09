@@ -126,7 +126,9 @@ func TestRealDataSmoke(t *testing.T) {
 				t.Fatal(err)
 			}
 			m["train_cutoff_ts"] = first
-			raw, _ = json.Marshal(m)
+			if raw, err = json.Marshal(m); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if err := os.WriteFile(filepath.Join(bad, e.Name()), raw, 0o644); err != nil {
 			t.Fatal(err)

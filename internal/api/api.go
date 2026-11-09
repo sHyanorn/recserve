@@ -120,7 +120,7 @@ const statusClientClosed = 499
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v) //nolint:errcheck // the status line is sent; a failed write means the client has gone
 }
 
 // decode reads exactly one JSON value with no unknown fields.

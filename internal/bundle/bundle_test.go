@@ -28,8 +28,12 @@ func testVectors() []float32 {
 }
 
 // goldenLine is a correct golden case for the given history.
-func goldenLine(history []int32) string {
-	m, _ := vec.NewMatrix(2, testVectors())
+func goldenLine(t testing.TB, history []int32) string {
+	t.Helper()
+	m, err := vec.NewMatrix(2, testVectors())
+	if err != nil {
+		t.Fatal(err)
+	}
 	b := New(Manifest{Dim: 2, MaxSeqLen: 50}, []string{""}, m, nil, nil)
 	uv := b.UserVector(history)
 	seen := map[int32]bool{}
@@ -40,8 +44,16 @@ func goldenLine(history []int32) string {
 	for _, h := range m.TopK(uv, 10, func(id int32) bool { return seen[id] }) {
 		top = append(top, h.ID)
 	}
-	line, _ := json.Marshal(map[string]any{"history": history, "user_emb": uv, "top10": top})
-	return string(line) + "\n"
+	return string(marshal(t, map[string]any{"history": history, "user_emb": uv, "top10": top})) + "\n"
+}
+
+func marshal(t testing.TB, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 // writeBundle writes a 12-item, 2-dimensional bundle and returns its directory.
@@ -56,7 +68,7 @@ func writeBundle(t *testing.T, edit func(files map[string][]byte, m map[string]a
 		"items.ids":    []byte(ids.String()),
 		"items.npy":    npy.Encode([]int{testItems + 1, 2}, testVectors(), nil),
 		"popular.npy":  npy.Encode([]int{2}, nil, []int64{3, 1}),
-		"golden.jsonl": []byte(goldenLine([]int32{1}) + goldenLine([]int32{2, 5})),
+		"golden.jsonl": []byte(goldenLine(t, []int32{1}) + goldenLine(t, []int32{2, 5})),
 	}
 	cooc := make([]int64, (testItems+1)*CoocWidth)
 	cooc[1*CoocWidth], cooc[1*CoocWidth+1] = 3, 2
@@ -79,8 +91,7 @@ func writeBundle(t *testing.T, edit func(files map[string][]byte, m map[string]a
 		}
 	}
 	m["sha256"] = sums
-	raw, _ := json.Marshal(m)
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), raw, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), marshal(t, m), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -111,19 +122,19 @@ func TestLoadRejects(t *testing.T) {
 		"cutoff equal": {nil, Options{FirstTestTS: 100}, "test period"},
 		"cutoff after": {nil, Options{FirstTestTS: 50}, "test period"},
 		"golden top": {func(f map[string][]byte, _ map[string]any) {
-			f["golden.jsonl"] = editGolden(func(c map[string]any) {
+			f["golden.jsonl"] = editGolden(t, func(c map[string]any) {
 				top := c["top10"].([]any)
 				top[0], top[1] = top[1], top[0]
 			})
 		}, Options{}, "top-10"},
 		"golden vector": {func(f map[string][]byte, _ map[string]any) {
-			f["golden.jsonl"] = editGolden(func(c map[string]any) { c["user_emb"].([]any)[0] = 0.5 })
+			f["golden.jsonl"] = editGolden(t, func(c map[string]any) { c["user_emb"].([]any)[0] = 0.5 })
 		}, Options{}, "user vector"},
 		"golden short": {func(f map[string][]byte, _ map[string]any) {
-			f["golden.jsonl"] = editGolden(func(c map[string]any) { c["top10"] = c["top10"].([]any)[:1] })
+			f["golden.jsonl"] = editGolden(t, func(c map[string]any) { c["top10"] = c["top10"].([]any)[:1] })
 		}, Options{}, "10 top10"},
 		"golden field": {func(f map[string][]byte, _ map[string]any) {
-			f["golden.jsonl"] = editGolden(func(c map[string]any) { c["top_10"] = c["top10"] })
+			f["golden.jsonl"] = editGolden(t, func(c map[string]any) { c["top_10"] = c["top10"] })
 		}, Options{}, "unknown field"},
 		"golden empty": {func(f map[string][]byte, _ map[string]any) { f["golden.jsonl"] = []byte("{}\n") }, Options{}, "needs a history"},
 		"no golden":    {func(f map[string][]byte, _ map[string]any) { f["golden.jsonl"] = nil }, Options{}, "no cases"},
@@ -155,12 +166,14 @@ func TestLoadRejects(t *testing.T) {
 }
 
 // editGolden returns the golden file of history [1], changed by edit.
-func editGolden(edit func(map[string]any)) []byte {
+func editGolden(t testing.TB, edit func(map[string]any)) []byte {
+	t.Helper()
 	var c map[string]any
-	_ = json.Unmarshal([]byte(goldenLine([]int32{1})), &c)
+	if err := json.Unmarshal([]byte(goldenLine(t, []int32{1})), &c); err != nil {
+		t.Fatal(err)
+	}
 	edit(c)
-	line, _ := json.Marshal(c)
-	return append(line, '\n')
+	return append(marshal(t, c), '\n')
 }
 
 func TestLoadRejectsTamperedFile(t *testing.T) {

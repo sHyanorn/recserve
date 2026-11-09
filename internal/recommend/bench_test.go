@@ -63,7 +63,7 @@ func BenchmarkRank(b *testing.B) {
 	for i := dim; i < len(data); i++ {
 		data[i] = float32(r.NormFloat64() * 0.1)
 	}
-	m, _ := vec.NewMatrix(dim, data)
+	m := matrix(b, dim, data)
 	cooc := make([]int32, (n+1)*bundle.CoocWidth)
 	for i := bundle.CoocWidth; i < len(cooc); i++ {
 		cooc[i] = int32(1 + r.IntN(n))

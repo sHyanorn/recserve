@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,7 +20,10 @@ import (
 
 func testServer(t *testing.T) (*Server, *httptest.Server) {
 	t.Helper()
-	m, _ := vec.NewMatrix(2, []float32{0, 0, 1, 0, 0.9, 0.1, 0, 1, -1, 0})
+	m, err := vec.NewMatrix(2, []float32{0, 0, 1, 0, 0.9, 0.1, 0, 1, -1, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
 	b := bundle.New(bundle.Manifest{ModelVersion: "v1", ItemCount: 4, Dim: 2, MaxSeqLen: 50},
 		[]string{"", "a", "b", "c", "d"}, m, nil, []int32{4, 3})
 	store := history.NewMemory()
@@ -36,10 +40,21 @@ func post(t *testing.T, url, body string) (int, map[string]any) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
 	var out map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if err := json.Unmarshal(readBody(t, resp), &out); err != nil {
+		t.Fatal(err)
+	}
 	return resp.StatusCode, out
+}
+
+// readBody reads and closes the body of resp.
+func readBody(t *testing.T, resp *http.Response) []byte {
+	t.Helper()
+	b, err := io.ReadAll(resp.Body)
+	if err := errors.Join(err, resp.Body.Close()); err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 func ids(out map[string]any) []string {
@@ -104,9 +119,7 @@ func TestProbesAndMetrics(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = resp.Body.Close() }()
-		b, _ := io.ReadAll(resp.Body)
-		return resp.StatusCode, string(b)
+		return resp.StatusCode, string(readBody(t, resp))
 	}
 	if code, _ := get("/readyz"); code != http.StatusServiceUnavailable {
 		t.Fatalf("readyz before ready: %d", code)

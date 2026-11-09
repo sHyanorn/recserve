@@ -224,8 +224,16 @@ func TestLoadANNSetRejectsMismatches(t *testing.T) {
 			writeFile(t, filepath.Join(dir, "s_gt.i32"), append(descending(150)[1:], 150))
 		},
 		"partial row": func(dir string) { writeFile(t, filepath.Join(dir, "s_query.f32"), []float32{0, 1, 2}) },
-		"dimension":   func(dir string) { _ = os.WriteFile(filepath.Join(dir, "s.dim"), []byte("x"), 0o644) },
-		"missing":     func(dir string) { _ = os.Remove(filepath.Join(dir, "s_base.f32")) },
+		"dimension": func(dir string) {
+			if err := os.WriteFile(filepath.Join(dir, "s.dim"), []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"missing": func(dir string) {
+			if err := os.Remove(filepath.Join(dir, "s_base.f32")); err != nil {
+				t.Fatal(err)
+			}
+		},
 	} {
 		dir := t.TempDir()
 		writeSet(t, dir, 150, descending(150))

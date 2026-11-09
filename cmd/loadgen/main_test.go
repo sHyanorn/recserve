@@ -25,7 +25,7 @@ func fakeGateway(t *testing.T, stall func(), status int) string {
 		}
 		mu.Unlock()
 		w.WriteHeader(status)
-		_, _ = w.Write([]byte(`{"items":[],"model_version":"v"}`))
+		_, _ = w.Write([]byte(`{"items":[],"model_version":"v"}`)) //nolint:errcheck // loadgen may have given up on the request; the tests check what it received
 	})
 	mux.HandleFunc("POST /v1/events", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
 	s := httptest.NewServer(mux)

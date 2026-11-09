@@ -145,9 +145,21 @@ var (
 
 // The standard builds, shared by the tests that only read them.
 var (
-	tightIx = sync.OnceValue(func() *Index { ix, _ := build(tight.data, tight.dim, tightCfg, mutation{}); return ix })
-	looseIx = sync.OnceValue(func() *Index { ix, _ := build(loose.data, loose.dim, looseCfg, mutation{}); return ix })
+	tightBuild = sync.OnceValues(func() (*Index, error) { return build(tight.data, tight.dim, tightCfg, mutation{}) })
+	looseBuild = sync.OnceValues(func() (*Index, error) { return build(loose.data, loose.dim, looseCfg, mutation{}) })
 )
+
+func tightIx(t testing.TB) *Index { t.Helper(); return shared(t, tightBuild) }
+func looseIx(t testing.TB) *Index { t.Helper(); return shared(t, looseBuild) }
+
+func shared(t testing.TB, build func() (*Index, error)) *Index {
+	t.Helper()
+	ix, err := build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ix
+}
 
 const (
 	looseK, looseEf = 10, 40
@@ -183,7 +195,7 @@ func checks(tightIx, looseIx *Index) []error {
 }
 
 func TestBuildHasAllProperties(t *testing.T) {
-	if errs := checks(tightIx(), looseIx()); len(errs) > 0 {
+	if errs := checks(tightIx(t), looseIx(t)); len(errs) > 0 {
 		t.Fatal(errors.Join(errs...))
 	}
 }
@@ -254,15 +266,15 @@ func TestExhaustiveSearchIsExact(t *testing.T) {
 // The recall floor of the checks was set from measurements on these
 // datasets with margin: loose 1.000 at ef=40, tight 0.968 at ef=10.
 func TestRecall(t *testing.T) {
-	ix := looseIx()
+	ix := looseIx(t)
 	for _, ef := range []int{10, 20, 40, 80} {
 		t.Logf("loose recall@%d ef=%d: %.4f", looseK, ef, loose.recall(ix, looseK, ef, false))
 	}
-	t.Logf("tight recall@10 ef=10: %.4f", tight.recall(tightIx(), 10, 10, false))
+	t.Logf("tight recall@10 ef=10: %.4f", tight.recall(tightIx(t), 10, 10, false))
 }
 
 func TestFilteredSearch(t *testing.T) {
-	ix := looseIx()
+	ix := looseIx(t)
 	for i := range loose.nq() {
 		for _, h := range ix.Search(loose.query(i), 10, 40, oddIDs) {
 			if oddIDs(h.ID) {
@@ -282,7 +294,7 @@ func TestFilteredSearch(t *testing.T) {
 // A parallel build gives a different graph; its recall must stay close to
 // the reproducible single-threaded build's.
 func TestParallelBuild(t *testing.T) {
-	serial := looseIx()
+	serial := looseIx(t)
 	cfg := looseCfg
 	cfg.Workers = 4
 	par := mustBuild(t, loose, cfg, mutation{})
@@ -310,7 +322,7 @@ func TestParallelBuild(t *testing.T) {
 }
 
 func TestSerialBuildIsReproducible(t *testing.T) {
-	a, b := tightIx(), mustBuild(t, tight, tightCfg, mutation{})
+	a, b := tightIx(t), mustBuild(t, tight, tightCfg, mutation{})
 	if !slices.Equal(a.links0, b.links0) || !slices.Equal(a.upper, b.upper) || a.entry != b.entry {
 		t.Fatal("two builds with the same seed differ")
 	}
@@ -336,7 +348,10 @@ func TestSmallAndDegenerate(t *testing.T) {
 	if err != nil || empty.Search([]float32{1, 0, 0, 0}, 5, 10, nil) != nil || empty.Check() != nil {
 		t.Fatalf("empty index: %v", err)
 	}
-	one, _ := Build([]float32{0, 1}, 2, cfg)
+	one, err := Build([]float32{0, 1}, 2, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := one.Search([]float32{1, 0}, 5, 10, nil); len(got) != 1 || got[0].ID != 0 {
 		t.Fatalf("one node: %v", got)
 	}
@@ -347,7 +362,10 @@ func TestSmallAndDegenerate(t *testing.T) {
 	for i := range 300 {
 		data = append(data, float32(i%3), 1)
 	}
-	dup, _ := Build(data, 2, cfg)
+	dup, err := Build(data, 2, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := dup.Check(); err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +392,7 @@ func TestSmallAndDegenerate(t *testing.T) {
 }
 
 func TestSaveAndRead(t *testing.T) {
-	ix := looseIx()
+	ix := looseIx(t)
 	var buf bytes.Buffer
 	if _, err := ix.WriteTo(&buf); err != nil {
 		t.Fatal(err)

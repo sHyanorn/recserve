@@ -62,14 +62,20 @@ func TestDot32(t *testing.T) {
 }
 
 func TestInvNorms(t *testing.T) {
-	m, _ := NewMatrix(2, []float32{0, 0, 3, 4, 0, 0.5})
+	m, err := NewMatrix(2, []float32{0, 0, 3, 4, 0, 0.5})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := m.InvNorms(); !slices.Equal(got, []float32{0, 0.2, 2}) {
 		t.Fatalf("got %v", got)
 	}
 }
 
 func TestMean(t *testing.T) {
-	m, _ := NewMatrix(2, []float32{0, 0, 1, 2, 3, 6})
+	m, err := NewMatrix(2, []float32{0, 0, 1, 2, 3, 6})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := m.Mean([]int32{1, 2}); !slices.Equal(got, []float32{2, 4}) {
 		t.Fatalf("got %v", got)
 	}
