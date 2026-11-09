@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -130,5 +131,72 @@ func TestLoopback(t *testing.T) {
 		if err := ln.Close(); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// shutdown closes the bundle once the servers have drained, and does not wait
+// for a request still running past the drain.
+func TestShutdown(t *testing.T) {
+	newLive := func() *recommend.Live {
+		p, err := preparer(bundle.Options{}, history.NewMemory(), shard.DefaultConfig, recommend.Budgets{}, nil)(bundletest.Write(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return recommend.NewLive(p, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	live := newLive()
+	if err := shutdown(log, nil, live, time.Second); err != nil || live.Version() != "" {
+		t.Fatalf("drained: err %v, version %q after shutdown", err, live.Version())
+	}
+
+	live = newLive()
+	entered, unblock := make(chan struct{}), make(chan struct{})
+	hs := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, release, err := live.Acquire()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer release()
+		close(entered)
+		<-unblock
+		w.WriteHeader(http.StatusOK)
+	})}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- hs.Serve(ln) }()
+	got := make(chan error, 1)
+	go func() {
+		resp, err := http.Get("http://" + ln.Addr().String())
+		if err == nil {
+			err = resp.Body.Close()
+		}
+		got <- err
+	}()
+	<-entered
+	stopped := make(chan error, 1)
+	go func() { stopped <- shutdown(log, []*http.Server{hs}, live, 20*time.Millisecond) }()
+	select {
+	case err := <-stopped:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("shutdown: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("shutdown waited for the request past the drain")
+	}
+	if live.Version() == "" {
+		t.Fatal("shutdown closed a bundle a request still holds")
+	}
+	close(unblock)
+	if err := errors.Join(<-got, live.Close()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-served; !errors.Is(err, http.ErrServerClosed) {
+		t.Fatal(err)
 	}
 }

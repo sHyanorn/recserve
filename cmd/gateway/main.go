@@ -90,7 +90,12 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib stri
 		return err
 	}
 	live := recommend.NewLive(p, log)
-	defer func() { err = errors.Join(err, live.Close()) }()
+	closeLive := true // until serving starts; then shutdown closes it
+	defer func() {
+		if closeLive {
+			err = errors.Join(err, live.Close())
+		}
+	}()
 	if preload != "" {
 		for _, path := range strings.Split(preload, ",") {
 			n, err := preloadHistory(store, p.Bundle, path)
@@ -123,19 +128,33 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib stri
 	srv.SetReady(true)
 	log.Info("serving", "addr", addr, "admin_addr", adminAddr, "model_version", p.Bundle.ModelVersion, "items", p.Bundle.ItemCount,
 		"shards", shards.Shards, "shard_mode", shards.Mode, "zero_vectors", p.Shards.Zeroes())
+	var serveErr error
 	select {
-	case err := <-errc:
-		return err
+	case serveErr = <-errc:
 	case <-ctx.Done():
 	}
 	srv.SetReady(false)
-	sctx, cancel := context.WithTimeout(context.Background(), drain)
+	closeLive = false
+	return errors.Join(serveErr, shutdown(log, servers, live, drain))
+}
+
+// shutdown shuts the servers down, giving requests in flight drain to finish,
+// then closes live. Requests still running at the deadline may hold the
+// active bundle, and closing it would wait for them without limit, so it
+// then logs a warning and returns without closing it.
+func shutdown(log *slog.Logger, servers []*http.Server, live *recommend.Live, drain time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), drain)
 	defer cancel()
 	var errs []error
 	for _, hs := range servers {
-		errs = append(errs, hs.Shutdown(sctx))
+		errs = append(errs, hs.Shutdown(ctx))
 	}
-	return errors.Join(errs...)
+	err := errors.Join(errs...)
+	if errors.Is(err, context.DeadlineExceeded) {
+		log.Warn("requests still running after the drain; exiting without closing the bundle", "drain", drain)
+		return err
+	}
+	return errors.Join(err, live.Close())
 }
 
 // preparer returns the function that loads, verifies and indexes the

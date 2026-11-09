@@ -139,6 +139,8 @@ func (s *Server) instrument(route string, h func(http.ResponseWriter, *http.Requ
 				code = http.StatusRequestEntityTooLarge
 			case errors.As(err, &be):
 				code = http.StatusBadRequest
+			case errors.Is(err, recommend.ErrLiveClosed): // shutting down
+				code = http.StatusServiceUnavailable
 			case errors.Is(err, context.Canceled) && r.Context().Err() != nil:
 				code = statusClientClosed
 			case errors.Is(err, context.DeadlineExceeded) && r.Context().Err() != nil:
@@ -361,7 +363,7 @@ func (s *Server) swap(w http.ResponseWriter, r *http.Request) error {
 		s.swaps.WithLabelValues(swapBusy).Inc()
 		return httpError{http.StatusConflict, err}
 	case errors.Is(err, recommend.ErrLiveClosed):
-		return httpError{http.StatusServiceUnavailable, err}
+		return err
 	case err != nil:
 		s.swaps.WithLabelValues(swapRejected).Inc()
 		s.Log.Warn("swap rejected", "bundle", in.Bundle, "err", err)

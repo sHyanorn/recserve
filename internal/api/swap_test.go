@@ -157,3 +157,24 @@ func postRaw(t *testing.T, url, body string) (int, []byte) {
 	}
 	return resp.StatusCode, readBody(t, resp)
 }
+
+// After the gateway closes its bundle, every route that needs it answers
+// 503, as the readiness probe does, and logs nothing.
+func TestClosedLiveIs503(t *testing.T) {
+	s, api, admin, logs := swapServer(t)
+	if err := s.Live.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ url, body string }{
+		{api.URL + "/v1/recommend", `{"user_id":"u","k":3}`},
+		{api.URL + "/v1/events", `{"events":[{"user_id":"u","item_id":"a","ts":5,"kind":"view"}]}`},
+		{admin.URL + "/v1/admin/swap", `{"bundle":"v2"}`},
+	} {
+		if code, out := post(t, c.url, c.body); code != http.StatusServiceUnavailable {
+			t.Fatalf("%s: %d %v", c.url, code, out)
+		}
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("logged: %s", logs)
+	}
+}
