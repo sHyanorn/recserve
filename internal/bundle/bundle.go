@@ -258,6 +258,16 @@ func (b *Bundle) checkGolden(data []byte) error {
 	return nil
 }
 
+// New assembles a bundle from parts already in memory, without files or
+// checksums; ids[0] must be "" (padding). For tests and tools.
+func New(m Manifest, ids []string, vectors vec.Matrix, cooc, popular []int32) *Bundle {
+	b := &Bundle{Manifest: m, IDs: ids, Vectors: vectors, Cooc: cooc, Popular: popular, index: make(map[string]int32, len(ids))}
+	for i, id := range ids[1:] {
+		b.index[id] = int32(i + 1)
+	}
+	return b
+}
+
 // UserVector is the mean of the vectors of the last MaxSeqLen history items; nil for an empty history.
 func (b *Bundle) UserVector(history []int32) []float32 {
 	if len(history) > b.MaxSeqLen {
