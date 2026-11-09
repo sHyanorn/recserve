@@ -10,6 +10,7 @@ Every result directory under `bench-results/` holds an `env.txt` with: CPU model
 
 `experiments/m0/cmd/noise` (later `cmd/noisebase`) runs a fixed single-core workload: a dot product of a 64-dimensional float32 query against 16,384 float32 vectors, repeated for 200 passes, timed 30 times; the result is the median time of one pass.
 
+- **One build.** From M2 on, the reference and every baseline of a session are taken by the same `cmd/noisebase` binary, run as its own process; result files record its SHA-256. A reference is compared with another session's only if both come from builds of the same commit with the same toolchain (D025).
 - **Reference.** At the start of a benchmark session, on an idle machine, the baseline runs 10 times; the median is the session reference.
 - **Per run.** The baseline runs right before and right after each benchmark run, pinned to the CPU the measured process uses (or the first one, if it uses several).
 - **Flag.** A run is flagged when either baseline is more than 10% slower than the reference. A flagged run is rerun, at most twice; if all three attempts are flagged, the last one is reported and marked "noisy".
