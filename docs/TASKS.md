@@ -59,6 +59,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] Load sweeps per docs/BENCHMARKS.md
 - [ ] Fault runs with toxiproxy and container control (D021)
 - [ ] ANN and sharded recall and latency on glove-100 and synthetic vectors
+- [ ] Latency during bundle swaps under load, and the cause of its largest values, GC or CPU contention with prepare (D031)
 - [ ] Profiles and at least one optimization backed by before/after data
   - Candidate: SIMD inner product in the HNSW search; on glove the p99 is 1.3 to 2.4 times faiss's at equal recall on the same machine (BENCHMARKS, M2), and `vec.Dot32` is scalar Go
 - [ ] Report with charts
