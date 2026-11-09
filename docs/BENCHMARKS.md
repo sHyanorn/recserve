@@ -67,6 +67,21 @@ The checks run on the benchmark VM. Each has a pass criterion set here; if it fa
 
 **Fallback.** Write HNSW by hand with neighbor lists in flat int32 arrays (no pointers for the GC to scan), measured with the same protocol in M2.
 
+### Hand-written HNSW (M2, D016)
+
+R2 failed, so M2 writes HNSW by hand. It is measured with the R2 protocol above: same data, ground truth, ef values, recall definition, single-thread latency, GC statistics, noise baseline, and the same exact and faiss baselines.
+
+**Pass** if on both datasets there is an ef, with M = 16 and efConstruction = 200 or with M = 32 and efConstruction = 400, at which recall@100 ≥ 0.95 and single-thread p99 ≤ 5 ms, and the longest GC pause during the query phase is ≤ 5 ms. This is the R2 criterion unchanged.
+
+**Known before measuring.** In M0, faiss itself does not meet the latency part on glove: it reaches recall@100 ≥ 0.95 only at M = 32, ef = 800 (0.961), with p99 6.59 ms (Results, R2). The hand-written index may fail the same way.
+
+**If only the glove latency part fails** (synthetic passes, and on glove recall@100 ≥ 0.95 is reached but only with p99 > 5 ms), the criterion is reported as failed and no threshold is changed. The report then gives, for glove:
+
+- the recall@100 and p99 curve over all ef values, beside faiss's curve
+- p99 at the lowest ef reaching recall@100 ≥ 0.95, through scatter-gather over two shards (two annshard processes, each with half the base vectors and its own index, built with the same settings; the merged top-100 is scored against the full ground truth)
+
+The index is still used in M3 and later, with its measured p99 stated wherever retrieval latency is reported. **If any other part fails**, retrieval at 1M-scale stays on exact search, the shard tier serves exact search, and the hand-written index is reported as a negative result.
+
 ## Retrieval quality
 
 - ANN recall@k against exact search, defined as in R2, for k = 10 and 100, on one node and through scatter-gather over the shards.
