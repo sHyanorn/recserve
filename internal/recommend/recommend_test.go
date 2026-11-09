@@ -378,3 +378,34 @@ func TestONNXEncoderMatchesMean(t *testing.T) {
 		}
 	}
 }
+
+// The co-occurrence score is 1 / ((s + 1)(r + 1)) in float64, as docs/SPEC.md
+// §8 writes it: for s = 2, r = 10 it is 1/33, one bit away from (1/3)/11.
+func TestCoocScore(t *testing.T) {
+	const n = 20
+	m, err := vec.NewMatrix(1, make([]float32, n+1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, n+1)
+	for i := 1; i <= n; i++ {
+		ids[i] = fmt.Sprint("i", i)
+	}
+	cooc := make([]int32, (n+1)*bundle.CoocWidth)
+	for r := range 11 {
+		cooc[1*bundle.CoocWidth+r] = int32(5 + r) // item 15 at position 10 of item 1's row
+	}
+	p := &Pipeline{Bundle: bundle.New(bundle.Manifest{ItemCount: n, Dim: 1}, ids, m, cooc, nil)}
+	hits, err := p.cooc(context.Background(), []int32{1, 2, 3}) // item 1 is seed 2
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, pos := 3.0, 11.0 // s + 1, r + 1, as float64 values, not constants
+	want := 1 / (seed * pos)
+	if len(hits) != 11 || hits[10] != (vec.Hit{ID: 15, Score: want}) {
+		t.Fatalf("hits %v, want item 15 last with %v", hits, want)
+	}
+	if want == 1/seed/pos {
+		t.Fatal("the case does not tell the two orders apart")
+	}
+}

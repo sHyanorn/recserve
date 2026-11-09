@@ -584,17 +584,17 @@ func best(hits []vec.Hit) map[int32]float64 {
 	return out
 }
 
-// cooc returns the co-occurrence candidates: seeds weighted by recency,
-// neighbors by rank.
+// cooc returns the co-occurrence candidates: the neighbor at position r of
+// the seed s positions from the latest history item scores
+// 1 / ((s + 1)(r + 1)), as docs/SPEC.md §8 writes it.
 func (p *Pipeline) cooc(ctx context.Context, hist []int32) ([]vec.Hit, error) {
 	if err := p.stalled(ctx, stageCooc, -1); err != nil {
 		return nil, err
 	}
 	var out []vec.Hit
-	for i := 0; i < CoocSeeds && i < len(hist); i++ {
-		w := 1 / float64(i+1)
-		for r, id := range p.Bundle.CoocRow(hist[len(hist)-1-i]) {
-			out = append(out, vec.Hit{ID: id, Score: w / float64(r+1)})
+	for s := 0; s < CoocSeeds && s < len(hist); s++ {
+		for r, id := range p.Bundle.CoocRow(hist[len(hist)-1-s]) {
+			out = append(out, vec.Hit{ID: id, Score: 1 / float64((s+1)*(r+1))})
 		}
 	}
 	return out, nil
