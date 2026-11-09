@@ -216,6 +216,7 @@ type Pipeline struct {
 	rankWith          Ranker // test only: replaces the bundle's ranker
 	skipSeenFilter    bool   // test only: the broken variant of property 2
 	keyWithoutVersion bool   // test only: the broken variant of property 5
+	shardShare        bool   // test only: the broken variant of property 6, ceil(VectorTop/n) items per shard
 	// scoreBundle, test only, is the broken variant of property 4: it
 	// returns the bundle whose vectors score the candidates, read again
 	// instead of the one the request started on.
@@ -476,13 +477,17 @@ func (p *Pipeline) searchShards(ctx context.Context, uv []float32, seen map[int3
 	n := p.Shards.Shards()
 	hits, errs := make([][]vec.Hit, n), make([]error, n)
 	skip := func(id int32) bool { return seen[id] }
+	top := VectorTop
+	if p.shardShare {
+		top = (VectorTop + n - 1) / n
+	}
 	var wg sync.WaitGroup
 	for i := range n {
 		wg.Go(func() {
 			sctx, cancel := within(ctx, p.Budgets.Shard)
 			defer cancel()
 			if errs[i] = p.stalled(sctx, stageVector, i); errs[i] == nil {
-				hits[i], errs[i] = p.Shards.Search(sctx, i, uv, VectorTop, skip)
+				hits[i], errs[i] = p.Shards.Search(sctx, i, uv, top, skip)
 			}
 		})
 	}
