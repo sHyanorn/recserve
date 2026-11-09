@@ -2,7 +2,7 @@
 
 A recommendation serving system in Go: retrieval, features, ranking and rerank behind one HTTP API, with a sharded vector tier, caching, degradation, rate limiting, A/B assignment, metrics and tracing.
 
-Status: single-node request path (M1). See [docs/SPEC.md](docs/SPEC.md), [docs/DECISIONS.md](docs/DECISIONS.md), [docs/TASKS.md](docs/TASKS.md) and [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+Status: M2 is done. One gateway process serves the full request path from in-process shards; Kafka, Valkey and the gRPC shard tier follow in M3 and M4. See [docs/SPEC.md](docs/SPEC.md), [docs/DECISIONS.md](docs/DECISIONS.md), [docs/TASKS.md](docs/TASKS.md) and [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## Quick start
 
@@ -13,6 +13,23 @@ make build
 bin/gateway -bundle data/bundle/<version> -test-split data/Video_Games.test.csv.gz -preload data/Video_Games.train.csv.gz,data/Video_Games.valid.csv.gz
 bin/loadgen -split data/Video_Games.test.csv.gz -rate 200 -duration 30s
 ```
+
+`make bundle DATA=data ENCODER=onnx` builds the same bundle with an ONNX user encoder; the gateway then needs `-ort-lib` pointing to ONNX Runtime 1.31.x (`libonnxruntime.so`). To swap the served bundle, with the same items, while the gateway runs:
+
+```bash
+curl -X POST localhost:8081/v1/admin/swap -d '{"bundle":"data/bundle/<version>"}'
+```
+
+The admin API listens on 127.0.0.1:8081 (`-admin-addr`) and has no authentication.
+
+## In place after M2
+
+- Retrieval from co-occurrence, popularity and vectors, searched exactly or with a hand-written HNSW in two in-process shards (D016, D024, D028)
+- User encoder and ranker through ONNX Runtime (D026, D027)
+- Seen-item filter, deduplication and MMR; per-stage deadlines with degradation reasons and shard coverage in every response (D029)
+- Result cache keyed by bundle version and the user's history (D030)
+- Two-phase bundle swap: prepare and verify in the background, atomic activation, previous bundle closed once no request holds it (D031)
+- Prometheus metrics; load generator corrected for coordinated omission
 
 ## Scale
 
