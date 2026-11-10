@@ -352,7 +352,7 @@ func TestReplicasRollingRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		terminate(t, x.procs[i], 10*time.Second) // the replicas' -drain
+		terminate(t, x.procs[i], 15*time.Second) // the replicas' -drain of 10 s, and 5 s to spare
 		x.replica(i)
 		eventually(t, 20*time.Second, "the restarted replica is not ready", func() bool { return x.ready(i) })
 		after, err := counts()

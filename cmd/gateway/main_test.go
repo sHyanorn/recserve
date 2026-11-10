@@ -11,12 +11,18 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/sHyanorn/recserve/internal/annshard/annshardtest"
 	"github.com/sHyanorn/recserve/internal/api"
@@ -267,10 +273,10 @@ func TestShutdown(t *testing.T) {
 	}
 }
 
-// Told to stop, the gateway reports itself not ready at once and closes
-// each connection after its response; it goes on answering for the delay,
-// while the load balancers take it out, then closes its listener, and the
-// requests in flight finish (D045).
+// Told to stop, the gateway reports itself not ready at once. It goes on
+// answering for the delay, while the load balancers take it out, on new
+// connections and on those already open, closing each after its response;
+// then it closes its listener, and the requests in flight finish (D045).
 func TestShutdownDelay(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	live := newLive(t)
@@ -289,43 +295,61 @@ func TestShutdownDelay(t *testing.T) {
 		t.Fatal(err)
 	}
 	go hs.Serve(ln) //nolint:errcheck // ends with the shutdown below
-	// get asks on a new connection, so that the response shows whether the
-	// server keeps it open.
-	get := func(path string) (*http.Response, error) {
-		tr := &http.Transport{}
-		defer tr.CloseIdleConnections()
-		resp, err := (&http.Client{Transport: tr, Timeout: 5 * time.Second}).Get("http://" + ln.Addr().String() + path)
-		if err != nil {
-			return nil, err
+	// get asks on a connection of tr, a new one if tr is nil, and reports
+	// whether the connection was one opened before.
+	get := func(tr *http.Transport, path string) (resp *http.Response, reused bool, err error) {
+		if tr == nil {
+			tr = &http.Transport{}
+			defer tr.CloseIdleConnections()
 		}
-		return resp, resp.Body.Close()
+		trace := &httptrace.ClientTrace{GotConn: func(c httptrace.GotConnInfo) { reused = c.Reused }}
+		req, err := http.NewRequestWithContext(httptrace.WithClientTrace(context.Background(), trace), http.MethodGet, "http://"+ln.Addr().String()+path, nil)
+		if err != nil {
+			return nil, false, err
+		}
+		resp, err = (&http.Client{Transport: tr, Timeout: 30 * time.Second}).Do(req)
+		if err != nil {
+			return nil, false, err
+		}
+		return resp, reused, resp.Body.Close()
+	}
+	kept := &http.Transport{} // holds a connection, idle at the stop
+	defer kept.CloseIdleConnections()
+	if _, _, err := get(kept, "/livez"); err != nil {
+		t.Fatal(err)
 	}
 	slow := make(chan error, 1)
 	go func() {
-		resp, err := get("/slow")
+		resp, _, err := get(nil, "/slow")
 		if err == nil && resp.StatusCode != http.StatusOK {
 			err = fmt.Errorf("status %d", resp.StatusCode)
 		}
 		slow <- err
 	}()
-	<-entered
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the slow request did not arrive")
+	}
 
-	const delay = 2 * time.Second
+	const delay = 5 * time.Second
 	stopped := make(chan error, 1)
-	go func() { stopped <- shutdown(log, srv, []*http.Server{hs}, live, delay, 10*time.Second) }()
+	go func() { stopped <- shutdown(log, srv, []*http.Server{hs}, live, delay, 30*time.Second) }()
 	for deadline := time.Now().Add(time.Second); ; time.Sleep(5 * time.Millisecond) {
-		if resp, err := get("/readyz"); err == nil && resp.StatusCode == http.StatusServiceUnavailable {
+		if resp, _, err := get(nil, "/readyz"); err == nil && resp.StatusCode == http.StatusServiceUnavailable {
 			break
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("/readyz is not 503 a second after the stop")
 		}
 	}
-	if resp, err := get("/livez"); err != nil || resp.StatusCode != http.StatusOK || !resp.Close {
-		t.Fatalf("during the delay: %v, %v; want 200 with Connection: close", resp, err)
+	for _, tr := range []*http.Transport{nil, kept} {
+		if resp, reused, err := get(tr, "/livez"); err != nil || resp.StatusCode != http.StatusOK || !resp.Close || reused != (tr != nil) {
+			t.Fatalf("during the delay: %v, %v, reused %v; want 200 with Connection: close, reused %v", resp, err, reused, tr != nil)
+		}
 	}
 	for deadline := time.Now().Add(delay + 5*time.Second); ; time.Sleep(10 * time.Millisecond) {
-		if _, err := get("/livez"); err != nil {
+		if _, _, err := get(nil, "/livez"); err != nil {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -343,6 +367,73 @@ func TestShutdownDelay(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("shutdown did not return")
+	}
+}
+
+// The gateway on annshard replicas, run in this process: it serves, has a
+// replica that restarts prepared again with the version served, and stops
+// on SIGTERM. Under the race detector this checks the shard client reading
+// the version served from its own goroutines while run sets it.
+func TestRunOnReplicas(t *testing.T) {
+	dir := bundletest.Write(t)
+	root := t.TempDir()
+	if err := os.Symlink(dir, filepath.Join(root, bundletest.VersionOf(t, dir))); err != nil {
+		t.Fatal(err)
+	}
+	a, stopA := annshardtest.StartOn(t, "127.0.0.1:0", root)
+	b := annshardtest.Start(t, root)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	done := make(chan error, 1)
+	go func() {
+		done <- run(log, addr, "", dir, "", "", "", "", "", 0, shard.DefaultConfig, a+";"+b, 0, 10*time.Second,
+			recommend.Budgets{}, 0, time.Minute, 5*time.Second, 0)
+	}()
+	eventually := func(what string, ok func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(20 * time.Second); !ok(); time.Sleep(20 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal(what)
+			}
+		}
+	}
+	eventually("the gateway is not ready", func() bool {
+		resp, err := http.Get("http://" + addr + "/readyz")
+		if err != nil {
+			return false
+		}
+		return resp.Body.Close() == nil && resp.StatusCode == http.StatusOK
+	})
+	stopA()
+	annshardtest.StartOn(t, a, root)
+	eventually("the restarted replica is not ready", func() bool {
+		conn, err := grpc.NewClient(a, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close() //nolint:errcheck // a probe
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		h, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{})
+		return err == nil && h.GetStatus() == healthpb.HealthCheckResponse_SERVING
+	})
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("still running 20 s after SIGTERM")
 	}
 }
 

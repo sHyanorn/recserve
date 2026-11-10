@@ -101,7 +101,9 @@ func (s *Server) Register(cs ...prometheus.Collector) { s.reg.MustRegister(cs...
 // SetReady sets the readiness reported by /readyz.
 func (s *Server) SetReady(v bool) { s.ready.Store(v) }
 
-// Handler returns the HTTP handler.
+// Handler returns the HTTP handler. While the server is not ready, as when
+// it is stopping, each response closes its connection, so that a client
+// that keeps connections open goes to another instance (D045).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("POST /v1/recommend", s.instrument("recommend", s.recommend))
@@ -115,7 +117,12 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.Handle("GET /metrics", promhttp.HandlerFor(s.reg, promhttp.HandlerOpts{}))
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.ready.Load() {
+			w.Header().Set("Connection", "close")
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 // AdminHandler returns the handler of the admin API, for a listener of its

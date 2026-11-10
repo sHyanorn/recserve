@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -112,8 +113,10 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 		}
 		shards.Shards = len(replicas)
 	}
-	var live *recommend.Live
+	// The shard client reads the version served from its own goroutines.
+	var active atomic.Pointer[recommend.Live]
 	serving := func() string {
+		live := active.Load()
 		if live == nil { // the first bundle is being prepared
 			return ""
 		}
@@ -129,7 +132,8 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 	if err != nil {
 		return err
 	}
-	live = recommend.NewLive(p, log)
+	live := recommend.NewLive(p, log)
+	active.Store(live)
 	closeLive := true // until serving starts; then shutdown closes it
 	defer func() {
 		if closeLive {
@@ -183,17 +187,14 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 	return errors.Join(serveErr, shutdown(log, srv, servers, live, shutdownDelay, drain))
 }
 
-// shutdown stops the gateway (D045). It reports srv not ready, has each
-// connection closed after its next response, and goes on answering for
-// delay, while the load balancers take it out. Then it shuts the servers
+// shutdown stops the gateway (D045). It reports srv not ready, from when
+// each response closes its connection, and goes on answering for delay,
+// while the load balancers take it out. Then it shuts the servers
 // down, giving requests in flight drain to finish, and closes live.
 // Requests still running at the deadline may hold the active bundle, and
 // closing it would wait for them without limit, so it then logs a warning
 // and returns without closing it.
 func shutdown(log *slog.Logger, srv *api.Server, servers []*http.Server, live *recommend.Live, delay, drain time.Duration) error {
-	for _, hs := range servers {
-		hs.SetKeepAlivesEnabled(false)
-	}
 	srv.SetReady(false)
 	time.Sleep(delay)
 	ctx, cancel := context.WithTimeout(context.Background(), drain)

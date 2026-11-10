@@ -206,22 +206,41 @@ func Dial(addrs [][]string, opt Options) (*Client, error) {
 	return c, nil
 }
 
-// watch keeps the connection to r, a replica of shard i, open until Close,
-// and each time it is up has r catch up on the version served: a replica
-// that restarted, or was down when the version was prepared, becomes ready
-// without a search finding it lacking (D044).
+// followEvery is how often a replica with a connection up is checked
+// against the version the gateway serves.
+const followEvery = time.Second
+
+// watch keeps the connection to r, a replica of shard i, open until Close.
+// While it is up, it has r prepare the version served whenever r has not
+// been prepared with that version on this connection, and after a failure
+// asks again catchUpWait later: a replica that restarted, was down during a
+// prepare or could not prepare becomes ready without a search finding it
+// lacking, and every replica learns of a swap once it is active (D044).
 func (c *Client) watch(r *replica, i int) {
+	var held string     // the version served that r was prepared with on this connection
+	var retry time.Time // after a failure, the time to ask again
 	for {
 		st := r.conn.GetState()
+		if st != connectivity.Ready {
+			held = ""
+		}
 		switch st {
 		case connectivity.Idle:
 			r.conn.Connect()
 		case connectivity.Ready:
-			if v := c.opt.Serving(); v != "" {
-				c.catchUp(r, c.index(v, i))
+			if v := c.opt.Serving(); v != "" && v != held && !time.Now().Before(retry) {
+				if err := c.prepareOn(r, c.index(v, i), v); err == nil {
+					held = v
+				} else if c.ctx.Err() == nil {
+					c.opt.Log.Warn("a replica could not prepare the version served", "replica", r.addr, "version", v, "shard", i, "err", err)
+					retry = time.Now().Add(catchUpWait)
+				}
 			}
 		}
-		if !r.conn.WaitForStateChange(c.ctx, st) {
+		ctx, cancel := context.WithTimeout(c.ctx, followEvery)
+		r.conn.WaitForStateChange(ctx, st)
+		cancel()
+		if c.ctx.Err() != nil {
 			return
 		}
 	}
@@ -333,13 +352,7 @@ func (c *Client) catchUp(r *replica, x *annshardpb.Index) {
 	c.mu.Unlock()
 	go func() {
 		defer c.wg.Done()
-		ctx, cancel := c.ctx, context.CancelFunc(func() {})
-		if c.opt.PrepareTimeout > 0 {
-			ctx, cancel = context.WithTimeout(ctx, c.opt.PrepareTimeout)
-		}
-		_, err := r.rpc.Prepare(ctx, &annshardpb.PrepareRequest{Index: x, ServingVersion: c.opt.Serving()})
-		cancel()
-		if err == nil {
+		if err := c.prepareOn(r, x, c.opt.Serving()); err == nil {
 			c.opt.Log.Info("a replica prepared an index it lacked", "replica", r.addr, "version", ix.version, "shard", ix.shard)
 		} else if c.ctx.Err() == nil {
 			c.opt.Log.Warn("a replica could not prepare an index it lacks", "replica", r.addr, "version", ix.version, "shard", ix.shard, "err", err)
@@ -352,6 +365,18 @@ func (c *Client) catchUp(r *replica, x *annshardpb.Index) {
 		delete(c.catching, key)
 		c.mu.Unlock()
 	}()
+}
+
+// prepareOn has replica r prepare the index x, telling it the version
+// served, within PrepareTimeout.
+func (c *Client) prepareOn(r *replica, x *annshardpb.Index, serving string) error {
+	ctx, cancel := c.ctx, context.CancelFunc(func() {})
+	if c.opt.PrepareTimeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, c.opt.PrepareTimeout)
+	}
+	defer cancel()
+	_, err := r.rpc.Prepare(ctx, &annshardpb.PrepareRequest{Index: x, ServingVersion: serving})
+	return err
 }
 
 // Config returns the settings the shards are built and searched with.

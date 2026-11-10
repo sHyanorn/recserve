@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"net"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,10 +20,10 @@ import (
 	"github.com/sHyanorn/recserve/internal/vec"
 )
 
-// start runs serve over root with drain until the returned function is
-// called, as SIGTERM does, and returns the replica's address and the
-// channel serve's result arrives on.
-func start(t *testing.T, root string, drain time.Duration) (string, context.CancelFunc, <-chan error) {
+// start runs serve over root with drain, logging to log, until the returned
+// function is called, as SIGTERM does, and returns the replica's address
+// and the channel serve's result arrives on.
+func start(t *testing.T, root string, drain time.Duration, log io.Writer) (string, context.CancelFunc, <-chan error) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -29,7 +32,7 @@ func start(t *testing.T, root string, drain time.Duration) (string, context.Canc
 	ctx, stop := context.WithCancel(context.Background())
 	t.Cleanup(stop)
 	served := make(chan error, 1)
-	go func() { served <- serve(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), ln, root, drain) }()
+	go func() { served <- serve(ctx, slog.New(slog.NewTextHandler(log, nil)), ln, root, drain) }()
 	return ln.Addr().String(), stop, served
 }
 
@@ -68,7 +71,7 @@ func TestServe(t *testing.T) {
 		t.Fatal(err)
 	}
 	version := annshardtest.WriteVectors(t, root, m)
-	addr, stop, served := start(t, root, 10*time.Second)
+	addr, stop, served := start(t, root, 10*time.Second, io.Discard)
 	conn := dial(t, addr)
 	call, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -122,7 +125,7 @@ func TestServeDrains(t *testing.T) {
 		}
 	}
 
-	addr, stop, served := start(t, root, 10*time.Second)
+	addr, stop, served := start(t, root, 10*time.Second, io.Discard)
 	conn := dial(t, addr)
 	ix := &annshardpb.Index{Version: version, Shards: 1, Mode: annshardpb.Mode_MODE_EXACT}
 	if _, err := annshardpb.NewAnnShardClient(conn).Prepare(context.Background(), &annshardpb.PrepareRequest{Index: ix, ServingVersion: version}); err != nil {
@@ -151,14 +154,37 @@ func TestServeDrains(t *testing.T) {
 	end()
 	returned(t, served, 5*time.Second)
 
-	// A call that does not end is cut at the end of the drain.
-	addr, stop, served = start(t, root, time.Second)
+	// A call that does not end is cut at the end of the drain, which the
+	// log says before the replica stops.
+	var log lockedBuffer
+	addr, stop, served = start(t, root, time.Second, &log)
 	w, _ = watch(dial(t, addr))
 	next(w, healthpb.HealthCheckResponse_NOT_SERVING)
 	stop()
 	if took := returned(t, served, 10*time.Second); took < 900*time.Millisecond {
 		t.Fatalf("stopped after %v, before the drain of 1 s", took)
 	}
+	if !strings.Contains(log.String(), "after the drain") {
+		t.Fatalf("the log does not say that calls were cut:\n%s", log.String())
+	}
+}
+
+// lockedBuffer is a log that the replica writes while the test reads it.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
 
 func TestRunRejects(t *testing.T) {

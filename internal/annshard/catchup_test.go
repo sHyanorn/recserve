@@ -3,7 +3,10 @@ package annshard_test
 import (
 	"context"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -224,4 +227,35 @@ func TestFirstVersionMakesReady(t *testing.T) {
 			}
 		}
 	}
+}
+
+// A replica whose connection stays up follows the version served, with no
+// search: it is prepared with each new one, and asked again after a failure,
+// as for a version whose directory arrives late (D044).
+func TestReplicaFollowsTheVersionServed(t *testing.T) {
+	r := rand.New(rand.NewPCG(11, 11))
+	root, elsewhere := t.TempDir(), t.TempDir()
+	v1 := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 100, 2))
+	v2 := annshardtest.WriteVectors(t, elsewhere, shardtest.RandomMatrix(r, 100, 2))
+	addr := annshardtest.Start(t, root)
+	var served atomic.Pointer[string]
+	served.Store(new(string))
+	c := annshardtest.Dial(t, [][]string{{addr}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, Serving: func() string { return *served.Load() }})
+	if _, err := c.Prepare(context.Background(), v1, 100); err != nil {
+		t.Fatal(err)
+	}
+	served.Store(&v1)
+	if !ready(t, addr) {
+		t.Fatal("not ready on the first version")
+	}
+	served.Store(&v2)
+	for deadline := time.Now().Add(20 * time.Second); ready(t, addr); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("still ready 20 s after the version served became one it cannot build")
+		}
+	}
+	if err := os.Rename(filepath.Join(elsewhere, v2), filepath.Join(root, v2)); err != nil {
+		t.Fatal(err)
+	}
+	waitReady(t, addr)
 }

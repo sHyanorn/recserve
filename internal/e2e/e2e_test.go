@@ -100,7 +100,8 @@ func terminate(t *testing.T, cmd *exec.Cmd, limit time.Duration) {
 			t.Fatalf("%s after SIGTERM: %v", cmd.Path, err)
 		}
 	case <-time.After(limit):
-		t.Fatalf("%s still running %v after SIGTERM", cmd.Path, limit)
+		cmd.Process.Kill() //nolint:errcheck // it may have exited just now
+		t.Fatalf("%s still running %v after SIGTERM, then killed: %v", cmd.Path, limit, <-exited)
 	}
 }
 

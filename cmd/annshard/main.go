@@ -62,11 +62,12 @@ func serve(ctx context.Context, log *slog.Logger, ln net.Listener, bundles strin
 	go func() {
 		<-ctx.Done()
 		s.Shutdown()
-		cut := time.AfterFunc(drain, gs.Stop)
+		cut := time.AfterFunc(drain, func() {
+			log.Warn("calls still running after the drain are ended", "drain", drain)
+			gs.Stop()
+		})
 		gs.GracefulStop()
-		if !cut.Stop() {
-			log.Warn("calls still running after the drain were ended", "drain", drain)
-		}
+		cut.Stop()
 	}()
 	return gs.Serve(ln)
 }
