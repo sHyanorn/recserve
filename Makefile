@@ -3,9 +3,11 @@ DATA    ?= data
 ENCODER ?= mean
 BUNDLE  ?=
 TAG     ?= dev
+VERSION ?=
+COMPOSE := docker compose -f deploy/compose.yaml
 
 .DEFAULT_GOAL := help
-.PHONY: help build test test-real e2e lint fmt proto data bundle images infra-up infra-down
+.PHONY: help build test test-real e2e lint fmt proto data bundle images infra-up infra-down up down test-alerts
 
 help: ## Show available targets
 	@awk -F':.*## ' '/^[a-z0-9-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -42,7 +44,16 @@ images: ## Build the gateway, annshard and ingest images as recserve/<name>:TAG;
 	for t in gateway annshard ingest; do docker build $(DOCKER_BUILD_FLAGS) --target $$t -t recserve/$$t:$(TAG) . || exit 1; done
 
 infra-up: ## Start Kafka and Valkey (deploy/compose.yaml) and wait until they are healthy
-	docker compose -f deploy/compose.yaml up -d --wait
+	$(COMPOSE) up -d --wait
 
 infra-down: ## Stop Kafka and Valkey and delete their data
-	docker compose -f deploy/compose.yaml down -v
+	$(COMPOSE) down -v
+
+up: ## Start the service in Docker on the images of make images: DATA, and VERSION, the bundle version to serve
+	DATA=$(abspath $(DATA)) VERSION=$(VERSION) TAG=$(TAG) $(COMPOSE) --profile app up -d --wait
+
+down: ## Stop what make up started and delete its data
+	$(COMPOSE) --profile app down -v
+
+test-alerts: ## Unit-test the Prometheus alert rules with promtool
+	$(COMPOSE) run --rm --no-deps --entrypoint promtool -w /etc/prometheus prometheus test rules alerts_test.yml

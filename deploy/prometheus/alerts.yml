@@ -1,0 +1,14 @@
+groups:
+  - name: recserve
+    rules:
+      # A search that fails on a replica and is answered by another is counted
+      # under the failed replica and not logged (D041). A few around a rolling
+      # restart are expected (D045); failures every few minutes for 10 minutes
+      # are a replica that keeps failing.
+      - alert: ShardReplicaFailing
+        expr: sum by (shard, replica) (increase(recserve_shard_failovers_total[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Replica {{ $labels.replica }} of shard {{ $labels.shard }} keeps failing searches that another replica answers

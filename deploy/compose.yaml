@@ -1,9 +1,16 @@
-# Kafka (KRaft, one node) and Valkey for local runs and the integration tests.
-# From the host: Kafka at localhost:9094, Valkey at localhost:6379.
-# From other containers on this network: kafka:9092, valkey:6379.
-# Start order: these services, then ingest, which creates the events topic,
-# then the gateways. Until the topic exists a gateway started with
-# -kafka-brokers answers 503 on /v1/events (D034).
+# Kafka (KRaft, one node) and Valkey for local runs and the integration tests
+# (make infra-up). From the host: Kafka at localhost:9094, Valkey at
+# localhost:6379; from other containers on this network: kafka:9092, valkey:6379.
+#
+# The profile "app" adds the service on them, from the images of make images
+# (make up DATA=... VERSION=...): ingest, four annshard replicas (two shards of
+# two), the gateway, Prometheus and Grafana. DATA is mounted read-only at /data
+# and the gateway serves DATA/bundle/VERSION. From the host: the gateway at
+# localhost:8080, its admin API at localhost:8081 (swaps take a path under
+# /data), Prometheus at localhost:9090, Grafana at localhost:3000.
+# ingest creates the events topic; until it exists a gateway started with
+# -kafka-brokers answers 503 on /v1/events (D034). A gateway that cannot
+# prepare its bundle on the replicas exits and is restarted.
 name: recserve
 
 services:
@@ -46,3 +53,62 @@ services:
       interval: 1s
       timeout: 3s
       retries: 30
+
+  ingest:
+    profiles: [app]
+    image: recserve/ingest:${TAG:-dev}
+    command: [-kafka-brokers=kafka:9092, -valkey-addr=valkey:6379]
+    depends_on:
+      kafka: {condition: service_healthy}
+      valkey: {condition: service_healthy}
+    restart: on-failure
+
+  annshard-0: &annshard
+    profiles: [app]
+    image: recserve/annshard:${TAG:-dev}
+    command: [-bundles=/data/bundle]
+    volumes:
+      - ${DATA:-../data}:/data:ro
+    restart: on-failure
+  annshard-1: *annshard
+  annshard-2: *annshard
+  annshard-3: *annshard
+
+  gateway:
+    profiles: [app]
+    image: recserve/gateway:${TAG:-dev}
+    command:
+      - -bundle=/data/bundle/${VERSION:-}
+      - -test-split=/data/Video_Games.test.csv.gz
+      - -preload=/data/Video_Games.train.csv.gz,/data/Video_Games.valid.csv.gz
+      - -ort-lib=/usr/local/lib/libonnxruntime.so.1.31.1
+      - -valkey-addr=valkey:6379
+      - -kafka-brokers=kafka:9092
+      - -shard-addrs=annshard-0:9090,annshard-1:9090;annshard-2:9090,annshard-3:9090
+      - -admin-addr=:8081
+    volumes:
+      - ${DATA:-../data}:/data:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8081:8081"
+    depends_on: [ingest, annshard-0, annshard-1, annshard-2, annshard-3]
+    restart: on-failure
+
+  prometheus:
+    profiles: [app]
+    image: prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  grafana:
+    profiles: [app]
+    image: grafana/grafana:13.3.1@sha256:0615ec4fbd4072004b7d86b46ded63013a74b7d6eb1119273dd89e8fa25c13cf
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3000:3000"

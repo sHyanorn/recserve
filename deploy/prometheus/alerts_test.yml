@@ -1,0 +1,40 @@
+# promtool test rules alerts_test.yml (make test-alerts)
+rule_files:
+  - alerts.yml
+evaluation_interval: 1m
+
+tests:
+  # One failover, as a rolling restart gives: no alert, at any time.
+  - interval: 1m
+    input_series:
+      - series: recserve_shard_failovers_total{job="gateway",instance="gateway:8080",shard="0",replica="annshard-1:9090"}
+        values: 0 1x30
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ShardReplicaFailing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: ShardReplicaFailing
+        exp_alerts: []
+
+  # A replica that fails every minute, seen by two gateways: one alert once it
+  # has failed for 10 minutes.
+  - interval: 1m
+    input_series:
+      - series: recserve_shard_failovers_total{job="gateway",instance="gateway-a:8080",shard="1",replica="annshard-3:9090"}
+        values: 0+1x30
+      - series: recserve_shard_failovers_total{job="gateway",instance="gateway-b:8080",shard="1",replica="annshard-3:9090"}
+        values: 0+1x30
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ShardReplicaFailing
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: ShardReplicaFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              shard: "1"
+              replica: annshard-3:9090
+            exp_annotations:
+              summary: Replica annshard-3:9090 of shard 1 keeps failing searches that another replica answers
