@@ -40,6 +40,10 @@ type Config struct {
 	Topic   string
 	Store   history.Store
 	Log     *slog.Logger
+	// SessionTimeout is how long the group waits for a member that stopped
+	// without leaving before it moves the member's partitions; 0 for the
+	// client's default of 45 s.
+	SessionTimeout time.Duration
 }
 
 // Consumer is one member of the consumer group.
@@ -88,7 +92,7 @@ func New(ctx context.Context, cfg Config) (*Consumer, error) {
 	for _, r := range []string{"applied", "poison"} {
 		c.records.WithLabelValues(r)
 	}
-	cl, err := kgo.NewClient(
+	opts := []kgo.Opt{
 		kgo.SeedBrokers(cfg.Brokers...),
 		kgo.ConsumerGroup(cfg.Group),
 		kgo.ConsumeTopics(cfg.Topic),
@@ -98,7 +102,11 @@ func New(ctx context.Context, cfg Config) (*Consumer, error) {
 		// commit never covers a partition that has moved to another member.
 		kgo.BlockRebalanceOnPoll(),
 		kgo.OnPartitionsRevoked(c.revoked),
-	)
+	}
+	if cfg.SessionTimeout > 0 {
+		opts = append(opts, kgo.SessionTimeout(cfg.SessionTimeout), kgo.HeartbeatInterval(cfg.SessionTimeout/3))
+	}
+	cl, err := kgo.NewClient(opts...)
 	if err != nil {
 		return nil, err
 	}

@@ -30,15 +30,16 @@ func main() {
 	valkeyAddr := flag.String("valkey-addr", "", "Valkey address of the user histories")
 	group := flag.String("group", "ingest", "consumer group")
 	addr := flag.String("addr", ":8082", "listen address of /metrics and /livez")
+	sessionTimeout := flag.Duration("session-timeout", 45*time.Second, "time after which the group gives the partitions of a member that stopped without leaving to the others; the broker allows 6s to 5m by default")
 	flag.Parse()
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if err := run(log, *brokers, *valkeyAddr, *group, *addr); err != nil {
+	if err := run(log, *brokers, *valkeyAddr, *group, *addr, *sessionTimeout); err != nil {
 		log.Error("ingest stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(log *slog.Logger, brokers, valkeyAddr, group, addr string) error {
+func run(log *slog.Logger, brokers, valkeyAddr, group, addr string, sessionTimeout time.Duration) error {
 	if brokers == "" || valkeyAddr == "" {
 		return errors.New("-kafka-brokers and -valkey-addr are required")
 	}
@@ -49,7 +50,7 @@ func run(log *slog.Logger, brokers, valkeyAddr, group, addr string) error {
 	defer store.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	c, err := ingest.New(ctx, ingest.Config{Brokers: strings.Split(brokers, ","), Group: group, Topic: events.Topic, Store: store, Log: log})
+	c, err := ingest.New(ctx, ingest.Config{Brokers: strings.Split(brokers, ","), Group: group, Topic: events.Topic, Store: store, Log: log, SessionTimeout: sessionTimeout})
 	if err != nil {
 		return err
 	}

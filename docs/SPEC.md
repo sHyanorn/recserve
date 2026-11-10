@@ -162,7 +162,7 @@ Data is downloaded by `make data` and never committed. Development and benchmark
 
 - Unit and table-driven tests for every stage; property tests for section 7; fuzzing for request parsing and the bundle loader
 - Fault injection: slow and dead shards, slow ranker, failed swaps, Valkey down, consumer killed; under load per docs/BENCHMARKS.md
-- Integration tests against real Kafka and Valkey containers
+- Integration tests against real Kafka and Valkey containers; `internal/e2e` runs the gateway and ingest binaries on them, kills ingest, pauses Valkey and stops Kafka (`make e2e`, on its own, since it takes the services away from other tests)
 - All tests run under `-race`
 - Benchmarks and evaluation follow docs/BENCHMARKS.md, fixed before results are looked at
 

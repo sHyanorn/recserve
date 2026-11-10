@@ -38,7 +38,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] History store keeps raw item IDs, so a swap may change the item IDs; the equal-IDs check of D031 is lifted (D032)
 - [x] Circuit breaker and `history_unavailable` path; property test 10 (D037)
 - [x] Count the result cache lookup of a request that fails after it
-- [ ] Integration tests against real Kafka and Valkey containers
+- [x] Integration tests against real Kafka and Valkey containers: the binaries, with ingest killed, Valkey paused and Kafka stopped (`make e2e`)
 
 ## M4 Sharded vector tier
 - [ ] annshard service over gRPC

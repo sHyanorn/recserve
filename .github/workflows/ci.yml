@@ -40,6 +40,11 @@ jobs:
       - name: Kafka and Valkey
         run: docker compose -f deploy/compose.yaml up -d --wait --wait-timeout 180
       - run: go test -race ./...
+      # The binaries against the services; pauses Valkey and stops Kafka, so it runs after everything else.
+      - name: End to end
+        run: go test -race -count=1 ./internal/e2e/
+        env:
+          RECSERVE_E2E: "1"
       - name: Service logs
         if: failure()
         run: docker compose -f deploy/compose.yaml logs --no-color --tail 200

@@ -3,7 +3,7 @@ DATA    ?= data
 ENCODER ?= mean
 
 .DEFAULT_GOAL := help
-.PHONY: help build test lint fmt data bundle infra-up infra-down
+.PHONY: help build test e2e lint fmt data bundle infra-up infra-down
 
 help: ## Show available targets
 	@awk -F':.*## ' '/^[a-z0-9-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -13,6 +13,9 @@ build: ## Build all commands into bin/
 
 test: ## Run all tests with the race detector
 	$(GO) test -race ./...
+
+e2e: ## Run the binaries against Kafka and Valkey (needs infra-up); pauses Valkey and stops Kafka, so run nothing else on them
+	RECSERVE_E2E=1 RECSERVE_VALKEY_ADDR=localhost:6379 RECSERVE_KAFKA_BROKERS=localhost:9094 $(GO) test -race -count=1 ./internal/e2e/
 
 lint: ## Run golangci-lint
 	golangci-lint run ./...
