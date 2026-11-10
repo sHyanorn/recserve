@@ -1,7 +1,7 @@
-// Package e2e runs the gateway and ingest binaries against the compose
-// Kafka and Valkey (make e2e). Two of its tests pause Valkey and stop Kafka,
-// which would fail every other test that uses them, so the package runs
-// only with RECSERVE_E2E=1, on its own.
+// Package e2e runs the gateway, ingest and annshard binaries, most tests
+// against the compose Kafka and Valkey (make e2e). Two of its tests pause
+// Valkey and stop Kafka, which would fail every other test that uses them,
+// so the package runs only with RECSERVE_E2E=1, on its own.
 package e2e
 
 import (
@@ -43,7 +43,7 @@ func TestMain(m *testing.M) {
 			return 1
 		}
 		defer os.RemoveAll(dir) //nolint:errcheck // a leftover temporary directory
-		if out, err := exec.Command("go", "build", "-o", dir, "../../cmd/gateway", "../../cmd/ingest").CombinedOutput(); err != nil {
+		if out, err := exec.Command("go", "build", "-o", dir, "../../cmd/gateway", "../../cmd/ingest", "../../cmd/annshard").CombinedOutput(); err != nil {
 			fmt.Fprintf(os.Stderr, "go build: %v\n%s", err, out)
 			return 1
 		}

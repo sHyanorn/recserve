@@ -46,7 +46,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] annshard service over gRPC (D040)
 - [x] Scatter-gather over gRPC with per-shard deadlines, partial results and coverage, merging as the in-process shards do; property test 6 rerun over gRPC (D028, D040)
 - [x] Replica failover and hedged requests; property tests 12 and 13 (D041)
-- [ ] Fault tests: slow shard, dead replica, failed swap
+- [x] Fault tests: slow shard, dead replica, failed swap; the gateway and four annshard binaries with a replica killed, a swap, an empty restart and a rejected swap (D041, D042, `make e2e`)
 
 ## M5 Operations and deployment
 - [ ] Rate limiting and bounded concurrency with 503
