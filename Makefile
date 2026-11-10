@@ -2,9 +2,10 @@ GO      ?= go
 DATA    ?= data
 ENCODER ?= mean
 BUNDLE  ?=
+TAG     ?= dev
 
 .DEFAULT_GOAL := help
-.PHONY: help build test test-real e2e lint fmt proto data bundle infra-up infra-down
+.PHONY: help build test test-real e2e lint fmt proto data bundle images infra-up infra-down
 
 help: ## Show available targets
 	@awk -F':.*## ' '/^[a-z0-9-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -36,6 +37,9 @@ data: ## Download the Amazon 2023 Video_Games split and metadata into DATA
 
 bundle: ## Build the baseline bundle into DATA/bundle (needs uv); ENCODER=onnx adds user_encoder.onnx
 	cd tools/bundle && uv run --locked python build.py $(abspath $(DATA)) $(abspath $(DATA))/bundle --encoder $(ENCODER)
+
+images: ## Build the gateway, annshard and ingest images as recserve/<name>:TAG; DOCKER_BUILD_FLAGS adds docker build flags
+	for t in gateway annshard ingest; do docker build $(DOCKER_BUILD_FLAGS) --target $$t -t recserve/$$t:$(TAG) . || exit 1; done
 
 infra-up: ## Start Kafka and Valkey (deploy/compose.yaml) and wait until they are healthy
 	docker compose -f deploy/compose.yaml up -d --wait
