@@ -9,8 +9,10 @@ import (
 	"math/rand/v2"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/sHyanorn/recserve/internal/bundle"
+	"github.com/sHyanorn/recserve/internal/cache"
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/onnx"
 	"github.com/sHyanorn/recserve/internal/onnx/onnxtest"
@@ -231,10 +233,15 @@ func TestRankerTruncates(t *testing.T) {
 		got = slices.Clone(x)
 		return make([]float32, len(x)/nf), nil
 	})
+	p.Cache = cache.New[Response](10, time.Hour)
 	req := Request{User: "u", K: 10, TS: 100}
 	resp, err := p.Recommend(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// A hit ranked nothing, so it reports nothing dropped.
+	if hit, err := p.Recommend(context.Background(), req); err != nil || !*hit.Cached || hit.Dropped != 0 {
+		t.Fatalf("the hit: cached %v, dropped %d, %v", *hit.Cached, hit.Dropped, err)
 	}
 
 	// The candidates as the pipeline sees them, best retrieval score first.

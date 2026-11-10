@@ -2,7 +2,7 @@
 
 A recommendation serving system in Go: retrieval, features, ranking and rerank behind one HTTP API, with a sharded vector tier, caching, degradation, rate limiting, A/B assignment, metrics and tracing.
 
-Status: M2 is done and M3 is under way. One gateway process serves the full request path from in-process shards; events go through Kafka and an ingest consumer into user histories in Valkey, which also holds the result cache. The circuit breaker and the gRPC shard tier follow in M3 and M4. See [docs/SPEC.md](docs/SPEC.md), [docs/DECISIONS.md](docs/DECISIONS.md), [docs/TASKS.md](docs/TASKS.md) and [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+Status: M2 is done and M3 is under way. One gateway process serves the full request path from in-process shards; events go through Kafka and an ingest consumer into user histories in Valkey, which also holds the result cache; a circuit breaker keeps the gateway answering while Valkey is down. The gRPC shard tier follows in M4. See [docs/SPEC.md](docs/SPEC.md), [docs/DECISIONS.md](docs/DECISIONS.md), [docs/TASKS.md](docs/TASKS.md) and [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## Quick start
 

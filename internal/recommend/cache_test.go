@@ -255,8 +255,9 @@ func TestCacheErrorIsAMiss(t *testing.T) {
 		if len(got.Degraded) != 0 || got.Cached == nil || *got.Cached || !errors.Is(got.CacheErr, errInjected) || !slices.Equal(got.Items, want.Items) {
 			t.Fatalf("readable %v: degraded %v, cached %v, cache error %v, items %v, want %v", readable, got.Degraded, got.Cached, got.CacheErr, got.Items, want.Items)
 		}
-		if f.gets != 1 || f.puts != 1 {
-			t.Fatalf("readable %v: %d reads and %d writes, want one of each", readable, f.gets, f.puts)
+		// A cache that could not be read is not written either.
+		if wantPuts := map[bool]int{false: 0, true: 1}[readable]; f.gets != 1 || f.puts != wantPuts {
+			t.Fatalf("readable %v: %d reads and %d writes, want 1 and %d", readable, f.gets, f.puts, wantPuts)
 		}
 	}
 

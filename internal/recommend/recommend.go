@@ -18,6 +18,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"github.com/sHyanorn/recserve/internal/breaker"
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/cache"
 	"github.com/sHyanorn/recserve/internal/history"
@@ -164,13 +165,14 @@ type degradation struct {
 	failures []Failure
 }
 
-// add records reason; err is kept unless it is a timeout.
+// add records reason; err is kept unless it is a timeout or the refusal of
+// an open circuit breaker, which reports its state itself.
 func (d *degradation) add(reason string, err error) {
 	if d.reasons == nil {
 		d.reasons = map[string]bool{}
 	}
 	d.reasons[reason] = true
-	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, breaker.ErrOpen) {
 		d.failures = append(d.failures, Failure{reason, err})
 	}
 }
@@ -226,8 +228,9 @@ type Pipeline struct {
 	// Cache, if not nil, holds responses that were not degraded. It may be
 	// shared by pipelines over different bundles, in this process or, on
 	// Valkey, in others: keys include the bundle version. Responses from it
-	// may share their slices; callers must not modify them. A read and a
-	// write each run within Budgets.History.
+	// may share their slices; callers must not modify them. A read runs
+	// within what the history read left of Budgets.History, a write within
+	// Budgets.History again.
 	Cache Cache
 
 	// flight lets the requests that miss the cache on one key at the same
@@ -241,8 +244,9 @@ type Pipeline struct {
 	// scoreBundle, test only, is the broken variant of property 4: it
 	// returns the bundle whose vectors score the candidates, read again
 	// instead of the one the request started on.
-	scoreBundle func() *bundle.Bundle
-	noFlight    bool // test only: the broken variant of property 11
+	scoreBundle   func() *bundle.Bundle
+	cacheDegraded bool // test only: the broken variant of property 10
+	noFlight      bool // test only: the broken variant of property 11
 	// join, test only, runs when a request has joined the requests on its
 	// cache key, before it computes or waits.
 	join func()
@@ -303,16 +307,18 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error)
 		return Response{}, fmt.Errorf("recent holds more than %d items", MaxRecent)
 	}
 	var d degradation
-	hist, err := p.history(ctx, req, &d)
+	// The history read and the cache read share one budget.
+	hctx, cancel := within(ctx, p.Budgets.History)
+	defer cancel()
+	hist, err := p.history(ctx, hctx, req, &d)
 	if err != nil {
 		return Response{}, err
 	}
-	if p.Cache == nil || len(d.reasons) > 0 {
+	if p.Cache == nil || len(d.reasons) > 0 && !p.cacheDegraded {
 		return p.compute(ctx, req, hist, &d)
 	}
 	key := p.cacheKey(req, hist)
-	cctx, cancel := within(ctx, p.Budgets.History)
-	resp, ok, cacheErr := p.Cache.Get(cctx, key)
+	resp, ok, cacheErr := p.Cache.Get(hctx, key)
 	cancel()
 	if cacheErr != nil {
 		if err := ended(ctx, stageCache); err != nil {
@@ -324,13 +330,16 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error)
 	}
 	resp, led, err := p.once(ctx, key, func() (Response, error) {
 		resp, err := p.compute(ctx, req, hist, &d)
-		if err != nil || len(resp.Degraded) > 0 {
+		// A cache that could not be read is not written either.
+		if err != nil || (cacheErr != nil || len(resp.Degraded) > 0) && !p.cacheDegraded {
 			return resp, err
 		}
 		cctx, cancel := within(ctx, p.Budgets.History)
 		defer cancel()
 		// A request that ended while writing is no cache failure.
-		if err := p.Cache.Put(cctx, key, resp); ctx.Err() == nil {
+		stored := resp
+		stored.Dropped = 0 // a hit ranks nothing
+		if err := p.Cache.Put(cctx, key, stored); ctx.Err() == nil {
 			resp.CacheErr = err
 		}
 		return resp, nil
@@ -479,11 +488,10 @@ func (p *Pipeline) cacheKey(req Request, hist []int32) cache.Key {
 }
 
 // history returns the user's stored history before req.TS or, if it cannot
-// be read in time, req.Recent, as the bundle's internal IDs: the store
-// holds raw item IDs, and those the bundle does not know are left out.
-func (p *Pipeline) history(ctx context.Context, req Request, d *degradation) ([]int32, error) {
-	hctx, cancel := within(ctx, p.Budgets.History)
-	defer cancel()
+// be read within hctx, the request's context bounded by the history budget,
+// req.Recent, as the bundle's internal IDs: the store holds raw item IDs,
+// and those the bundle does not know are left out.
+func (p *Pipeline) history(ctx, hctx context.Context, req Request, d *degradation) ([]int32, error) {
 	err := p.stalled(hctx, stageHistory, -1)
 	var raw []string
 	if err == nil {

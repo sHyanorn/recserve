@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/sHyanorn/recserve/internal/api"
+	"github.com/sHyanorn/recserve/internal/breaker"
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/cache"
 	"github.com/sHyanorn/recserve/internal/dataset"
@@ -93,6 +94,9 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 		return err
 	}
 	defer closeCache()
+	if valkeyAddr != "" {
+		store, c = guard(store, c, log)
+	}
 	prepare := preparer(opt, store, shards, budgets, c)
 	p, err := prepare(dir)
 	if err != nil {
@@ -199,6 +203,25 @@ func openCache(addr string, size int, ttl time.Duration) (recommend.Cache, func(
 		return nil, nil, err
 	}
 	return v, v.Close, nil
+}
+
+// The circuit breaker on Valkey opens after breakerFailures failed calls in
+// a row and lets a call try the server again after breakerOpen (D037).
+const (
+	breakerFailures = 5
+	breakerOpen     = time.Second
+)
+
+// guard returns store with its reads, and c with its reads and writes,
+// behind one circuit breaker that logs its changes of state.
+func guard(store history.Store, c recommend.Cache, log *slog.Logger) (history.Store, recommend.Cache) {
+	b := breaker.New(breakerFailures, breakerOpen, func(from, to string) {
+		log.Warn("valkey circuit breaker", "from", from, "to", to)
+	})
+	if c != nil {
+		c = breaker.Cache[recommend.Response]{Cache: c, Breaker: b}
+	}
+	return breaker.Store{Store: store, Breaker: b}, c
 }
 
 // openProducer returns what takes the events of /v1/events, and the

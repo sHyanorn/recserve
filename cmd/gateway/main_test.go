@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/sHyanorn/recserve/internal/api"
+	"github.com/sHyanorn/recserve/internal/breaker"
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/bundle/bundletest"
 	"github.com/sHyanorn/recserve/internal/cache"
@@ -266,5 +268,34 @@ func TestOpenProducer(t *testing.T) {
 	closeProducer()
 	if _, _, err := openProducer("127.0.0.1:1", store, 0); err == nil {
 		t.Fatal("brokers without a timeout were accepted")
+	}
+}
+
+type downStore struct{ history.Store }
+
+func (downStore) Before(context.Context, string, int64, int) ([]string, error) {
+	return nil, errors.New("down")
+}
+
+// The breaker of guard opens after breakerFailures failed history reads,
+// logs it, and leaves a gateway without a cache without one.
+func TestGuard(t *testing.T) {
+	var logged bytes.Buffer
+	store, c := guard(downStore{}, nil, slog.New(slog.NewTextHandler(&logged, nil)))
+	if c != nil {
+		t.Fatalf("no cache became %T", c)
+	}
+	for i := range breakerFailures + 1 {
+		_, err := store.Before(context.Background(), "u", 1, 0)
+		if open := errors.Is(err, breaker.ErrOpen); open != (i == breakerFailures) {
+			t.Fatalf("read %d: %v", i, err)
+		}
+	}
+	if !strings.Contains(logged.String(), "from=closed to=open") {
+		t.Fatalf("log: %q", logged.String())
+	}
+	_, c = guard(downStore{}, cache.New[recommend.Response](1, time.Minute), slog.New(slog.DiscardHandler))
+	if _, ok := c.(breaker.Cache[recommend.Response]); !ok {
+		t.Fatalf("the cache is %T", c)
 	}
 }
