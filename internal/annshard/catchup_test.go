@@ -12,7 +12,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/sHyanorn/recserve/internal/annshard"
 	"github.com/sHyanorn/recserve/internal/annshard/annshardpb"
@@ -35,21 +34,6 @@ func holds(t *testing.T, addr, version string) bool {
 	defer cancel()
 	_, err = annshardpb.NewAnnShardClient(conn).Search(ctx, &annshardpb.SearchRequest{Index: exactIndex(version, 0, 1), Query: []float32{1, 1}, K: 1})
 	return err == nil
-}
-
-// ready reports whether the replica at addr answers the standard health
-// check with SERVING.
-func ready(t *testing.T, addr string) bool {
-	t.Helper()
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close() //nolint:errcheck // a probe
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	h, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{})
-	return err == nil && h.GetStatus() == healthpb.HealthCheckResponse_SERVING
 }
 
 // searchUntil searches through s, requiring every answer to equal the
@@ -181,7 +165,7 @@ func TestReplicaRestartsEmpty(t *testing.T) {
 // 1 s up to 5 s apart.
 func waitReady(t *testing.T, addr string) {
 	t.Helper()
-	for deadline := time.Now().Add(20 * time.Second); !ready(t, addr); time.Sleep(10 * time.Millisecond) {
+	for deadline := time.Now().Add(20 * time.Second); !annshardtest.Ready(t, addr); time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("replica %s not ready after 20 s", addr)
 		}
@@ -222,7 +206,7 @@ func TestFirstVersionMakesReady(t *testing.T) {
 	}
 	for _, g := range addrs {
 		for _, addr := range g {
-			if !ready(t, addr) {
+			if !annshardtest.Ready(t, addr) {
 				t.Fatalf("replica %s is not ready", addr)
 			}
 		}
@@ -245,11 +229,11 @@ func TestReplicaFollowsTheVersionServed(t *testing.T) {
 		t.Fatal(err)
 	}
 	served.Store(&v1)
-	if !ready(t, addr) {
+	if !annshardtest.Ready(t, addr) {
 		t.Fatal("not ready on the first version")
 	}
 	served.Store(&v2)
-	for deadline := time.Now().Add(20 * time.Second); ready(t, addr); time.Sleep(10 * time.Millisecond) {
+	for deadline := time.Now().Add(20 * time.Second); annshardtest.Ready(t, addr); time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("still ready 20 s after the version served became one it cannot build")
 		}

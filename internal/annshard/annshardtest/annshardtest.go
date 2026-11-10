@@ -13,8 +13,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/sHyanorn/recserve/internal/annshard"
 	"github.com/sHyanorn/recserve/internal/bundle"
@@ -89,6 +92,21 @@ func StartAll(t testing.TB, root string, shards, replicas int) [][]string {
 		}
 	}
 	return addrs
+}
+
+// Ready reports whether the replica at addr answers the standard health
+// check with SERVING.
+func Ready(t testing.TB, addr string) bool {
+	t.Helper()
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close() //nolint:errcheck // a probe
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	h, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{})
+	return err == nil && h.GetStatus() == healthpb.HealthCheckResponse_SERVING
 }
 
 // Dial returns a client of the replicas at addrs, closed when the test ends.

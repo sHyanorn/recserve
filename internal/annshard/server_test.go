@@ -373,7 +373,7 @@ func TestReadyWithTheServingVersion(t *testing.T) {
 	}
 	wantReady := func(want bool) {
 		t.Helper()
-		if got := ready(t, addr); got != want {
+		if got := annshardtest.Ready(t, addr); got != want {
 			t.Fatalf("ready = %v, want %v", got, want)
 		}
 	}

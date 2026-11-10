@@ -20,10 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	healthpb "google.golang.org/grpc/health/grpc_health_v1"
-
 	"github.com/sHyanorn/recserve/internal/annshard/annshardtest"
 	"github.com/sHyanorn/recserve/internal/api"
 	"github.com/sHyanorn/recserve/internal/breaker"
@@ -413,17 +409,7 @@ func TestRunOnReplicas(t *testing.T) {
 	})
 	stopA()
 	annshardtest.StartOn(t, a, root)
-	eventually("the restarted replica is not ready", func() bool {
-		conn, err := grpc.NewClient(a, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer conn.Close() //nolint:errcheck // a probe
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		h, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{})
-		return err == nil && h.GetStatus() == healthpb.HealthCheckResponse_SERVING
-	})
+	eventually("the restarted replica is not ready", func() bool { return annshardtest.Ready(t, a) })
 	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}

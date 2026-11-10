@@ -64,9 +64,10 @@ func (s *slowOnce) intercept(ctx context.Context, req any, _ *grpc.UnaryServerIn
 
 // checkProperty13 runs n searches, ten at a time, against a shard of two
 // replicas that both take longer than the hedge delay, through search,
-// which is given the two replicas' addresses and the version they hold. Every search must succeed,
-// the hedges must stay within 10 + n/10, some must be sent, and every
-// hedge, which loses by construction, must see its caller cancel it.
+// which is given the two replicas' addresses and the version they hold.
+// Every search must succeed, the hedges must stay within 10 + n/10, some
+// must be sent, and every hedge, which loses by construction, must see its
+// caller cancel it.
 func checkProperty13(t *testing.T, n int, client func(addrs []string, version string) func(ctx context.Context, k int) error) error {
 	r := rand.New(rand.NewPCG(13, 13))
 	root := t.TempDir()
