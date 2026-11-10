@@ -61,6 +61,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] annshard readiness on `grpc.health.v1`: ready while it holds the version served, which the gateway has a restarted replica prepare as soon as its connection is back (D044)
 - [ ] annshard Dockerfile
 - [x] Graceful shutdown: on SIGTERM annshard reports NOT_SERVING and drains its calls within `-drain`; the gateway answers `/readyz` with 503, closes connections after their response for `-shutdown-delay`, then drains; ingest commits its offsets as before (D045)
+- [x] A rolling restart of the replicas through the gateway binary, one process at a time with SIGTERM, each waited for until ready: every response complete (D044, D045)
 - [ ] Zero-error check under load through a rollout restart and a bundle swap
 - [x] Through the gateway binary on annshard replicas: swaps in a row over three bundles, with a search of the previous version arriving after each prepare, and no shard skipped for `FAILED_PRECONDITION` (D043)
 - [x] A bundle's version must be the digest of its files, so a replica given other vectors under a version's name fails to prepare it; no proto change (D046)

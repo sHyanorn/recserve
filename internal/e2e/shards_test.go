@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -130,18 +132,37 @@ func (x *tier) replica(i int) {
 	})
 }
 
-func (x *tier) ask() shardResponse {
-	x.t.Helper()
+// fetch asks the gateway for user u's recommendations.
+func (x *tier) fetch() (shardResponse, error) {
 	resp, err := http.Post(x.gw+"/v1/recommend", "application/json", strings.NewReader(`{"user_id":"u","k":5}`))
 	if err != nil {
-		x.t.Fatal(err)
+		return shardResponse{}, err
 	}
 	defer resp.Body.Close() //nolint:errcheck // read to its end below
 	var out shardResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || resp.StatusCode != http.StatusOK {
-		x.t.Fatalf("recommend: status %d, %v", resp.StatusCode, err)
+	if resp.StatusCode != http.StatusOK {
+		return out, fmt.Errorf("recommend: status %d", resp.StatusCode)
 	}
-	return out
+	return out, json.NewDecoder(resp.Body).Decode(&out)
+}
+
+func (x *tier) ask() shardResponse {
+	x.t.Helper()
+	got, err := x.fetch()
+	if err != nil {
+		x.t.Fatal(err)
+	}
+	return got
+}
+
+// verify returns an error unless got is the healthy response from version,
+// with both shards answered.
+func (x *tier) verify(got shardResponse, version string) error {
+	if got.ModelVersion != version || len(got.Degraded) > 0 || got.Coverage == nil || *got.Coverage != struct{ Shards, Answered int }{2, 2} ||
+		!slices.Equal(got.Items, x.healthy.Items) {
+		return fmt.Errorf("got %+v, want the healthy items %v from version %s", got, x.healthy.Items, version)
+	}
+	return nil
 }
 
 // complete fails unless n responses, asked one after another, are the
@@ -149,18 +170,15 @@ func (x *tier) ask() shardResponse {
 func (x *tier) complete(n int, version string) {
 	x.t.Helper()
 	for range n {
-		x.check(x.ask(), version)
+		if err := x.verify(x.ask(), version); err != nil {
+			x.t.Fatal(err)
+		}
 	}
 }
 
-// check fails unless got is the healthy response from version, with both
-// shards answered.
-func (x *tier) check(got shardResponse, version string) {
-	x.t.Helper()
-	if got.ModelVersion != version || len(got.Degraded) > 0 || got.Coverage == nil || *got.Coverage != struct{ Shards, Answered int }{2, 2} ||
-		!slices.Equal(got.Items, x.healthy.Items) {
-		x.t.Fatalf("got %+v, want the healthy items %v from version %s", got, x.healthy.Items, version)
-	}
+// ready reports whether replica i says it holds the version served.
+func (x *tier) ready(i int) bool {
+	return health(x.t, x.addrs[i]) == healthpb.HealthCheckResponse_SERVING
 }
 
 // swap asks the gateway to swap to the bundle in dir and returns the status.
@@ -214,9 +232,7 @@ func TestShardReplicasKilledAndSwapped(t *testing.T) {
 	// it is up, the gateway has it prepare the active version, with no
 	// request to find it lacking. Then it serves shard 0 alone.
 	x.replica(0)
-	eventually(t, 20*time.Second, "the restarted replica was not prepared again", func() bool {
-		return health(t, x.addrs[0]) == healthpb.HealthCheckResponse_SERVING
-	})
+	eventually(t, 20*time.Second, "the restarted replica was not prepared again", func() bool { return x.ready(0) })
 	if !holdsIndex(t, x.addrs[0], v2, 0) {
 		t.Fatal("the restarted replica is ready without the active version")
 	}
@@ -281,4 +297,70 @@ func TestSwapsInARow(t *testing.T) {
 	swap(a) // b is dropped although named after c: c is served
 	late(c)
 	x.complete(20, a)
+}
+
+// A rolling restart of the replicas through the gateway binary, as a
+// rollout with maxUnavailable 0 makes: each replica in turn gets SIGTERM,
+// exits within its drain, comes back on its address, and is ready by its
+// health service before the next one goes. Requests run throughout; every
+// response is complete, and every restart has some (D044, D045).
+func TestReplicasRollingRestart(t *testing.T) {
+	need(t)
+	root := t.TempDir()
+	v1 := link(t, root, bundletest.Write(t))
+	x := newTier(t, root, v1)
+	for i := range x.addrs {
+		eventually(t, 20*time.Second, "a replica is not ready", func() bool { return x.ready(i) })
+	}
+	var (
+		mu       sync.Mutex
+		answered int
+		wrong    error
+	)
+	counts := func() (int, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return answered, wrong
+	}
+	done, stopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stopped)
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			got, err := x.fetch()
+			if err == nil {
+				err = x.verify(got, v1)
+			}
+			mu.Lock()
+			answered++
+			if wrong == nil {
+				wrong = err
+			}
+			mu.Unlock()
+		}
+	}()
+	defer func() {
+		close(done)
+		<-stopped
+	}()
+	for i := range x.addrs {
+		before, err := counts()
+		if err != nil {
+			t.Fatal(err)
+		}
+		terminate(t, x.procs[i], 10*time.Second) // the replicas' -drain
+		x.replica(i)
+		eventually(t, 20*time.Second, "the restarted replica is not ready", func() bool { return x.ready(i) })
+		after, err := counts()
+		if err != nil {
+			t.Fatalf("restarting replica %d: %v", i, err)
+		}
+		if after == before {
+			t.Fatalf("no response while replica %d restarted", i)
+		}
+	}
 }

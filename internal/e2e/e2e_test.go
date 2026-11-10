@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -82,6 +83,25 @@ func start(t *testing.T, name string, args ...string) *exec.Cmd {
 func kill(cmd *exec.Cmd) {
 	cmd.Process.Kill() //nolint:errcheck // it has exited already
 	cmd.Wait()         //nolint:errcheck // killed
+}
+
+// terminate stops a process as a rollout does, with SIGTERM, and fails the
+// test unless it exits with status 0 within limit.
+func terminate(t *testing.T, cmd *exec.Cmd, limit time.Duration) {
+	t.Helper()
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	select {
+	case err := <-exited:
+		if err != nil {
+			t.Fatalf("%s after SIGTERM: %v", cmd.Path, err)
+		}
+	case <-time.After(limit):
+		t.Fatalf("%s still running %v after SIGTERM", cmd.Path, limit)
+	}
 }
 
 func freeAddr(t *testing.T) string {
