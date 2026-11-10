@@ -138,13 +138,14 @@ type group struct {
 	mu     sync.Mutex
 	tokens int // hedge budget
 
-	hedgeWon, hedgeLost, hedgeDenied, failover prometheus.Counter
+	hedgeWon, hedgeLost, hedgeDenied prometheus.Counter
 }
 
 type replica struct {
-	addr string
-	conn *grpc.ClientConn
-	rpc  annshardpb.AnnShardClient
+	addr     string
+	conn     *grpc.ClientConn
+	rpc      annshardpb.AnnShardClient
+	failover prometheus.Counter // searches that went on to the next replica after it failed
 }
 
 // modes are the shard modes the replicas build.
@@ -175,8 +176,8 @@ func Dial(addrs [][]string, opt Options) (*Client, error) {
 		}, []string{"shard", "result"}),
 		failovers: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "recserve_shard_failovers_total",
-			Help: "Shard searches sent to another replica because one failed, by shard.",
-		}, []string{"shard"}),
+			Help: "Shard searches sent to another replica because one failed, by shard and failed replica (its address in -shard-addrs).",
+		}, []string{"shard", "replica"}),
 	}
 	for i, replicas := range addrs {
 		if len(replicas) == 0 {
@@ -186,7 +187,7 @@ func Dial(addrs [][]string, opt Options) (*Client, error) {
 		g := &group{
 			tokens:   hedgeMax,
 			hedgeWon: c.hedges.WithLabelValues(shard, "won"), hedgeLost: c.hedges.WithLabelValues(shard, "lost"),
-			hedgeDenied: c.hedges.WithLabelValues(shard, "denied"), failover: c.failovers.WithLabelValues(shard),
+			hedgeDenied: c.hedges.WithLabelValues(shard, "denied"),
 		}
 		c.shards = append(c.shards, g)
 		for _, addr := range replicas {
@@ -194,7 +195,7 @@ func Dial(addrs [][]string, opt Options) (*Client, error) {
 			if err != nil {
 				return nil, errors.Join(fmt.Errorf("shard %d, replica %s: %w", i, addr, err), c.Close())
 			}
-			g.replicas = append(g.replicas, &replica{addr: addr, conn: conn, rpc: annshardpb.NewAnnShardClient(conn)})
+			g.replicas = append(g.replicas, &replica{addr: addr, conn: conn, rpc: annshardpb.NewAnnShardClient(conn), failover: c.failovers.WithLabelValues(shard, addr)})
 		}
 	}
 	for i, g := range c.shards {
@@ -400,6 +401,7 @@ func (g *group) spend() bool {
 }
 
 type answer struct {
+	r     *replica
 	hits  []vec.Hit
 	err   error
 	hedge bool
@@ -439,7 +441,7 @@ func (s *Shards) Search(ctx context.Context, i int, q []float32, k int, seen map
 			if status.Code(err) == codes.FailedPrecondition {
 				s.c.catchUp(r, req.GetIndex())
 			}
-			answers <- answer{hits, err, hedge}
+			answers <- answer{r, hits, err, hedge}
 		}()
 	}
 	g.earn()
@@ -475,7 +477,7 @@ func (s *Shards) Search(ctx context.Context, i int, q []float32, k int, seen map
 			}
 			failed = append(failed, a.err)
 			if asked < len(order) && ctx.Err() == nil {
-				g.failover.Inc()
+				a.r.failover.Inc()
 				ask(false)
 			}
 		case <-hedgeDue:

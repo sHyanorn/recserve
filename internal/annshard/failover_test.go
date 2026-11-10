@@ -23,6 +23,37 @@ import (
 	"github.com/sHyanorn/recserve/internal/vec"
 )
 
+// failSearches is a server interceptor that fails every search.
+func failSearches(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	if _, ok := req.(*annshardpb.SearchRequest); ok {
+		return nil, status.Error(codes.Internal, "injected")
+	}
+	return handler(ctx, req)
+}
+
+// A search sent to the next replica because one failed is counted under
+// the failed replica's address, as -shard-addrs gives it (D041).
+func TestFailoverCountsTheFailedReplica(t *testing.T) {
+	r := rand.New(rand.NewPCG(19, 19))
+	root := t.TempDir()
+	version := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2))
+	failing, healthy := annshardtest.Start(t, root, grpc.UnaryInterceptor(failSearches)), annshardtest.Start(t, root)
+	c := annshardtest.Dial(t, [][]string{{failing, healthy}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}})
+	s, err := c.Prepare(context.Background(), version, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 10 { // half of them ask the failing replica first
+		if _, err := s.Search(context.Background(), 0, []float32{1, 1}, 5, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := counts(t, c, "recserve_shard_failovers_total", "replica")
+	if got[failing] == 0 || got[healthy] != 0 {
+		t.Fatalf("failovers by replica %v, want them all under the failing one, %s", got, failing)
+	}
+}
+
 // A replica's failure is not hidden by another replica's timeout: with one
 // replica that fails every search and one that is silent, a search that
 // asks the failing one first, and then waits for the silent one in vain,
@@ -32,12 +63,7 @@ func TestFailureIsNotHiddenByTimeout(t *testing.T) {
 	r := rand.New(rand.NewPCG(15, 15))
 	root := t.TempDir()
 	version := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2))
-	failing := annshardtest.Start(t, root, grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if _, ok := req.(*annshardpb.SearchRequest); ok {
-			return nil, status.Error(codes.Internal, "injected")
-		}
-		return handler(ctx, req)
-	}))
+	failing := annshardtest.Start(t, root, grpc.UnaryInterceptor(failSearches))
 	silent := infratest.NewProxy(t, annshardtest.Start(t, root))
 	c := annshardtest.Dial(t, [][]string{{failing, silent.Addr()}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}})
 	s, err := c.Prepare(context.Background(), version, 50)

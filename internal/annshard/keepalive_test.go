@@ -65,9 +65,8 @@ func TestSilentReplicaCatchesBrokenVariant(t *testing.T) {
 	}
 }
 
-// hedgeCalls returns the number of searches of c that reached the hedge
-// delay, hedged or denied a hedge.
-func hedgeCalls(t *testing.T, c *annshard.Client) float64 {
+// counts returns the counter name of c by the value of its label.
+func counts(t *testing.T, c *annshard.Client, name, label string) map[string]float64 {
 	t.Helper()
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(c.Collectors()...)
@@ -75,13 +74,29 @@ func hedgeCalls(t *testing.T, c *annshard.Client) float64 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var n float64
+	n := map[string]float64{}
 	for _, f := range families {
-		if f.GetName() == "recserve_shard_hedges_total" {
-			for _, m := range f.GetMetric() {
-				n += m.GetCounter().GetValue()
+		if f.GetName() != name {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == label {
+					n[l.GetValue()] += m.GetCounter().GetValue()
+				}
 			}
 		}
+	}
+	return n
+}
+
+// hedgeCalls returns the number of searches of c that reached the hedge
+// delay, hedged or denied a hedge.
+func hedgeCalls(t *testing.T, c *annshard.Client) float64 {
+	t.Helper()
+	var n float64
+	for _, v := range counts(t, c, "recserve_shard_hedges_total", "result") {
+		n += v
 	}
 	return n
 }

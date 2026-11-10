@@ -54,7 +54,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] Rate limiting and bounded concurrency with 503
 - [ ] A/B assignment; property test 3 with its broken variant; the arm joins the result cache key (D030)
 - [ ] OpenTelemetry tracing
-- [ ] Dockerfiles and docker compose with Prometheus, Grafana and Jaeger. An alert rule on the growth of `recserve_shard_failovers_total`: a failure that another replica makes up for is counted there and not logged (D041). The counter is labelled by shard, so telling which replica fails needs a replica label
+- [ ] Dockerfiles and docker compose with Prometheus, Grafana and Jaeger. An alert rule on the growth of `recserve_shard_failovers_total`: a failure that another replica makes up for is counted there, under the replica that failed, and not logged (D041)
 - [ ] kind manifests: probes, resource limits, HPA with metrics-server (D022). The gateway's `-shutdown-delay` longer than the endpoint removal, and `terminationGracePeriodSeconds` above it plus the drains (D045). The replicas' readiness probe on `grpc.health.v1`, their addresses resolvable while not ready, and `minReadySeconds` above the 5 s reconnect wait with several gateways; check that the gateway finds a restarted Pod's new address in time (D044)
 - [ ] NetworkPolicy that lets only the gateways reach the annshard port: the shard API has no TLS or authentication (D040)
 - [ ] Swaps across several gateways in an order that keeps at most two versions in use: the replicas hold two (D042)
