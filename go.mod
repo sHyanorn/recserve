@@ -4,6 +4,7 @@ go 1.27.3
 
 require (
 	github.com/prometheus/client_golang v1.25.0
+	github.com/valkey-io/valkey-go v1.0.79
 	github.com/yalue/onnxruntime_go v1.38.0
 	golang.org/x/sys v0.48.0
 )

@@ -123,6 +123,7 @@ func TestBadRequests(t *testing.T) {
 		{"/v1/recommend", `not json`},
 		{"/v1/events", `{"events":[]}`},
 		{"/v1/events", `{"events":[{"user_id":"u","item_id":"a","ts":0}]}`},
+		{"/v1/events", `{"events":[{"user_id":"u","item_id":"a","ts":9007199254740993}]}`}, // 2^53 + 1
 		{"/v1/recommend", `{"user_id":"u","k":5}]`},
 		{"/v1/recommend", `{"user_id":"u","k":5,"recent":["a"` + strings.Repeat(`,"a"`, recommend.MaxRecent) + `]}`},
 	} {
@@ -271,6 +272,35 @@ func TestCoverage(t *testing.T) {
 		if got := string(out["coverage"]); got != c.want {
 			t.Fatalf("%s: coverage %s, want %s", c.user, got, c.want)
 		}
+	}
+}
+
+// The largest event time a sorted set's score holds exactly is accepted.
+func TestEventsAcceptsMaxTS(t *testing.T) {
+	_, ts := testServer(t)
+	if code, out := post(t, ts.URL+"/v1/events", `{"events":[{"user_id":"u","item_id":"a","ts":9007199254740992}]}`); code != http.StatusAccepted {
+		t.Fatalf("status %d: %v", code, out)
+	}
+}
+
+// fullStore refuses writes, as Valkey does once its memory is full.
+type fullStore struct{ history.Store }
+
+func (fullStore) Append(context.Context, []history.Event) error {
+	return errors.New("OOM command not allowed when used memory > 'maxmemory'")
+}
+
+// A store that cannot take the events answers 503 and logs the error.
+func TestEventsStoreFailure(t *testing.T) {
+	var log bytes.Buffer
+	ts := httptest.NewServer(degradedServer(t, fullStore{history.NewMemory()}, &log).Handler())
+	defer ts.Close()
+	code, out := post(t, ts.URL+"/v1/events", `{"events":[{"user_id":"u","item_id":"a","ts":500,"kind":"view"}]}`)
+	if code != http.StatusServiceUnavailable || !strings.Contains(fmt.Sprint(out["error"]), "OOM") {
+		t.Fatalf("status %d: %v", code, out)
+	}
+	if !strings.Contains(log.String(), "storing events failed") {
+		t.Fatalf("log: %s", log.String())
 	}
 }
 

@@ -35,6 +35,7 @@ func main() {
 	dir := flag.String("bundle", "", "bundle directory")
 	testSplit := flag.String("test-split", "", "test split file; its first event bounds the bundle's train cutoff")
 	preload := flag.String("preload", "", "comma-separated split files whose events are loaded into the history store at start")
+	valkeyAddr := flag.String("valkey-addr", "", "Valkey address for the user histories; empty keeps them in this process")
 	drain := flag.Duration("drain", 10*time.Second, "time allowed for in-flight requests at shutdown")
 	ortLib := flag.String("ort-lib", "", "ONNX Runtime shared library (libonnxruntime.so.1.31.x), needed by a bundle with an ONNX user encoder or a ranker")
 	shards := shard.DefaultConfig
@@ -51,13 +52,13 @@ func main() {
 	cacheTTL := flag.Duration("cache-ttl", 5*time.Minute, "result cache time to live, changed by up to 10% either way")
 	flag.Parse()
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if err := run(log, *addr, *adminAddr, *dir, *testSplit, *preload, *ortLib, shards, budgets, *cacheSize, *cacheTTL, *drain); err != nil {
+	if err := run(log, *addr, *adminAddr, *dir, *testSplit, *preload, *ortLib, *valkeyAddr, shards, budgets, *cacheSize, *cacheTTL, *drain); err != nil {
 		log.Error("gateway stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib string, shards shard.Config, budgets recommend.Budgets, cacheSize int, cacheTTL time.Duration, drain time.Duration) (err error) {
+func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, valkeyAddr string, shards shard.Config, budgets recommend.Budgets, cacheSize int, cacheTTL time.Duration, drain time.Duration) (err error) {
 	if dir == "" {
 		return errors.New("-bundle is required")
 	}
@@ -83,7 +84,11 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib stri
 	if cacheSize > 0 {
 		c = cache.New[recommend.Response](cacheSize, cacheTTL)
 	}
-	store := history.NewMemory()
+	store, closeStore, err := openStore(valkeyAddr)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
 	prepare := preparer(opt, store, shards, budgets, c)
 	p, err := prepare(dir)
 	if err != nil {
@@ -155,6 +160,19 @@ func shutdown(log *slog.Logger, servers []*http.Server, live *recommend.Live, dr
 		return err
 	}
 	return errors.Join(err, live.Close())
+}
+
+// openStore returns the history store on the Valkey server at addr, or an
+// in-process one if addr is empty, and the function that closes it.
+func openStore(addr string) (history.Store, func(), error) {
+	if addr == "" {
+		return history.NewMemory(), func() {}, nil
+	}
+	v, err := history.NewValkey(addr)
+	if err != nil {
+		return nil, nil, err
+	}
+	return v, v.Close, nil
 }
 
 // preparer returns the function that loads, verifies and indexes the

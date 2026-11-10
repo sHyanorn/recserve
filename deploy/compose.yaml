@@ -33,6 +33,9 @@ services:
 
   valkey:
     image: valkey/valkey:9.1@sha256:3add1a336a920ea54770a001ab6feb3da5fceea96a40373a3a2cd469b815f0b7
+    # Only keys with a TTL are evicted. The histories have none, so once they
+    # fill the memory, writes fail and reads go on (D033).
+    command: ["valkey-server", "--maxmemory", "1gb", "--maxmemory-policy", "volatile-lru"]
     ports:
       - "127.0.0.1:6379:6379"
     healthcheck:

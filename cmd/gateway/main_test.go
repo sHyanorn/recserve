@@ -20,6 +20,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/bundle/bundletest"
 	"github.com/sHyanorn/recserve/internal/cache"
 	"github.com/sHyanorn/recserve/internal/history"
+	"github.com/sHyanorn/recserve/internal/infratest"
 	"github.com/sHyanorn/recserve/internal/onnx/onnxtest"
 	"github.com/sHyanorn/recserve/internal/recommend"
 	"github.com/sHyanorn/recserve/internal/shard"
@@ -198,5 +199,26 @@ func TestShutdown(t *testing.T) {
 	}
 	if err := <-served; !errors.Is(err, http.ErrServerClosed) {
 		t.Fatal(err)
+	}
+}
+
+// Without an address the histories stay in the process; with one they are
+// in Valkey, and a server that does not answer fails the start.
+func TestOpenStore(t *testing.T) {
+	s, closeStore, err := openStore("")
+	if _, ok := s.(*history.Memory); !ok || err != nil {
+		t.Fatalf("no address: %T, %v", s, err)
+	}
+	closeStore()
+	if _, _, err := openStore("127.0.0.1:1"); err == nil {
+		t.Fatal("a closed port opened a store")
+	}
+	s, closeStore, err = openStore(infratest.ValkeyAddr(t))
+	if _, ok := s.(*history.Valkey); !ok || err != nil {
+		t.Fatalf("valkey: %T, %v", s, err)
+	}
+	defer closeStore()
+	if got, err := s.Before(context.Background(), "nobody", 1, 0); err != nil || len(got) != 0 {
+		t.Fatalf("Before = %v, %v", got, err)
 	}
 }

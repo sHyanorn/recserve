@@ -277,7 +277,8 @@ type EventsResponse struct {
 }
 
 // events stores the events under their raw item IDs, whatever bundle is
-// active: an item no bundle knows yet is kept for one that will.
+// active: an item no bundle knows yet is kept for one that will. It answers
+// 503 if the store fails; sending the events again is safe.
 func (s *Server) events(w http.ResponseWriter, r *http.Request) error {
 	var in EventsRequest
 	if err := decode(r.Body, &in); err != nil {
@@ -288,13 +289,17 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) error {
 	}
 	evs := make([]history.Event, len(in.Events))
 	for i, e := range in.Events {
-		if e.UserID == "" || e.ItemID == "" || e.TS <= 0 {
-			return badRequest{fmt.Errorf("event %d: user_id, item_id and a positive ts are required", i)}
+		if e.UserID == "" || e.ItemID == "" || e.TS <= 0 || e.TS > history.MaxTS {
+			return badRequest{fmt.Errorf("event %d: user_id, item_id and a ts in 1..2^53 are required", i)}
 		}
 		evs[i] = history.Event{ID: history.EventID(e.UserID, e.ItemID, e.TS, e.Kind), User: e.UserID, Item: e.ItemID, TS: e.TS}
 	}
 	if err := s.History.Append(r.Context(), evs); err != nil {
-		return err
+		if ctxErr := r.Context().Err(); ctxErr != nil && errors.Is(err, ctxErr) {
+			return err
+		}
+		s.Log.Warn("storing events failed", "err", err)
+		return httpError{http.StatusServiceUnavailable, fmt.Errorf("events not stored: %w", err)}
 	}
 	return writeJSON(w, http.StatusAccepted, EventsResponse{Accepted: len(evs)})
 }

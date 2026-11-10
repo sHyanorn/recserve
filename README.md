@@ -22,6 +22,8 @@ curl -X POST localhost:8081/v1/admin/swap -d '{"bundle":"data/bundle/<version>"}
 
 The admin API listens on 127.0.0.1:8081 (`-admin-addr`) and has no authentication.
 
+`make infra-up` starts Kafka and Valkey in Docker (`deploy/compose.yaml`). With `-valkey-addr localhost:6379` the gateway keeps the user histories in Valkey, where every instance reads the same ones; without it they stay in the process.
+
 ## In place after M2
 
 - Retrieval from co-occurrence, popularity and vectors, searched exactly or with a hand-written HNSW in two in-process shards (D016, D024, D028)
@@ -34,6 +36,11 @@ The admin API listens on 127.0.0.1:8081 (`-admin-addr`) and has no authenticatio
 ## Scale
 
 The catalog served has 25.6k items (Amazon Reviews 2023 Video_Games, 5-core). At that size exact search takes about 2 ms on one core, so sharding the catalog only demonstrates the mechanism; it is not needed for speed. ANN and shard performance is measured separately on 1M-scale vectors, and every reported figure says which data it comes from.
+
+## Limits
+
+- User histories keep every event: no cap per user and no expiry (D023, D033). In Valkey they are never evicted (`maxmemory` is 1 GB in compose; a long history takes about 87 bytes per event). Once they fill it, reads go on and writes fail: `/v1/events` answers 503 until memory is added or histories are deleted.
+- Valkey persists with snapshots only, so events since the last snapshot are lost if it stops uncleanly.
 
 ## License
 

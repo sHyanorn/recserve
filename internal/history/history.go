@@ -24,6 +24,11 @@ type Event struct {
 	TS   int64 // milliseconds since the Unix epoch
 }
 
+// MaxTS is the largest event time /v1/events accepts, 2^53 ms: a Valkey
+// sorted set scores an event by its time as a float64, which is exact up to
+// there.
+const MaxTS = 1 << 53
+
 // EventID derives an event's ID from its fields, so an identical event sent twice is one event.
 func EventID(user, item string, ts int64, kind string) uint64 {
 	h := sha256.New()
@@ -62,7 +67,6 @@ type Memory struct {
 		sync.RWMutex
 		users map[string][]Event // sorted by order
 	}
-	inclusive bool // test only: the broken variant that also returns events at ts
 }
 
 // NewMemory returns an empty in-process store.
@@ -98,7 +102,7 @@ func (m *Memory) Before(_ context.Context, user string, ts int64, n int) ([]stri
 	defer s.RUnlock()
 	evs := s.users[user]
 	end, _ := slices.BinarySearchFunc(evs, ts, func(e Event, t int64) int {
-		if e.TS < t || (m.inclusive && e.TS == t) {
+		if e.TS < t {
 			return -1
 		}
 		return 1
