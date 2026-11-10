@@ -12,10 +12,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/sHyanorn/recserve/internal/annshard/annshardtest"
 	"github.com/sHyanorn/recserve/internal/api"
 	"github.com/sHyanorn/recserve/internal/breaker"
 	"github.com/sHyanorn/recserve/internal/bundle"
@@ -46,13 +48,66 @@ func post(t *testing.T, url, body string) (int, map[string]any) {
 	return resp.StatusCode, out
 }
 
+// localShards returns the gateway's function for shards in this process.
+func localShards(t *testing.T) func(*bundle.Bundle) (recommend.Shards, error) {
+	t.Helper()
+	index, _, err := openShards(nil, shard.DefaultConfig, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return index
+}
+
+// With replicas, the preparer has them prepare the bundle's version, and
+// the pipeline answers as the one over in-process shards does; a version
+// the replicas lack is rejected.
+func TestPreparerOnReplicas(t *testing.T) {
+	dir := bundletest.Write(t)
+	root := t.TempDir() // the replicas' bundle root: one directory per version
+	if err := os.Symlink(dir, filepath.Join(root, "test")); err != nil {
+		t.Fatal(err)
+	}
+	index, closeShards, err := openShards(annshardtest.StartAll(t, root, 2, 1), shard.DefaultConfig, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeShards()
+	store := history.NewMemory()
+	if err := store.Append(context.Background(), []history.Event{{ID: 1, User: "u", Item: "item2", TS: 1}, {ID: 2, User: "u", Item: "item5", TS: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	remote, err := preparer(bundle.Options{}, store, index, recommend.Budgets{}, nil)(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := preparer(bundle.Options{}, store, localShards(t), recommend.Budgets{}, nil)(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := recommend.Request{User: "u", K: 5, TS: 10}
+	got, err := remote.Recommend(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := local.Recommend(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Items) == 0 || !slices.Equal(got.Items, want.Items) || len(got.Degraded) > 0 || *got.Coverage != *want.Coverage {
+		t.Fatalf("got %+v\nwant %+v", got, want)
+	}
+	if _, err := preparer(bundle.Options{}, store, index, recommend.Budgets{}, nil)(bundletest.Write(t, bundletest.Version("other"))); err == nil {
+		t.Fatal("a version the replicas lack was prepared")
+	}
+}
+
 // Swaps go through the gateway's own preparer, so a bundle that fails
 // bundle.Load's checks, as the first bundle would, is rejected with 422 and
 // the active one keeps serving.
 func TestSwapThroughPreparer(t *testing.T) {
 	opt := bundle.Options{FirstTestTS: 150}
 	store := history.NewMemory()
-	prepare := preparer(opt, store, shard.DefaultConfig, recommend.DefaultBudgets, cache.New[recommend.Response](100, time.Hour))
+	prepare := preparer(opt, store, localShards(t), recommend.DefaultBudgets, cache.New[recommend.Response](100, time.Hour))
 	p, err := prepare(bundletest.Write(t))
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +197,7 @@ func TestLoopback(t *testing.T) {
 // for a request still running past the drain.
 func TestShutdown(t *testing.T) {
 	newLive := func() *recommend.Live {
-		p, err := preparer(bundle.Options{}, history.NewMemory(), shard.DefaultConfig, recommend.Budgets{}, nil)(bundletest.Write(t))
+		p, err := preparer(bundle.Options{}, history.NewMemory(), localShards(t), recommend.Budgets{}, nil)(bundletest.Write(t))
 		if err != nil {
 			t.Fatal(err)
 		}

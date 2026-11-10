@@ -1,5 +1,6 @@
 // Package annshard is the shard tier over gRPC (docs/DECISIONS.md D040):
-// Server answers searches from the indexes a replica has prepared.
+// Server answers searches from the indexes a replica has prepared, and
+// Client searches the replicas for the gateway.
 package annshard
 
 import (

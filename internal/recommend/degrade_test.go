@@ -174,6 +174,21 @@ func want(t *testing.T, p *Pipeline, f *fault, req Request) Response {
 	return resp
 }
 
+// sameResponse compares the items, reasons and coverage of a response with
+// those wanted.
+func sameResponse(got, want Response) error {
+	if !slices.Equal(got.Items, want.Items) && (len(got.Items) > 0 || len(want.Items) > 0) {
+		return fmt.Errorf("items:\n got %v\nwant %v", got.Items, want.Items)
+	}
+	if !slices.Equal(got.Degraded, want.Degraded) {
+		return fmt.Errorf("degraded %v, want %v", got.Degraded, want.Degraded)
+	}
+	if (got.Coverage == nil) != (want.Coverage == nil) || (got.Coverage != nil && *got.Coverage != *want.Coverage) {
+		return fmt.Errorf("coverage %v, want %v", got.Coverage, want.Coverage)
+	}
+	return nil
+}
+
 // Each fault, on random pipelines with a ranker: the response reports the
 // fault's reason when the failed stage ran, falls back as the stage's rule
 // says, reports the shards that answered, and keeps the error unless it is
@@ -197,15 +212,8 @@ func TestDegradation(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					w := want(t, p, f, req)
-					if !slices.Equal(got.Items, w.Items) && (len(got.Items) > 0 || len(w.Items) > 0) {
-						t.Fatalf("case %d %+v:\n got %v\nwant %v", c, req, got.Items, w.Items)
-					}
-					if !slices.Equal(got.Degraded, w.Degraded) {
-						t.Fatalf("case %d: degraded %v, want %v", c, got.Degraded, w.Degraded)
-					}
-					if (got.Coverage == nil) != (w.Coverage == nil) || (got.Coverage != nil && *got.Coverage != *w.Coverage) {
-						t.Fatalf("case %d: coverage %v, want %v", c, got.Coverage, w.Coverage)
+					if err := sameResponse(got, want(t, p, f, req)); err != nil {
+						t.Fatalf("case %d %+v: %v", c, req, err)
 					}
 					timeoutOnly := !slices.ContainsFunc(f.faults, func(sf stageFault) bool { return !sf.timeout })
 					for _, fl := range got.Failures {

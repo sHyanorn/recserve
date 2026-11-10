@@ -1,100 +1,46 @@
-package shard
+package shard_test
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math/rand/v2"
 	"slices"
 	"testing"
 
+	"github.com/sHyanorn/recserve/internal/shard"
+	"github.com/sHyanorn/recserve/internal/shard/shardtest"
 	"github.com/sHyanorn/recserve/internal/vec"
 )
 
-// randomMatrix returns n rows of dim small integers after a zero padding
-// row; about one row in ten is zero, and scores tie often.
-func randomMatrix(r *rand.Rand, n, dim int) vec.Matrix {
-	data := make([]float32, (n+1)*dim)
-	for i := 1; i <= n; i++ {
-		if r.IntN(10) == 0 {
-			continue
-		}
-		for j := range dim {
-			data[i*dim+j] = float32(r.IntN(5) - 2)
-		}
-	}
-	m, err := vec.NewMatrix(dim, data)
-	if err != nil {
-		panic(err)
-	}
-	return m
+// checkEvery is how many rows an exact search scans between checks of its
+// context (D028).
+const checkEvery = 1024
+
+func isZero(row []float32) bool {
+	return !slices.ContainsFunc(row, func(x float32) bool { return x != 0 })
 }
 
-// gather searches every shard for perShard(k) items and merges the top k.
-func gather(s *Set, q []float32, k int, seen map[int32]bool, perShard func(k, n int) int) ([]vec.Hit, error) {
-	var results [][]vec.Hit
-	for i := range s.Shards() {
-		hits, err := s.Search(context.Background(), i, q, perShard(k, s.Shards()), seen)
-		if err != nil {
-			return nil, err
-		}
-		results = append(results, hits)
-	}
-	return Merge(results, k), nil
-}
-
-// checkProperty6 compares scatter-gather in exact mode with single-node
-// exact search over the nonzero rows, item by item; perShard is how many
-// items each shard returns for a top k.
-func checkProperty6(seed uint64, cases int, perShard func(k, n int) int) error {
-	r := rand.New(rand.NewPCG(seed, 6))
-	for c := range cases {
-		n, dim := 1+r.IntN(300), 1+r.IntN(4)
-		m := randomMatrix(r, n, dim)
-		s, err := Build(m, Config{Shards: 1 + r.IntN(7), Mode: Exact})
-		if err != nil {
-			return err
-		}
-		q := make([]float32, dim)
-		for j := range q {
-			q[j] = float32(r.IntN(5) - 2)
-		}
-		seen := map[int32]bool{}
-		for range r.IntN(20) {
-			seen[int32(1+r.IntN(n))] = true
-		}
-		k := 1 + r.IntN(n+10)
-		want := m.TopK(q, k, func(id int32) bool { return seen[id] || zero(m.Row(id)) })
-		got, err := gather(s, q, k, seen, perShard)
-		if err != nil {
-			return err
-		}
-		if !slices.Equal(got, want) {
-			return fmt.Errorf("case %d: %d shards, k %d:\n got %v\nwant %v", c, s.Shards(), k, got, want)
-		}
-	}
-	return nil
-}
+func local(m vec.Matrix, cfg shard.Config) (shardtest.Searcher, error) { return shard.Build(m, cfg) }
 
 // Property 6: scatter-gather top-k in exact mode equals single-node exact
 // top-k item by item; ties break by internal ID ascending.
 func TestProperty6ScatterGatherEqualsSingleNode(t *testing.T) {
-	if err := checkProperty6(1, 500, func(k, _ int) int { return k }); err != nil {
+	if err := shardtest.CheckProperty6(1, 500, shardtest.All, local); err != nil {
 		t.Fatal(err)
 	}
 }
 
 // The broken variant asks each shard for its share of k only.
 func TestProperty6CatchesBrokenVariant(t *testing.T) {
-	if err := checkProperty6(1, 500, func(k, n int) int { return (k + n - 1) / n }); err == nil {
+	if err := shardtest.CheckProperty6(1, 500, shardtest.Share, local); err == nil {
 		t.Fatal("the check passed shards that return ceil(k/n) items each")
 	}
 }
 
 func TestSearchAll(t *testing.T) {
 	r := rand.New(rand.NewPCG(2, 2))
-	m := randomMatrix(r, 200, 3)
-	s, err := Build(m, DefaultConfig)
+	m := shardtest.RandomMatrix(r, 200, 3)
+	s, err := shard.Build(m, shard.DefaultConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +49,7 @@ func TestSearchAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := m.TopK(q, 50, func(id int32) bool { return zero(m.Row(id)) }); !slices.Equal(got, want) {
+	if want := m.TopK(q, 50, func(id int32) bool { return isZero(m.Row(id)) }); !slices.Equal(got, want) {
 		t.Fatalf("got %v\nwant %v", got, want)
 	}
 }
@@ -113,7 +59,7 @@ func TestZeroRowsLeftOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := Build(m, Config{Shards: 2, Mode: Exact})
+	s, err := shard.Build(m, shard.Config{Shards: 2, Mode: shard.Exact})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +104,7 @@ func TestSearchStopsWhenContextEnds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := Build(m, Config{Shards: 1, Mode: Exact})
+	s, err := shard.Build(m, shard.Config{Shards: 1, Mode: shard.Exact})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,9 +137,9 @@ func TestHNSWMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := DefaultConfig
-	cfg.Mode, cfg.Ef = HNSW, 200
-	s, err := Build(m, cfg)
+	cfg := shard.DefaultConfig
+	cfg.Mode, cfg.Ef = shard.HNSW, 200
+	s, err := shard.Build(m, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,13 +158,13 @@ func TestBuildRejects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, cfg := range []Config{{Shards: 0, Mode: Exact}, {Shards: 1, Mode: "ivf"}} {
-		if _, err := Build(m, cfg); err == nil {
+	for _, cfg := range []shard.Config{{Shards: 0, Mode: shard.Exact}, {Shards: 1, Mode: "ivf"}} {
+		if _, err := shard.Build(m, cfg); err == nil {
 			t.Errorf("%+v accepted", cfg)
 		}
 	}
 	for _, i := range []int{-1, 2} {
-		if _, err := BuildPart(m, Config{Shards: 2, Mode: Exact}, i); err == nil {
+		if _, err := shard.BuildPart(m, shard.Config{Shards: 2, Mode: shard.Exact}, i); err == nil {
 			t.Errorf("shard %d of 2 accepted", i)
 		}
 	}

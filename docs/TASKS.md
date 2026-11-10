@@ -43,8 +43,8 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] Valkey connections opened and replaced outside the request's history budget, shown with latency added to connection setup only (D037 point 7)
 
 ## M4 Sharded vector tier
-- [ ] annshard service over gRPC
-- [ ] Scatter-gather over gRPC with per-shard deadlines, partial results and coverage, merging as the in-process shards do; property test 6 rerun over gRPC (D028)
+- [x] annshard service over gRPC (D040)
+- [x] Scatter-gather over gRPC with per-shard deadlines, partial results and coverage, merging as the in-process shards do; property test 6 rerun over gRPC (D028, D040)
 - [ ] Replica failover and hedged requests
 - [ ] Fault tests: slow shard, dead replica, failed swap
 

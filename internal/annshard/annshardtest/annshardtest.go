@@ -3,9 +3,11 @@
 package annshardtest
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -18,6 +20,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/annshard"
 	"github.com/sHyanorn/recserve/internal/annshard/annshardpb"
 	"github.com/sHyanorn/recserve/internal/npy"
+	"github.com/sHyanorn/recserve/internal/shard"
 	"github.com/sHyanorn/recserve/internal/vec"
 )
 
@@ -61,4 +64,53 @@ func Start(t testing.TB, root string, opts ...grpc.ServerOption) string {
 	go gs.Serve(ln) //nolint:errcheck // ends with the Stop below
 	t.Cleanup(gs.Stop)
 	return ln.Addr().String()
+}
+
+// StartAll serves replicas replicas for each of shards shards, all over
+// root, and returns their addresses by shard.
+func StartAll(t testing.TB, root string, shards, replicas int) [][]string {
+	t.Helper()
+	addrs := make([][]string, shards)
+	for i := range addrs {
+		for range replicas {
+			addrs[i] = append(addrs[i], Start(t, root))
+		}
+	}
+	return addrs
+}
+
+// Dial returns a client of the replicas at addrs, closed when the test ends.
+func Dial(t testing.TB, addrs [][]string) *annshard.Client {
+	t.Helper()
+	c, err := annshard.Dial(addrs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := c.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return c
+}
+
+// Remote returns a function that puts a catalog on annshard replicas: it
+// writes m as a new bundle version and prepares it, split by cfg into at
+// most maxShards shards, on replicas, one per shard, that serve every
+// catalog of the test.
+func Remote(t testing.TB, maxShards int) func(m vec.Matrix, cfg shard.Config) (*annshard.Shards, error) {
+	t.Helper()
+	root := t.TempDir()
+	addrs := StartAll(t, root, maxShards, 1)
+	clients := map[int]*annshard.Client{} // by number of shards
+	versions := 0
+	return func(m vec.Matrix, cfg shard.Config) (*annshard.Shards, error) {
+		versions++
+		version := fmt.Sprint("v", versions)
+		WriteVectors(t, root, version, m)
+		if clients[cfg.Shards] == nil {
+			clients[cfg.Shards] = Dial(t, addrs[:cfg.Shards])
+		}
+		return clients[cfg.Shards].Prepare(context.Background(), version, cfg)
+	}
 }

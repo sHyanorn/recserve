@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sHyanorn/recserve/internal/annshard"
 	"github.com/sHyanorn/recserve/internal/api"
 	"github.com/sHyanorn/recserve/internal/breaker"
 	"github.com/sHyanorn/recserve/internal/bundle"
@@ -44,7 +45,9 @@ func main() {
 	drain := flag.Duration("drain", 10*time.Second, "time allowed for in-flight requests at shutdown")
 	ortLib := flag.String("ort-lib", "", "ONNX Runtime shared library (libonnxruntime.so.1.31.x), needed by a bundle with an ONNX user encoder or a ranker")
 	shards := shard.DefaultConfig
-	flag.IntVar(&shards.Shards, "shards", shards.Shards, "in-process shards of the item vectors")
+	flag.IntVar(&shards.Shards, "shards", shards.Shards, "in-process shards of the item vectors; with -shard-addrs the number of shards is the number of address groups")
+	shardAddrs := flag.String("shard-addrs", "", "annshard replicas that hold the shards, as \"a:9090,b:9090;c:9090,d:9090\": shards separated by ';', a shard's replicas by ','; empty keeps the shards in this process")
+	prepareTimeout := flag.Duration("prepare-timeout", 2*time.Minute, "time the replicas of -shard-addrs get to load and index a bundle version, at start and in a swap")
 	flag.StringVar((*string)(&shards.Mode), "shard-mode", string(shards.Mode), "vector search in each shard: exact or hnsw")
 	flag.IntVar(&shards.Ef, "hnsw-ef", shards.Ef, "HNSW search list size, with -shard-mode hnsw")
 	budgets := recommend.DefaultBudgets
@@ -57,13 +60,13 @@ func main() {
 	cacheTTL := flag.Duration("cache-ttl", 5*time.Minute, "result cache time to live, changed by up to 10% either way")
 	flag.Parse()
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if err := run(log, *addr, *adminAddr, *dir, *testSplit, *preload, *ortLib, *valkeyAddr, *kafkaBrokers, *eventsTimeout, shards, budgets, *cacheSize, *cacheTTL, *drain); err != nil {
+	if err := run(log, *addr, *adminAddr, *dir, *testSplit, *preload, *ortLib, *valkeyAddr, *kafkaBrokers, *eventsTimeout, shards, *shardAddrs, *prepareTimeout, budgets, *cacheSize, *cacheTTL, *drain); err != nil {
 		log.Error("gateway stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, valkeyAddr, kafkaBrokers string, eventsTimeout time.Duration, shards shard.Config, budgets recommend.Budgets, cacheSize int, cacheTTL time.Duration, drain time.Duration) (err error) {
+func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, valkeyAddr, kafkaBrokers string, eventsTimeout time.Duration, shards shard.Config, shardAddrs string, prepareTimeout time.Duration, budgets recommend.Budgets, cacheSize int, cacheTTL time.Duration, drain time.Duration) (err error) {
 	if dir == "" {
 		return errors.New("-bundle is required")
 	}
@@ -98,7 +101,19 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 	if valkeyAddr != "" {
 		store, c = guard(store, c, log)
 	}
-	prepare := preparer(opt, store, shards, budgets, c)
+	var replicas [][]string
+	if shardAddrs != "" {
+		if replicas, err = annshard.ParseAddrs(shardAddrs); err != nil {
+			return fmt.Errorf("-shard-addrs: %w", err)
+		}
+		shards.Shards = len(replicas)
+	}
+	index, closeShards, err := openShards(replicas, shards, prepareTimeout)
+	if err != nil {
+		return err
+	}
+	defer closeShards() // after live is closed: no request is searching
+	prepare := preparer(opt, store, index, budgets, c)
 	p, err := prepare(dir)
 	if err != nil {
 		return err
@@ -146,7 +161,7 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 	}
 	srv.SetReady(true)
 	log.Info("serving", "addr", addr, "admin_addr", adminAddr, "model_version", p.Bundle.ModelVersion, "items", p.Bundle.ItemCount,
-		"shards", shards.Shards, "shard_mode", shards.Mode, "zero_vectors", zeroVectors(p.Bundle))
+		"shards", shards.Shards, "shard_mode", shards.Mode, "shard_addrs", shardAddrs, "zero_vectors", zeroVectors(p.Bundle))
 	var serveErr error
 	select {
 	case serveErr = <-errc:
@@ -244,12 +259,41 @@ func openProducer(brokers string, store history.Store, timeout time.Duration) (e
 	return k, k.Close, nil
 }
 
+// openShards returns the function that puts a bundle's vectors into shards
+// by cfg, and the function that releases what it holds: the shards are
+// built in this process or, given replicas, prepared on the annshard
+// replicas of every shard, each call within timeout.
+func openShards(replicas [][]string, cfg shard.Config, timeout time.Duration) (func(*bundle.Bundle) (recommend.Shards, error), func(), error) {
+	if replicas == nil {
+		return func(b *bundle.Bundle) (recommend.Shards, error) {
+			s, err := shard.Build(b.Vectors, cfg)
+			if err != nil {
+				return nil, err
+			}
+			return s, nil
+		}, func() {}, nil
+	}
+	client, err := annshard.Dial(replicas)
+	if err != nil {
+		return nil, nil, err
+	}
+	return func(b *bundle.Bundle) (recommend.Shards, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		s, err := client.Prepare(ctx, b.ModelVersion, cfg)
+		if err != nil {
+			return nil, err
+		}
+		return s, nil
+	}, func() { client.Close() }, nil //nolint:errcheck // the process is stopping
+}
+
 // preparer returns the function that loads, verifies and indexes the
 // bundle in a directory, for the first bundle and for every swap: the
 // checksums, golden cases and train cutoff are checked against opt, and
-// the vectors split into shards by cfg. The pipelines share store and
-// cache c, and have budgets.
-func preparer(opt bundle.Options, store history.Store, cfg shard.Config, budgets recommend.Budgets, c recommend.Cache) func(dir string) (*recommend.Pipeline, error) {
+// index puts the vectors into shards. The pipelines share store and cache
+// c, and have budgets.
+func preparer(opt bundle.Options, store history.Store, index func(*bundle.Bundle) (recommend.Shards, error), budgets recommend.Budgets, c recommend.Cache) func(dir string) (*recommend.Pipeline, error) {
 	return func(dir string) (*recommend.Pipeline, error) {
 		b, err := bundle.Load(dir, opt)
 		if errors.Is(err, onnx.ErrNotInitialized) {
@@ -258,7 +302,7 @@ func preparer(opt bundle.Options, store history.Store, cfg shard.Config, budgets
 		if err != nil {
 			return nil, err
 		}
-		s, err := shard.Build(b.Vectors, cfg)
+		s, err := index(b)
 		if err != nil {
 			return nil, errors.Join(err, b.Close())
 		}

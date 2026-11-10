@@ -18,27 +18,9 @@ import (
 	"github.com/sHyanorn/recserve/internal/annshard/annshardtest"
 	"github.com/sHyanorn/recserve/internal/hnsw"
 	"github.com/sHyanorn/recserve/internal/shard"
+	"github.com/sHyanorn/recserve/internal/shard/shardtest"
 	"github.com/sHyanorn/recserve/internal/vec"
 )
-
-// randomMatrix returns n rows of dim small integers after a zero padding
-// row; about one row in ten is zero, and scores tie often.
-func randomMatrix(r *rand.Rand, n, dim int) vec.Matrix {
-	data := make([]float32, (n+1)*dim)
-	for i := 1; i <= n; i++ {
-		if r.IntN(10) == 0 {
-			continue
-		}
-		for j := range dim {
-			data[i*dim+j] = float32(r.IntN(5) - 2)
-		}
-	}
-	m, err := vec.NewMatrix(dim, data)
-	if err != nil {
-		panic(err)
-	}
-	return m
-}
 
 // replica starts a replica over root and returns a client of it.
 func replica(t *testing.T, root string) annshardpb.AnnShardClient {
@@ -67,7 +49,7 @@ func wantCode(t *testing.T, err error, want codes.Code) {
 func TestSearchEqualsInProcess(t *testing.T) {
 	r := rand.New(rand.NewPCG(1, 1))
 	const n, dim, shards = 400, 3, 3
-	m := randomMatrix(r, n, dim)
+	m := shardtest.RandomMatrix(r, n, dim)
 	root := t.TempDir()
 	annshardtest.WriteVectors(t, root, "v1", m)
 	c := replica(t, root)
@@ -123,8 +105,8 @@ func TestSearchEqualsInProcess(t *testing.T) {
 func TestSearchNeedsTheNamedIndex(t *testing.T) {
 	r := rand.New(rand.NewPCG(2, 2))
 	root := t.TempDir()
-	annshardtest.WriteVectors(t, root, "v1", randomMatrix(r, 50, 2))
-	annshardtest.WriteVectors(t, root, "v2", randomMatrix(r, 50, 2))
+	annshardtest.WriteVectors(t, root, "v1", shardtest.RandomMatrix(r, 50, 2))
+	annshardtest.WriteVectors(t, root, "v2", shardtest.RandomMatrix(r, 50, 2))
 	c := replica(t, root)
 	ctx := context.Background()
 	search := func(ix *annshardpb.Index) error {
@@ -149,7 +131,7 @@ func TestSearchNeedsTheNamedIndex(t *testing.T) {
 func TestPrepare(t *testing.T) {
 	r := rand.New(rand.NewPCG(3, 3))
 	root := t.TempDir()
-	m := randomMatrix(r, 50, 2)
+	m := shardtest.RandomMatrix(r, 50, 2)
 	annshardtest.WriteVectors(t, root, "v1", m)
 	c := replica(t, root)
 	ctx := context.Background()
@@ -197,10 +179,10 @@ func TestPrepare(t *testing.T) {
 func TestInvalidRequests(t *testing.T) {
 	r := rand.New(rand.NewPCG(4, 4))
 	root := t.TempDir()
-	annshardtest.WriteVectors(t, root, "v1", randomMatrix(r, 50, 2))
+	annshardtest.WriteVectors(t, root, "v1", shardtest.RandomMatrix(r, 50, 2))
 	// A version must not lead out of the bundle root, here to a bundle
 	// beside it in the test's temporary directory.
-	annshardtest.WriteVectors(t, filepath.Dir(root), "outside", randomMatrix(r, 50, 2))
+	annshardtest.WriteVectors(t, filepath.Dir(root), "outside", shardtest.RandomMatrix(r, 50, 2))
 	c := replica(t, root)
 	ctx := context.Background()
 	edit := func(f func(*annshardpb.Index)) *annshardpb.Index {
