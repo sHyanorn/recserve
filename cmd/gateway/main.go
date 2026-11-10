@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/grpc/resolver/dns"
 
 	"github.com/sHyanorn/recserve/internal/annshard"
 	"github.com/sHyanorn/recserve/internal/api"
@@ -64,6 +65,9 @@ func main() {
 	cacheSize := flag.Int("cache-size", 13000, "result cache entries; 0 for no cache. With -valkey-addr the cache is on Valkey, bounded by the server's memory, and this only turns it on or off")
 	cacheTTL := flag.Duration("cache-ttl", 5*time.Minute, "result cache time to live, changed by up to 10% either way")
 	flag.Parse()
+	// A replica restarted under its name comes back on another address, which
+	// gRPC's DNS resolver would look up only 30 s after the last time (D041).
+	dns.SetMinResolutionInterval(time.Second)
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	if err := run(log, *addr, *adminAddr, *dir, *testSplit, *preload, *ortLib, *valkeyAddr, *kafkaBrokers, *eventsTimeout, shards, *shardAddrs, *hedgeDelay, *prepareTimeout, budgets, *cacheSize, *cacheTTL, *drain, *shutdownDelay); err != nil {
 		log.Error("gateway stopped", "err", err)
