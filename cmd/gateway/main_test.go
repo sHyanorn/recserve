@@ -19,6 +19,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/bundle/bundletest"
 	"github.com/sHyanorn/recserve/internal/cache"
+	"github.com/sHyanorn/recserve/internal/events"
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/infratest"
 	"github.com/sHyanorn/recserve/internal/onnx/onnxtest"
@@ -220,5 +221,24 @@ func TestOpenStore(t *testing.T) {
 	defer closeStore()
 	if got, err := s.Before(context.Background(), "nobody", 1, 0); err != nil || len(got) != 0 {
 		t.Fatalf("Before = %v, %v", got, err)
+	}
+}
+
+// Without brokers /v1/events writes the store itself; with them it
+// produces to Kafka, and the client is not asked to connect at the start.
+func TestOpenProducer(t *testing.T) {
+	store := history.NewMemory()
+	p, closeProducer, err := openProducer("", store, 0)
+	if d, ok := p.(events.Direct); !ok || d.Store != history.Store(store) || err != nil {
+		t.Fatalf("no brokers: %T, %v", p, err)
+	}
+	closeProducer()
+	p, closeProducer, err = openProducer("127.0.0.1:1,127.0.0.1:2", store, time.Second)
+	if _, ok := p.(*events.Kafka); !ok || err != nil {
+		t.Fatalf("brokers: %T, %v", p, err)
+	}
+	closeProducer()
+	if _, _, err := openProducer("127.0.0.1:1", store, 0); err == nil {
+		t.Fatal("brokers without a timeout were accepted")
 	}
 }

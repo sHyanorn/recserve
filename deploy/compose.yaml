@@ -1,6 +1,9 @@
 # Kafka (KRaft, one node) and Valkey for local runs and the integration tests.
 # From the host: Kafka at localhost:9094, Valkey at localhost:6379.
 # From other containers on this network: kafka:9092, valkey:6379.
+# Start order: these services, then ingest, which creates the events topic,
+# then the gateways. Until the topic exists a gateway started with
+# -kafka-brokers answers 503 on /v1/events (D034).
 name: recserve
 
 services:

@@ -17,6 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/sHyanorn/recserve/internal/events"
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/recommend"
 )
@@ -27,10 +28,20 @@ const MaxBody = 1 << 20
 // MaxEvents bounds the events in one /v1/events request.
 const MaxEvents = 1000
 
+// DefaultEventsTimeout is the time /v1/events waits for its events to be
+// accepted before it answers 503.
+const DefaultEventsTimeout = 2 * time.Second
+
 // Server holds the handlers' dependencies.
 type Server struct {
-	Live    *recommend.Live
+	Live *recommend.Live
+	// History is the store the pipelines read.
 	History history.Store
+	// Events takes the events of POST /v1/events; New sets one that stores
+	// them in History before it answers.
+	Events events.Producer
+	// EventsTimeout bounds the time Events may take; 0 for none.
+	EventsTimeout time.Duration
 	// Prepare loads, verifies and indexes the bundle in a directory, for
 	// POST /v1/admin/swap; nil refuses swaps.
 	Prepare func(dir string) (*recommend.Pipeline, error)
@@ -50,7 +61,7 @@ type Server struct {
 
 // New returns a server that is not ready until SetReady(true).
 func New(l *recommend.Live, h history.Store, log *slog.Logger) *Server {
-	s := &Server{Live: l, History: h, Now: time.Now, Log: log, reg: prometheus.NewRegistry()}
+	s := &Server{Live: l, History: h, Events: events.Direct{Store: h}, EventsTimeout: DefaultEventsTimeout, Now: time.Now, Log: log, reg: prometheus.NewRegistry()}
 	s.requests = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "recserve_http_requests_total", Help: "HTTP requests by route and status code.",
 	}, []string{"route", "code"})
@@ -258,27 +269,21 @@ func (s *Server) recommend(w http.ResponseWriter, r *http.Request) error {
 	return writeJSON(w, http.StatusOK, resp)
 }
 
-// Event is one event in POST /v1/events.
-type Event struct {
-	UserID string `json:"user_id"`
-	ItemID string `json:"item_id"`
-	TS     int64  `json:"ts"`
-	Kind   string `json:"kind"`
-}
-
 // EventsRequest is the body of POST /v1/events.
 type EventsRequest struct {
-	Events []Event `json:"events"`
+	Events []events.Event `json:"events"`
 }
 
-// EventsResponse reports how many events were stored.
+// EventsResponse reports how many events were accepted.
 type EventsResponse struct {
 	Accepted int `json:"accepted"`
 }
 
-// events stores the events under their raw item IDs, whatever bundle is
-// active: an item no bundle knows yet is kept for one that will. It answers
-// 503 if the store fails; sending the events again is safe.
+// events hands the request's events to the producer and answers 202 once
+// it has accepted them all: stored, or acknowledged by the broker (D034).
+// It answers 503 if the producer fails or takes longer than EventsTimeout;
+// some of the events may then have been accepted, and sending them again
+// is safe.
 func (s *Server) events(w http.ResponseWriter, r *http.Request) error {
 	var in EventsRequest
 	if err := decode(r.Body, &in); err != nil {
@@ -287,21 +292,25 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) error {
 	if len(in.Events) == 0 || len(in.Events) > MaxEvents {
 		return badRequest{fmt.Errorf("events must hold 1..%d events", MaxEvents)}
 	}
-	evs := make([]history.Event, len(in.Events))
 	for i, e := range in.Events {
-		if e.UserID == "" || e.ItemID == "" || e.TS <= 0 || e.TS > history.MaxTS {
-			return badRequest{fmt.Errorf("event %d: user_id, item_id and a ts in 1..2^53 are required", i)}
+		if err := e.Validate(); err != nil {
+			return badRequest{fmt.Errorf("event %d: %w", i, err)}
 		}
-		evs[i] = history.Event{ID: history.EventID(e.UserID, e.ItemID, e.TS, e.Kind), User: e.UserID, Item: e.ItemID, TS: e.TS}
 	}
-	if err := s.History.Append(r.Context(), evs); err != nil {
+	ctx := r.Context()
+	if s.EventsTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.EventsTimeout)
+		defer cancel()
+	}
+	if err := s.Events.Produce(ctx, in.Events); err != nil {
 		if ctxErr := r.Context().Err(); ctxErr != nil && errors.Is(err, ctxErr) {
 			return err
 		}
-		s.Log.Warn("storing events failed", "err", err)
-		return httpError{http.StatusServiceUnavailable, fmt.Errorf("events not stored: %w", err)}
+		s.Log.Warn("events not accepted", "err", err)
+		return httpError{http.StatusServiceUnavailable, fmt.Errorf("events not accepted: %w", err)}
 	}
-	return writeJSON(w, http.StatusAccepted, EventsResponse{Accepted: len(evs)})
+	return writeJSON(w, http.StatusAccepted, EventsResponse{Accepted: len(in.Events)})
 }
 
 // Results of a swap, as recserve_swaps_total counts them.

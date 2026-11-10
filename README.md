@@ -22,7 +22,7 @@ curl -X POST localhost:8081/v1/admin/swap -d '{"bundle":"data/bundle/<version>"}
 
 The admin API listens on 127.0.0.1:8081 (`-admin-addr`) and has no authentication.
 
-`make infra-up` starts Kafka and Valkey in Docker (`deploy/compose.yaml`). With `-valkey-addr localhost:6379` the gateway keeps the user histories in Valkey, where every instance reads the same ones; without it they stay in the process.
+`make infra-up` starts Kafka and Valkey in Docker (`deploy/compose.yaml`). With `-valkey-addr localhost:6379` the gateway keeps the user histories in Valkey, where every instance reads the same ones; without it they stay in the process. With `-kafka-brokers localhost:9094`, `POST /v1/events` produces to the `events` topic and answers 202 once the broker has the events; they reach the histories through the ingest consumer, which also creates the topic (M3, not built yet), so until then keep the flag off: the gateway then writes the histories itself and a request sees the events sent before it.
 
 ## In place after M2
 

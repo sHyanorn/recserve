@@ -20,6 +20,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/cache"
 	"github.com/sHyanorn/recserve/internal/dataset"
+	"github.com/sHyanorn/recserve/internal/events"
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/onnx"
 	"github.com/sHyanorn/recserve/internal/recommend"
@@ -36,6 +37,8 @@ func main() {
 	testSplit := flag.String("test-split", "", "test split file; its first event bounds the bundle's train cutoff")
 	preload := flag.String("preload", "", "comma-separated split files whose events are loaded into the history store at start")
 	valkeyAddr := flag.String("valkey-addr", "", "Valkey address for the user histories; empty keeps them in this process")
+	kafkaBrokers := flag.String("kafka-brokers", "", "comma-separated Kafka brokers: /v1/events produces to the events topic; empty makes it write the histories itself")
+	eventsTimeout := flag.Duration("events-timeout", api.DefaultEventsTimeout, "time /v1/events waits for its events to be accepted before it answers 503; at least 1s with -kafka-brokers, 0 for none without")
 	drain := flag.Duration("drain", 10*time.Second, "time allowed for in-flight requests at shutdown")
 	ortLib := flag.String("ort-lib", "", "ONNX Runtime shared library (libonnxruntime.so.1.31.x), needed by a bundle with an ONNX user encoder or a ranker")
 	shards := shard.DefaultConfig
@@ -52,13 +55,13 @@ func main() {
 	cacheTTL := flag.Duration("cache-ttl", 5*time.Minute, "result cache time to live, changed by up to 10% either way")
 	flag.Parse()
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if err := run(log, *addr, *adminAddr, *dir, *testSplit, *preload, *ortLib, *valkeyAddr, shards, budgets, *cacheSize, *cacheTTL, *drain); err != nil {
+	if err := run(log, *addr, *adminAddr, *dir, *testSplit, *preload, *ortLib, *valkeyAddr, *kafkaBrokers, *eventsTimeout, shards, budgets, *cacheSize, *cacheTTL, *drain); err != nil {
 		log.Error("gateway stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, valkeyAddr string, shards shard.Config, budgets recommend.Budgets, cacheSize int, cacheTTL time.Duration, drain time.Duration) (err error) {
+func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, valkeyAddr, kafkaBrokers string, eventsTimeout time.Duration, shards shard.Config, budgets recommend.Budgets, cacheSize int, cacheTTL time.Duration, drain time.Duration) (err error) {
 	if dir == "" {
 		return errors.New("-bundle is required")
 	}
@@ -110,8 +113,13 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 			log.Info("history preloaded", "file", path, "events", n)
 		}
 	}
+	producer, closeProducer, err := openProducer(kafkaBrokers, store, eventsTimeout)
+	if err != nil {
+		return err
+	}
+	defer closeProducer() // after the servers have shut down
 	srv := api.New(live, store, log)
-	srv.Prepare = prepare
+	srv.Prepare, srv.Events, srv.EventsTimeout = prepare, producer, eventsTimeout
 	servers := []*http.Server{{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second}}
 	if adminAddr != "" {
 		servers = append(servers, &http.Server{Addr: adminAddr, Handler: srv.AdminHandler(), ReadHeaderTimeout: 5 * time.Second})
@@ -173,6 +181,20 @@ func openStore(addr string) (history.Store, func(), error) {
 		return nil, nil, err
 	}
 	return v, v.Close, nil
+}
+
+// openProducer returns what takes the events of /v1/events, and the
+// function that closes it: a producer to the events topic on the brokers,
+// or, without brokers, one that writes them to store itself.
+func openProducer(brokers string, store history.Store, timeout time.Duration) (events.Producer, func(), error) {
+	if brokers == "" {
+		return events.Direct{Store: store}, func() {}, nil
+	}
+	k, err := events.NewKafka(strings.Split(brokers, ","), events.Topic, timeout)
+	if err != nil {
+		return nil, nil, err
+	}
+	return k, k.Close, nil
 }
 
 // preparer returns the function that loads, verifies and indexes the

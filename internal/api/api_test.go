@@ -20,7 +20,9 @@ import (
 
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/cache"
+	"github.com/sHyanorn/recserve/internal/events"
 	"github.com/sHyanorn/recserve/internal/history"
+	"github.com/sHyanorn/recserve/internal/infratest"
 	"github.com/sHyanorn/recserve/internal/onnx"
 	"github.com/sHyanorn/recserve/internal/onnx/onnxtest"
 	"github.com/sHyanorn/recserve/internal/recommend"
@@ -299,8 +301,81 @@ func TestEventsStoreFailure(t *testing.T) {
 	if code != http.StatusServiceUnavailable || !strings.Contains(fmt.Sprint(out["error"]), "OOM") {
 		t.Fatalf("status %d: %v", code, out)
 	}
-	if !strings.Contains(log.String(), "storing events failed") {
+	if !strings.Contains(log.String(), "events not accepted") {
 		t.Fatalf("log: %s", log.String())
+	}
+}
+
+// stuckProducer accepts nothing until the context ends.
+type stuckProducer struct{}
+
+func (stuckProducer) Produce(ctx context.Context, _ []events.Event) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// A producer that does not answer costs the request EventsTimeout, and the
+// answer is 503.
+func TestEventsTimeout(t *testing.T) {
+	s, ts := testServer(t)
+	s.Events, s.EventsTimeout = stuckProducer{}, 50*time.Millisecond
+	start := time.Now()
+	code, out := post(t, ts.URL+"/v1/events", `{"events":[{"user_id":"u","item_id":"a","ts":500,"kind":"view"}]}`)
+	if code != http.StatusServiceUnavailable || time.Since(start) > 5*time.Second {
+		t.Fatalf("status %d after %v: %v", code, time.Since(start), out)
+	}
+}
+
+// Through Kafka, 202 means the topic holds one record per event sent, keyed
+// by user, and nothing more: the history has not changed. An event sent
+// twice is two records that decode to one event ID. While the topic does
+// not exist the answer is 503, within the timeout, and 202 once it does.
+func TestEventsThroughKafka(t *testing.T) {
+	brokers, topic := infratest.KafkaBrokers(t), infratest.TopicName()
+	s, ts := testServer(t)
+	k, err := events.NewKafka(brokers, topic, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	s.Events, s.EventsTimeout = k, time.Second
+	const body = `{"events":[{"user_id":"u","item_id":"a","ts":500,"kind":"view"}]}`
+
+	start := time.Now()
+	if code, out := post(t, ts.URL+"/v1/events", body); code != http.StatusServiceUnavailable || time.Since(start) > 5*time.Second {
+		t.Fatalf("without the topic: status %d after %v: %v", code, time.Since(start), out)
+	}
+	infratest.CreateTopic(t, topic, 3)
+	accepted := 0
+	for deadline := time.Now().Add(time.Minute); accepted < 2; {
+		code, out := post(t, ts.URL+"/v1/events", body)
+		switch {
+		case code == http.StatusAccepted:
+			accepted++
+		case code != http.StatusServiceUnavailable || time.Now().After(deadline):
+			t.Fatalf("with the topic: status %d: %v", code, out)
+		}
+	}
+	// Earlier attempts may have left records too: a 503 does not promise
+	// that nothing was written.
+	ids := map[uint64]bool{}
+	for _, r := range infratest.Records(t, topic, 2) {
+		e, err := events.Decode(r.Value)
+		if err != nil || string(r.Key) != "u" {
+			t.Fatalf("record key %q, value %q: %v", r.Key, r.Value, err)
+		}
+		ids[e.History().ID] = true
+	}
+	if len(ids) != 1 || !ids[history.EventID("u", "a", 500, "view")] {
+		t.Fatalf("event IDs %v", ids)
+	}
+	if got, err := s.History.Before(context.Background(), "u", 1000, 0); err != nil || len(got) != 0 {
+		t.Fatalf("the gateway wrote the history itself: %v, %v", got, err)
+	}
+
+	k.Close()
+	if code, out := post(t, ts.URL+"/v1/events", body); code != http.StatusServiceUnavailable {
+		t.Fatalf("after the producer closed: status %d: %v", code, out)
 	}
 }
 
