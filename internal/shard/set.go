@@ -104,6 +104,9 @@ func zero(v []float32) bool {
 // Dim returns the dimension of the part's vectors.
 func (p *Part) Dim() int { return p.rows.Dim }
 
+// Len returns the number of items in the part.
+func (p *Part) Len() int { return len(p.ids) }
+
 // Search returns the part's k items with the highest inner product with q,
 // best first, ties to the lower ID, leaving out the IDs in seen. Scores are
 // computed as vec.Dot does. A part built in exact mode scans every vector,
