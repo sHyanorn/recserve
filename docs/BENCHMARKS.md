@@ -263,3 +263,44 @@ recall@100 and single-thread p99 by ef (`ann/*.json`). The hand-written graphs w
 - Noise: of the 40 query points (12 per single-index run, 4 for two shards), 15 needed a third attempt and 8 (20%) were still flagged after it; each point's baselines and attempt are in its JSON. Builds are not repeated: both glove builds are flagged. The synth faiss run is flagged (867,327 and 830,893 ns before and after), and its build overlapped a test run pinned to CPU 3, so its build time is for reference only; the glove faiss runs are not flagged. The glove exact run is flagged before and after (790,304 and 742,262 ns, `glove-exact-noise-*.json`). The noise record inside `glove-exact.json` holds the baselines `m0ann` timed in its own process (482,413 and 749,650 ns), which D025 does not compare with the reference; the run passed `-ref 0`, which turns flagging off, so its `noisy: false` means not checked. faiss and exact search are references and do not enter the criterion.
 - Noise threshold: the session reference is the median of ten runs that fell into two groups, 587,389 to 595,671 ns and 708,863 to 821,079 ns, so the threshold (717,494 ns) lies about 20% above the lower group and inside the upper one, above one of its five runs. A baseline from the lower group never flags and one from most of the upper group does: a flag mostly records which group the machine was in, not a slowdown of a few percent.
 
+### M3 (2026-11-10)
+
+Another cloud VM: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.3, Valkey 9.1 and Kafka 4.4.0 in Docker over loopback (`bench-results/m3/env.txt`). Session reference 800,115 ns (`noise-reference.json`, ten runs from 775,013 to 838,451 ns); the twelve baselines of the six runs lie between 780,814 and 834,455 ns, and none is flagged. Code at 47bad71, baseline bundle 5de55036a382, 814,586 events in the histories.
+
+#### Stage check of the Valkey path: fail, in the round that computes
+
+Time in the stage "history read, then cache lookup", in µs, runs 1 / 2 / 3 (`stage-run*.log`). In the first round every request misses and computes; in the second, with a cache, every request hits.
+
+| Store and cache | Round | Stage p50 | Stage p99 | History read p99 | Cache lookup p99 | Request p50 |
+|---|---|---|---|---|---|---|
+| process, cache off | 1 | 3 / 3 / 3 | 31 / 16 / 24 | 31 / 16 / 24 | | 2,506 / 2,432 / 2,402 |
+| process, cache off | 2 | 3 / 3 / 3 | 11 / 9 / 8 | 11 / 9 / 8 | | 2,329 / 2,401 / 2,329 |
+| process, cache on | 1 | 3 / 3 / 3 | 12 / 9 / 15 | 7 / 7 / 12 | 2 / 1 / 1 | 2,339 / 2,367 / 2,531 |
+| process, cache on | 2 | 2 / 3 / 3 | 100 / 154 / 180 | 4 / 5 / 4 | 99 / 143 / 179 | 5 / 7 / 6 |
+| Valkey, cache off | 1 | 372 / 682 / 435 | 2,762 / 5,361 / 2,817 | 2,762 / 5,361 / 2,817 | | 2,628 / 3,493 / 2,922 |
+| Valkey, cache off | 2 | 489 / 400 / 379 | 5,649 / 3,996 / 2,678 | 5,649 / 3,996 / 2,678 | | 3,115 / 2,832 / 2,789 |
+| Valkey, cache on | 1 | 477 / 627 / 572 | 2,902 / 4,343 / 5,796 | 2,336 / 2,973 / 3,971 | 2,145 / 3,176 / 3,878 | 3,275 / 4,184 / 4,464 |
+| Valkey, cache on | 2 | 408 / 568 / 512 | 812 / 2,353 / 1,679 | 459 / 1,419 / 742 | 501 / 1,130 / 936 | 416 / 579 / 526 |
+
+Control, 2,000 reads of a 16-byte value by the four workers: p50 157 / 211 / 186 µs, p99 306 / 745 / 450 µs.
+
+- **Fail.** On Valkey with the cache on, the stage's p99 in the first round is 2,902, 4,343 and 5,796 µs, median 4,343 µs, above 3 ms. In the second round it is 812, 2,353 and 1,679 µs, median 1,679 µs, within it.
+- The stage's p50 is 0.4 to 0.6 ms in both rounds, two round trips; the tail is in the rounds that compute. There four workers without think time keep the four CPUs busy with about 2.4 ms of computation a request, and the Valkey server and the client's goroutines wait for a CPU with them. With the cache off both rounds compute, and the history read alone has a p99 of 2.7 to 5.6 ms in both.
+- The protocol's condition for a per-user history version holds as written: the control's p99 is 33 to 89% below the p99 of the history read in every run and round. The runs speak against building it all the same. The control ran while nothing computed. Under the first round's load the cache lookup, a `GET` that finds nothing, has the p99 of the history read (2,145 / 3,176 / 3,878 against 2,336 / 2,973 / 3,971 µs), so a small read in the history read's place would wait as long. And the version saves the history read only on a hit, where the stage already passes. The outcome is in D039.
+- A hit on Valkey takes p50 0.42 to 0.58 ms against 5 to 7 µs in the process (D036), and a miss about 0.9 to 1.9 ms more at p50 than in the process: the history read, the lookup and the write.
+
+#### Load at 200 requests/s on Valkey and Kafka: pass (M3 interim)
+
+One rate, cache on, no writes; not the headline, which M6 measures with the sweep. From the due time, in ms (`load-200-run*.json`); the counters are the gateway's and cover the 14,000 requests of warmup and measurement (`load-200-run*-metrics.txt`).
+
+| Run | p50 | p90 | p99 | p99.9 | max | Valid | `history_unavailable` | `shards_partial` | Cache errors | Cache hits | Baselines ns |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 4.25 | 6.22 | 11.99 | 18.66 | 24.38 | yes | 41 | 6 | 146 | 0 | 834,455 / 782,159 |
+| 2 | 4.15 | 6.04 | 10.97 | 19.34 | 34.51 | yes | 44 | 5 | 110 | 0 | 805,541 / 799,375 |
+| 3 | 4.18 | 6.18 | 10.94 | 16.82 | 31.85 | yes | 31 | 0 | 105 | 0 | 780,814 / 800,725 |
+
+- **Pass.** All three runs are valid (12,000 of 12,000 requests answered 200, 200.0 requests/s sent) with p99 from 10.94 to 11.99 ms, below 50 ms. Each is a first attempt.
+- Degraded responses are at most 0.34% of a run (47 of 14,000), below the 1% mark. The `history_unavailable` ones, 0.22 to 0.31%, are history reads that ran past the 3 ms budget; the circuit breaker did not open in any run (no change of state in the gateway's log). Cache errors, 0.75 to 1.04%, are lookups and writes that ran past the budget; such a request is answered in full.
+- No request hit the cache: the histories hold the test events, each request is at its event's time, and 14,000 events of the split do not repeat a user with an unchanged history. In this workload the cache costs every request a read and a write and saves none; a workload with repeats is M6's cache-on scenario to define.
+- Service time p99 is 11.25, 10.35 and 10.28 ms; the send lag p99 is 1.08 to 1.09 ms and the worst pause of the generator 8.4 to 12.8 ms.
+

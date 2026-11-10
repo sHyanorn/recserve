@@ -39,6 +39,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] Circuit breaker and `history_unavailable` path; property test 10 (D037)
 - [x] Count the result cache lookup of a request that fails after it
 - [x] Integration tests against real Kafka and Valkey containers: the binaries, with ingest killed, Valkey paused and Kafka stopped (`make e2e`)
+- [x] Stage check and load at 200 requests/s on Valkey (D039): the load runs pass, the stage check fails under saturation
 
 ## M4 Sharded vector tier
 - [ ] annshard service over gRPC
@@ -61,6 +62,8 @@ Check off each item when it is done. All tests must pass at the end of every mil
 ## M6 Benchmarks and fault injection
 - [ ] Fault-injection pass criteria committed to docs/BENCHMARKS.md before any fault run
 - [ ] Load sweeps per docs/BENCHMARKS.md
+- [ ] Per rate of the sweep, the share of requests whose history read or cache call runs past `-budget-history`; decide on the budget or the per-user history version left open in D039
+- [ ] A cache-on workload with repeated requests: replaying the test split never hits (BENCHMARKS, M3)
 - [ ] Fault runs with toxiproxy and container control (D021)
 - [ ] ANN and sharded recall and latency on glove-100 and synthetic vectors
 - [ ] `annbench` in shards mode labels results with the `-m` and `-efc` flags even when it reuses graph files built with other values; record the graphs' own parameters

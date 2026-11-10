@@ -1,0 +1,15 @@
+attempt 1, loadgen exit 0
+recserve_cache_lookups_total{result="error"} 110
+recserve_cache_lookups_total{result="miss"} 13846
+recserve_degraded_total{reason="cooc_error"} 0
+recserve_degraded_total{reason="cooc_timeout"} 0
+recserve_degraded_total{reason="encoder_error"} 0
+recserve_degraded_total{reason="encoder_timeout"} 0
+recserve_degraded_total{reason="history_unavailable"} 44
+recserve_degraded_total{reason="popular_error"} 0
+recserve_degraded_total{reason="popular_timeout"} 0
+recserve_degraded_total{reason="ranker_error"} 0
+recserve_degraded_total{reason="ranker_timeout"} 0
+recserve_degraded_total{reason="shards_partial"} 5
+recserve_degraded_total{reason="vector_error"} 0
+recserve_degraded_total{reason="vector_timeout"} 0

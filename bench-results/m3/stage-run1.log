@@ -1,0 +1,11 @@
+attempt 1, exit 0
+814586 events of 2000 requests' splits appended to Valkey in 1.284s
+process, cache off, round 1: 0 hits; latency p50 2506 µs, p99 13058 µs; stage p50 3 µs, p99 31 µs; history read p50 3 µs, p99 31 µs; cache lookup p50 0 µs, p99 0 µs
+process, cache off, round 2: 0 hits; latency p50 2329 µs, p99 15300 µs; stage p50 3 µs, p99 11 µs; history read p50 3 µs, p99 11 µs; cache lookup p50 0 µs, p99 0 µs
+process, cache on, round 1: 0 hits; latency p50 2339 µs, p99 5192 µs; stage p50 3 µs, p99 12 µs; history read p50 3 µs, p99 7 µs; cache lookup p50 0 µs, p99 2 µs
+process, cache on, round 2: 2000 hits; latency p50 5 µs, p99 103 µs; stage p50 2 µs, p99 100 µs; history read p50 1 µs, p99 4 µs; cache lookup p50 1 µs, p99 99 µs
+valkey, cache off, round 1: 0 hits; latency p50 2628 µs, p99 8242 µs; stage p50 372 µs, p99 2762 µs; history read p50 372 µs, p99 2762 µs; cache lookup p50 0 µs, p99 0 µs
+valkey, cache off, round 2: 0 hits; latency p50 3115 µs, p99 13378 µs; stage p50 489 µs, p99 5649 µs; history read p50 489 µs, p99 5649 µs; cache lookup p50 0 µs, p99 0 µs
+valkey, cache on, round 1: 0 hits; latency p50 3275 µs, p99 7410 µs; stage p50 477 µs, p99 2902 µs; history read p50 218 µs, p99 2336 µs; cache lookup p50 184 µs, p99 2145 µs
+valkey, cache on, round 2: 2000 hits; latency p50 416 µs, p99 824 µs; stage p50 408 µs, p99 812 µs; history read p50 181 µs, p99 459 µs; cache lookup p50 217 µs, p99 501 µs
+control, 2000 reads of a 16-byte value: p50 157 µs, p99 306 µs
