@@ -15,11 +15,8 @@ import (
 	"syscall"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/health"
-	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/sHyanorn/recserve/internal/annshard"
-	"github.com/sHyanorn/recserve/internal/annshard/annshardpb"
 )
 
 func main() {
@@ -56,8 +53,7 @@ func run(log *slog.Logger, addr, bundles string) error {
 // ends, then lets the calls in flight finish.
 func serve(ctx context.Context, log *slog.Logger, ln net.Listener, bundles string) error {
 	gs := grpc.NewServer(annshard.ServerOptions()...)
-	annshardpb.RegisterAnnShardServer(gs, annshard.NewServer(bundles, log))
-	healthpb.RegisterHealthServer(gs, health.NewServer())
+	annshard.NewServer(bundles, log).Register(gs)
 	go func() {
 		<-ctx.Done()
 		gs.GracefulStop()

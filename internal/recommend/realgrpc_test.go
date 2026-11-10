@@ -33,7 +33,7 @@ func TestRealDataShardsOverGRPC(t *testing.T) {
 	if err := os.Symlink(dir, filepath.Join(root, rd.bundle.ModelVersion)); err != nil {
 		t.Fatal(err)
 	}
-	client := annshardtest.Dial(t, annshardtest.StartAll(t, root, 2, 2), annshard.Options{})
+	addrs := annshardtest.StartAll(t, root, 2, 2)
 
 	for _, mode := range []shard.Mode{shard.Exact, shard.HNSW} {
 		cfg := shard.DefaultConfig
@@ -42,8 +42,10 @@ func TestRealDataShardsOverGRPC(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Each mode has a client of its own, to the same replicas.
+		client := annshardtest.Dial(t, addrs, annshard.Options{Config: cfg})
 		start := time.Now()
-		remote, err := client.Prepare(ctx, rd.bundle.ModelVersion, rd.bundle.ItemCount, cfg)
+		remote, err := client.Prepare(ctx, rd.bundle.ModelVersion, rd.bundle.ItemCount)
 		if err != nil {
 			t.Fatal(err)
 		}

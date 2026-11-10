@@ -17,8 +17,8 @@ import (
 	"github.com/sHyanorn/recserve/internal/vec"
 )
 
-// The process serves the shard API and the standard health service, and
-// stops when its context ends.
+// The process serves the shard API and the standard health service, ready
+// once it holds the version served, and stops when its context ends.
 func TestServe(t *testing.T) {
 	root := t.TempDir()
 	m, err := vec.NewMatrix(2, []float32{0, 0, 1, 0, 0, 1, 2, 2})
@@ -41,15 +41,20 @@ func TestServe(t *testing.T) {
 	defer conn.Close() //nolint:errcheck // the test is over
 	call, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	h, err := healthpb.NewHealthClient(conn).Check(call, &healthpb.HealthCheckRequest{})
-	if err != nil || h.GetStatus() != healthpb.HealthCheckResponse_SERVING {
-		t.Fatalf("health: %v, %v", h.GetStatus(), err)
+	health := func(want healthpb.HealthCheckResponse_ServingStatus) {
+		t.Helper()
+		h, err := healthpb.NewHealthClient(conn).Check(call, &healthpb.HealthCheckRequest{})
+		if err != nil || h.GetStatus() != want {
+			t.Fatalf("health: %v, %v; want %v", h.GetStatus(), err, want)
+		}
 	}
+	health(healthpb.HealthCheckResponse_NOT_SERVING)
 	ix := &annshardpb.Index{Version: version, Shards: 1, Mode: annshardpb.Mode_MODE_EXACT}
 	c := annshardpb.NewAnnShardClient(conn)
-	if _, err := c.Prepare(call, &annshardpb.PrepareRequest{Index: ix}); err != nil {
+	if _, err := c.Prepare(call, &annshardpb.PrepareRequest{Index: ix, ServingVersion: version}); err != nil {
 		t.Fatal(err)
 	}
+	health(healthpb.HealthCheckResponse_SERVING)
 	got, err := c.Search(call, &annshardpb.SearchRequest{Index: ix, Query: []float32{1, 1}, K: 1})
 	if err != nil || len(got.GetIds()) != 1 || got.GetIds()[0] != 3 || got.GetScores()[0] != 4 {
 		t.Fatalf("search: %v, %v", got, err)

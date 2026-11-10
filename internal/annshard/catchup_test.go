@@ -9,6 +9,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/sHyanorn/recserve/internal/annshard"
 	"github.com/sHyanorn/recserve/internal/annshard/annshardpb"
@@ -31,6 +32,21 @@ func holds(t *testing.T, addr, version string) bool {
 	defer cancel()
 	_, err = annshardpb.NewAnnShardClient(conn).Search(ctx, &annshardpb.SearchRequest{Index: exactIndex(version, 0, 1), Query: []float32{1, 1}, K: 1})
 	return err == nil
+}
+
+// ready reports whether the replica at addr answers the standard health
+// check with SERVING.
+func ready(t *testing.T, addr string) bool {
+	t.Helper()
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close() //nolint:errcheck // a probe
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	h, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{})
+	return err == nil && h.GetStatus() == healthpb.HealthCheckResponse_SERVING
 }
 
 // searchUntil searches through s, requiring every answer to equal the
@@ -73,8 +89,8 @@ func TestReplicaCatchesUp(t *testing.T) {
 	full, late := t.TempDir(), t.TempDir()
 	v1 := annshardtest.WriteVectors(t, full, m)
 	behind := annshardtest.Start(t, late)
-	c := annshardtest.Dial(t, [][]string{{behind, annshardtest.Start(t, full)}}, annshard.Options{})
-	s, err := c.Prepare(context.Background(), v1, 100, shard.Config{Shards: 1, Mode: shard.Exact})
+	c := annshardtest.Dial(t, [][]string{{behind, annshardtest.Start(t, full)}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}})
+	s, err := c.Prepare(context.Background(), v1, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,12 +115,12 @@ func TestReplicasKeepTheServingVersion(t *testing.T) {
 	v3, v4 := annshardtest.WriteVectors(t, rootA, matrices[2]), annshardtest.WriteVectors(t, rootA, matrices[3])
 	annshardtest.WriteVectors(t, rootA, matrices[0])
 	a := annshardtest.Start(t, rootA)
-	c := annshardtest.Dial(t, [][]string{{a, annshardtest.Start(t, rootB)}}, annshard.Options{Serving: func() string { return v1 }})
-	ctx := context.Background()
 	cfg := shard.Config{Shards: 1, Mode: shard.Exact}
+	c := annshardtest.Dial(t, [][]string{{a, annshardtest.Start(t, rootB)}}, annshard.Options{Config: cfg, Serving: func() string { return v1 }})
+	ctx := context.Background()
 	var s2 *annshard.Shards
 	for _, v := range []string{v1, v3, v2} { // a holds v1 and v3, v3 named last
-		s, err := c.Prepare(ctx, v, 100, cfg)
+		s, err := c.Prepare(ctx, v, 100)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -120,7 +136,7 @@ func TestReplicasKeepTheServingVersion(t *testing.T) {
 	if !holds(t, a, v2) {
 		t.Fatal("the replica lost v2")
 	}
-	if _, err := c.Prepare(ctx, v4, 100, cfg); err != nil {
+	if _, err := c.Prepare(ctx, v4, 100); err != nil {
 		t.Fatal(err)
 	}
 	if holds(t, a, v2) || !holds(t, a, v1) {
@@ -137,8 +153,8 @@ func TestReplicaRestartsEmpty(t *testing.T) {
 	root := t.TempDir()
 	v1 := annshardtest.WriteVectors(t, root, m)
 	addr, stop := annshardtest.StartOn(t, "127.0.0.1:0", root)
-	c := annshardtest.Dial(t, [][]string{{addr, annshardtest.Start(t, root)}}, annshard.Options{})
-	s, err := c.Prepare(context.Background(), v1, 100, shard.Config{Shards: 1, Mode: shard.Exact})
+	c := annshardtest.Dial(t, [][]string{{addr, annshardtest.Start(t, root)}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}})
+	s, err := c.Prepare(context.Background(), v1, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,4 +171,57 @@ func TestReplicaRestartsEmpty(t *testing.T) {
 		}
 		return holds(t, addr, v1)
 	})
+}
+
+// waitReady fails the test unless the replica at addr is ready within 20 s,
+// time for a build and a few attempts to reconnect, which gRPC spaces from
+// 1 s up to 5 s apart.
+func waitReady(t *testing.T, addr string) {
+	t.Helper()
+	for deadline := time.Now().Add(20 * time.Second); !ready(t, addr); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("replica %s not ready after 20 s", addr)
+		}
+	}
+}
+
+// A replica that was down when a version was prepared, or that restarts,
+// is prepared with the version served as soon as the client's connection
+// to it is up, with no search to find it lacking (D044).
+func TestReplicaCatchesUpOnConnecting(t *testing.T) {
+	r := rand.New(rand.NewPCG(9, 9))
+	root := t.TempDir()
+	v1 := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 100, 2))
+	a, stopA := annshardtest.StartOn(t, "127.0.0.1:0", root)
+	b, stopB := annshardtest.StartOn(t, "127.0.0.1:0", root)
+	stopB()
+	c := annshardtest.Dial(t, [][]string{{a, b}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, Serving: func() string { return v1 }})
+	if _, err := c.Prepare(context.Background(), v1, 100); err != nil {
+		t.Fatal(err)
+	}
+	annshardtest.StartOn(t, b, root)
+	waitReady(t, b)
+	stopA()
+	annshardtest.StartOn(t, a, root)
+	waitReady(t, a)
+}
+
+// The first version a client prepares, with none served yet, is the one
+// that every replica is then ready with.
+func TestFirstVersionMakesReady(t *testing.T) {
+	r := rand.New(rand.NewPCG(10, 10))
+	root := t.TempDir()
+	v1 := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 100, 2))
+	addrs := annshardtest.StartAll(t, root, 2, 2)
+	c := annshardtest.Dial(t, addrs, annshard.Options{Config: shard.Config{Shards: 2, Mode: shard.Exact}})
+	if _, err := c.Prepare(context.Background(), v1, 100); err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range addrs {
+		for _, addr := range g {
+			if !ready(t, addr) {
+				t.Fatalf("replica %s is not ready", addr)
+			}
+		}
+	}
 }

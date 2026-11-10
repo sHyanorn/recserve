@@ -17,7 +17,6 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/sHyanorn/recserve/internal/annshard"
-	"github.com/sHyanorn/recserve/internal/annshard/annshardpb"
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/npy"
 	"github.com/sHyanorn/recserve/internal/shard"
@@ -73,7 +72,7 @@ func StartOn(t testing.TB, addr, root string, opts ...grpc.ServerOption) (string
 		t.Fatal(err)
 	}
 	gs := grpc.NewServer(append(annshard.ServerOptions(), opts...)...)
-	annshardpb.RegisterAnnShardServer(gs, annshard.NewServer(root, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	annshard.NewServer(root, slog.New(slog.NewTextHandler(io.Discard, nil))).Register(gs)
 	go gs.Serve(ln) //nolint:errcheck // ends with the Stop below
 	t.Cleanup(gs.Stop)
 	return ln.Addr().String(), gs.Stop
@@ -115,12 +114,12 @@ func Remote(t testing.TB, maxShards int) func(m vec.Matrix, cfg shard.Config) (*
 	t.Helper()
 	root := t.TempDir()
 	addrs := StartAll(t, root, maxShards, 1)
-	clients := map[int]*annshard.Client{} // by number of shards
+	clients := map[shard.Config]*annshard.Client{}
 	return func(m vec.Matrix, cfg shard.Config) (*annshard.Shards, error) {
 		version := WriteVectors(t, root, m)
-		if clients[cfg.Shards] == nil {
-			clients[cfg.Shards] = Dial(t, addrs[:cfg.Shards], annshard.Options{})
+		if clients[cfg] == nil {
+			clients[cfg] = Dial(t, addrs[:cfg.Shards], annshard.Options{Config: cfg})
 		}
-		return clients[cfg.Shards].Prepare(context.Background(), version, m.Rows()-1, cfg)
+		return clients[cfg].Prepare(context.Background(), version, m.Rows()-1)
 	}
 }

@@ -85,8 +85,8 @@ func TestSearchErrors(t *testing.T) {
 	root := t.TempDir()
 	v1 := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2))
 	proxy := infratest.NewProxy(t, annshardtest.Start(t, root))
-	c := annshardtest.Dial(t, [][]string{{proxy.Addr()}}, annshard.Options{})
-	s, err := c.Prepare(context.Background(), v1, 50, shard.Config{Shards: 1, Mode: shard.Exact})
+	c := annshardtest.Dial(t, [][]string{{proxy.Addr()}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}})
+	s, err := c.Prepare(context.Background(), v1, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,19 +129,20 @@ func TestPrepareErrors(t *testing.T) {
 	v1 := annshardtest.WriteVectors(t, rootA, m)
 	v2 := annshardtest.WriteVectors(t, rootA, shardtest.RandomMatrix(r, 50, 2))
 	annshardtest.WriteVectors(t, rootB, m)
-	c := annshardtest.Dial(t, [][]string{{annshardtest.Start(t, rootA)}, {annshardtest.Start(t, rootB)}}, annshard.Options{})
+	addrs := [][]string{{annshardtest.Start(t, rootA)}, {annshardtest.Start(t, rootB)}}
+	c := annshardtest.Dial(t, addrs, annshard.Options{Config: shard.Config{Shards: 2, Mode: shard.Exact}})
 	ctx := context.Background()
-	cfg := shard.Config{Shards: 2, Mode: shard.Exact}
-	if _, err := c.Prepare(ctx, v1, 50, cfg); err != nil {
+	if _, err := c.Prepare(ctx, v1, 50); err != nil {
 		t.Fatal(err)
 	}
 	// Shard 1's replica lacks v2.
-	if _, err := c.Prepare(ctx, v2, 50, cfg); err == nil {
+	if _, err := c.Prepare(ctx, v2, 50); err == nil {
 		t.Fatal("a version one shard lacks was prepared")
 	}
 	for _, bad := range []shard.Config{{Shards: 3, Mode: shard.Exact}, {Shards: 2, Mode: "ivf"}} {
-		if _, err := c.Prepare(ctx, v1, 50, bad); err == nil {
+		if c, err := annshard.Dial(addrs, annshard.Options{Config: bad}); err == nil {
 			t.Errorf("%+v accepted", bad)
+			c.Close() //nolint:errcheck // the test has failed already
 		}
 	}
 }
@@ -155,10 +156,10 @@ func TestPrepareNeedsAReplicaPerShard(t *testing.T) {
 	has, lacks := func() string { return annshardtest.Start(t, full) }, func() string { return annshardtest.Start(t, empty) }
 	cfg := shard.Config{Shards: 2, Mode: shard.Exact}
 	ctx := context.Background()
-	if _, err := annshardtest.Dial(t, [][]string{{has(), lacks()}, {lacks(), has()}}, annshard.Options{}).Prepare(ctx, v1, 100, cfg); err != nil {
+	if _, err := annshardtest.Dial(t, [][]string{{has(), lacks()}, {lacks(), has()}}, annshard.Options{Config: cfg}).Prepare(ctx, v1, 100); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := annshardtest.Dial(t, [][]string{{has(), has()}, {lacks(), lacks()}}, annshard.Options{}).Prepare(ctx, v1, 100, cfg); err == nil {
+	if _, err := annshardtest.Dial(t, [][]string{{has(), has()}, {lacks(), lacks()}}, annshard.Options{Config: cfg}).Prepare(ctx, v1, 100); err == nil {
 		t.Fatal("prepared with a shard none of whose replicas holds the version")
 	}
 }

@@ -58,8 +58,8 @@ func TestShardFaultsOverGRPC(t *testing.T) {
 	root := t.TempDir()
 	version := annshardtest.WriteVectors(t, root, local.Bundle.Vectors)
 	proxies := []*infratest.Proxy{infratest.NewProxy(t, annshardtest.Start(t, root)), infratest.NewProxy(t, annshardtest.Start(t, root))}
-	client := annshardtest.Dial(t, [][]string{{proxies[0].Addr()}, {proxies[1].Addr()}}, annshard.Options{})
-	remote, err := client.Prepare(context.Background(), version, local.Bundle.ItemCount, local.Shards.Config())
+	client := annshardtest.Dial(t, [][]string{{proxies[0].Addr()}, {proxies[1].Addr()}}, annshard.Options{Config: local.Shards.Config()})
+	remote, err := client.Prepare(context.Background(), version, local.Bundle.ItemCount)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,9 +178,10 @@ var replicaFaults = map[string]func(*replicated){
 // checkProperty12 loses one replica of each of two shards and compares 10
 // responses with those of in-process shards: the same items, every shard
 // answered, nothing degraded. dial returns the client of the replicas at
-// addrs[shard][replica]. Ten searches of a shard stay within its hedge
-// budget also if every one of them needs a hedge.
-func checkProperty12(t *testing.T, lose func(*replicated), dial func(addrs [][]string) *annshard.Client) error {
+// addrs[shard][replica], with the shards configured as cfg. Ten searches of
+// a shard stay within its hedge budget also if every one of them needs a
+// hedge.
+func checkProperty12(t *testing.T, lose func(*replicated), dial func(addrs [][]string, cfg shard.Config) *annshard.Client) error {
 	r := rand.New(rand.NewPCG(12, 12))
 	local, err := randomPipeline(r, 300, 3)
 	if err != nil {
@@ -188,7 +189,7 @@ func checkProperty12(t *testing.T, lose func(*replicated), dial func(addrs [][]s
 	}
 	local.rankWith = linearRanker
 	c := replicate(t, local.Bundle.Vectors)
-	remote, err := dial(c.addrs).Prepare(context.Background(), c.version, local.Bundle.ItemCount, local.Shards.Config())
+	remote, err := dial(c.addrs, local.Shards.Config()).Prepare(context.Background(), c.version, local.Bundle.ItemCount)
 	if err != nil {
 		return err
 	}
@@ -215,8 +216,8 @@ func TestProperty12OneReplicaLostPerShard(t *testing.T) {
 	for name, lose := range replicaFaults {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			err := checkProperty12(t, lose, func(addrs [][]string) *annshard.Client {
-				return annshardtest.Dial(t, addrs, annshard.Options{HedgeDelay: 20 * time.Millisecond})
+			err := checkProperty12(t, lose, func(addrs [][]string, cfg shard.Config) *annshard.Client {
+				return annshardtest.Dial(t, addrs, annshard.Options{Config: cfg, HedgeDelay: 20 * time.Millisecond})
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -230,8 +231,8 @@ func TestProperty12CatchesBrokenVariant(t *testing.T) {
 	for name, lose := range replicaFaults {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			err := checkProperty12(t, lose, func(addrs [][]string) *annshard.Client {
-				return annshardtest.Dial(t, [][]string{addrs[0][:1], addrs[1][:1]}, annshard.Options{HedgeDelay: 20 * time.Millisecond})
+			err := checkProperty12(t, lose, func(addrs [][]string, cfg shard.Config) *annshard.Client {
+				return annshardtest.Dial(t, [][]string{addrs[0][:1], addrs[1][:1]}, annshard.Options{Config: cfg, HedgeDelay: 20 * time.Millisecond})
 			})
 			if err == nil {
 				t.Fatal("the check passed a client that asks one replica per shard")
@@ -255,7 +256,7 @@ func TestSlowShardOverGRPC(t *testing.T) {
 	version := annshardtest.WriteVectors(t, root, local.Bundle.Vectors)
 	slow := []*infratest.Proxy{infratest.NewProxy(t, annshardtest.Start(t, root)), infratest.NewProxy(t, annshardtest.Start(t, root))}
 	addrs := [][]string{{slow[0].Addr(), slow[1].Addr()}, {annshardtest.Start(t, root), annshardtest.Start(t, root)}}
-	remote, err := annshardtest.Dial(t, addrs, annshard.Options{HedgeDelay: 5 * time.Millisecond}).Prepare(context.Background(), version, local.Bundle.ItemCount, local.Shards.Config())
+	remote, err := annshardtest.Dial(t, addrs, annshard.Options{Config: local.Shards.Config(), HedgeDelay: 5 * time.Millisecond}).Prepare(context.Background(), version, local.Bundle.ItemCount)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,9 +325,9 @@ func (c *swapReplicas) give(t *testing.T, i, j int, v string, items int) {
 // prepare returns the function that prepares a bundle's version on the
 // replicas.
 func (c *swapReplicas) prepare(t *testing.T) func(*bundle.Bundle) (Shards, error) {
-	client := annshardtest.Dial(t, c.addrs, annshard.Options{HedgeDelay: 5 * time.Millisecond})
+	client := annshardtest.Dial(t, c.addrs, annshard.Options{Config: shard.DefaultConfig, HedgeDelay: 5 * time.Millisecond})
 	return func(b *bundle.Bundle) (Shards, error) {
-		return client.Prepare(context.Background(), c.versions[b.ModelVersion], b.ItemCount, shard.DefaultConfig)
+		return client.Prepare(context.Background(), c.versions[b.ModelVersion], b.ItemCount)
 	}
 }
 

@@ -63,9 +63,9 @@ message SearchResponse {
 
 message PrepareRequest {
   Index index = 1;
-  // The bundle version the caller serves at the moment, empty if it serves
-  // none yet. The replica does not drop that version to make room for the
-  // index it prepares.
+  // The bundle version the caller serves at the moment or, while it serves
+  // none, the version it prepares. The replica keeps that version, and is
+  // ready while it holds it; empty leaves the replica's as it was.
   string serving_version = 2;
 }
 

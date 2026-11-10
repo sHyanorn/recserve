@@ -42,13 +42,19 @@ func probe(t *testing.T, addr string, call func(context.Context, *grpc.ClientCon
 	return call(ctx, conn)
 }
 
-// serving reports whether the replica at addr answers its health service.
-func serving(t *testing.T, addr string) bool {
+// health returns the status the replica at addr gives in its health
+// service, UNKNOWN if it does not answer. It is SERVING while the replica
+// holds the version the gateway serves (D044).
+func health(t *testing.T, addr string) (st healthpb.HealthCheckResponse_ServingStatus) {
 	t.Helper()
-	return probe(t, addr, func(ctx context.Context, conn *grpc.ClientConn) error {
-		_, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{})
+	if err := probe(t, addr, func(ctx context.Context, conn *grpc.ClientConn) error {
+		h, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{})
+		st = h.GetStatus()
 		return err
-	}) == nil
+	}); err != nil {
+		return healthpb.HealthCheckResponse_UNKNOWN
+	}
+	return st
 }
 
 // holdsIndex reports whether the replica at addr answers a search of shard
@@ -77,8 +83,9 @@ func link(t *testing.T, root, dir string) string {
 // The gateway binary on four annshard processes, two shards of two
 // replicas: a replica killed with SIGKILL under requests costs no response;
 // a swap through the admin API goes through with that replica down; the
-// replica, restarted empty, is prepared again and then serves its shard
-// alone; and a swap to a version the replicas lack is rejected.
+// replica, restarted empty, is prepared again with no request and then
+// serves its shard alone; and a swap to a version the replicas lack is
+// rejected.
 func TestShardReplicasKilledAndSwapped(t *testing.T) {
 	need(t)
 	// The replicas' bundle root holds one directory per version; the two
@@ -88,7 +95,9 @@ func TestShardReplicasKilledAndSwapped(t *testing.T) {
 	replica := func(addr string) *exec.Cmd {
 		t.Helper()
 		cmd := start(t, "annshard", "-addr", addr, "-bundles", root)
-		eventually(t, 20*time.Second, "the replica is not serving", func() bool { return serving(t, addr) })
+		eventually(t, 20*time.Second, "the replica does not answer", func() bool {
+			return health(t, addr) != healthpb.HealthCheckResponse_UNKNOWN
+		})
 		return cmd
 	}
 	addrs := []string{freeAddr(t), freeAddr(t), freeAddr(t), freeAddr(t)} // shard 0: two replicas, shard 1: two
@@ -173,13 +182,16 @@ func TestShardReplicasKilledAndSwapped(t *testing.T) {
 	}
 	complete(20, v2)
 
-	// The killed replica comes back empty; searches that reach it have it
-	// prepare the active version. Then it serves shard 0 alone.
+	// The killed replica comes back empty; once the gateway's connection to
+	// it is up, the gateway has it prepare the active version, with no
+	// request to find it lacking. Then it serves shard 0 alone.
 	procs[0] = replica(addrs[0])
-	eventually(t, 60*time.Second, "the restarted replica was not prepared again", func() bool {
-		complete(1, v2)
-		return holdsIndex(t, addrs[0], v2)
+	eventually(t, 20*time.Second, "the restarted replica was not prepared again", func() bool {
+		return health(t, addrs[0]) == healthpb.HealthCheckResponse_SERVING
 	})
+	if !holdsIndex(t, addrs[0], v2) {
+		t.Fatal("the restarted replica is ready without the active version")
+	}
 	kill(procs[1])
 	complete(20, v2)
 

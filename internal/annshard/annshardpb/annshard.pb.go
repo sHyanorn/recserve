@@ -308,9 +308,9 @@ func (x *SearchResponse) GetScores() []float64 {
 type PrepareRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Index *Index                 `protobuf:"bytes,1,opt,name=index,proto3" json:"index,omitempty"`
-	// The bundle version the caller serves at the moment, empty if it serves
-	// none yet. The replica does not drop that version to make room for the
-	// index it prepares.
+	// The bundle version the caller serves at the moment or, while it serves
+	// none, the version it prepares. The replica keeps that version, and is
+	// ready while it holds it; empty leaves the replica's as it was.
 	ServingVersion string `protobuf:"bytes,2,opt,name=serving_version,json=servingVersion,proto3" json:"serving_version,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache

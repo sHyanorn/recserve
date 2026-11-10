@@ -43,6 +43,9 @@ func ParseAddrs(s string) ([][]string, error) {
 
 // Options sets up a Client.
 type Options struct {
+	// Config is how the replicas split and build a bundle's vectors, and how
+	// they are searched; Shards must be the number of address groups.
+	Config shard.Config
 	// HedgeDelay is how long a search waits for the replica it asked first
 	// before it also asks another; 0 never does.
 	HedgeDelay time.Duration
@@ -51,7 +54,8 @@ type Options struct {
 	PrepareTimeout time.Duration
 	// Serving returns the bundle version the gateway serves at the moment,
 	// "" if none yet. Every Prepare tells the replica, which then does not
-	// drop that version to make room (D043). nil is none.
+	// drop that version to make room (D043) and is ready while it holds it
+	// (D044). nil is none.
 	Serving func() string
 	Log     *slog.Logger // nil logs nothing
 }
@@ -143,9 +147,19 @@ type replica struct {
 	rpc  annshardpb.AnnShardClient
 }
 
+// modes are the shard modes the replicas build.
+var modes = map[shard.Mode]annshardpb.Mode{shard.Exact: annshardpb.Mode_MODE_EXACT, shard.HNSW: annshardpb.Mode_MODE_HNSW}
+
 // Dial returns a client of the replicas at addrs[shard][replica]. It does
-// not wait for a connection: the first call to a replica opens it.
+// not wait for the connections, which it opens and keeps open: each time
+// one is up, the replica is prepared with the version served (watch).
 func Dial(addrs [][]string, opt Options) (*Client, error) {
+	if opt.Config.Shards != len(addrs) {
+		return nil, fmt.Errorf("%d shards configured, replicas of %d", opt.Config.Shards, len(addrs))
+	}
+	if _, ok := modes[opt.Config.Mode]; !ok {
+		return nil, fmt.Errorf("shard mode %q", opt.Config.Mode)
+	}
 	if opt.Log == nil {
 		opt.Log = slog.New(slog.DiscardHandler)
 	}
@@ -183,7 +197,43 @@ func Dial(addrs [][]string, opt Options) (*Client, error) {
 			g.replicas = append(g.replicas, &replica{addr: addr, conn: conn, rpc: annshardpb.NewAnnShardClient(conn)})
 		}
 	}
+	for i, g := range c.shards {
+		for _, r := range g.replicas {
+			c.wg.Go(func() { c.watch(r, i) })
+		}
+	}
 	return c, nil
+}
+
+// watch keeps the connection to r, a replica of shard i, open until Close,
+// and each time it is up has r catch up on the version served: a replica
+// that restarted, or was down when the version was prepared, becomes ready
+// without a search finding it lacking (D044).
+func (c *Client) watch(r *replica, i int) {
+	for {
+		st := r.conn.GetState()
+		switch st {
+		case connectivity.Idle:
+			r.conn.Connect()
+		case connectivity.Ready:
+			if v := c.opt.Serving(); v != "" {
+				c.catchUp(r, c.index(v, i))
+			}
+		}
+		if !r.conn.WaitForStateChange(c.ctx, st) {
+			return
+		}
+	}
+}
+
+// index returns shard i of version as the client's configuration builds it.
+func (c *Client) index(version string, i int) *annshardpb.Index {
+	cfg := c.opt.Config
+	x := &annshardpb.Index{Version: version, Shard: int32(i), Shards: int32(cfg.Shards), Mode: modes[cfg.Mode]}
+	if cfg.Mode == shard.HNSW {
+		x.HnswM, x.HnswEfConstruction, x.HnswSeed = int32(cfg.HNSW.M), int32(cfg.HNSW.EfConstruction), cfg.HNSW.Seed
+	}
+	return x
 }
 
 // Collectors returns the client's metrics.
@@ -208,38 +258,29 @@ func (c *Client) Close() error {
 }
 
 // Shards is one bundle version on the client's replicas, split and built
-// by one configuration: every search names that index, and a replica
-// answers from it or fails. It implements recommend.Shards.
+// by the client's configuration: every search names that index, and a
+// replica answers from it or fails. It implements recommend.Shards.
 type Shards struct {
 	c       *Client
-	cfg     shard.Config
 	items   int                 // the bundle's item count
 	indexes []*annshardpb.Index // by shard
 }
 
 // Prepare has every replica load version, a bundle of items items, and
-// build its shard by cfg, whose Shards must be the client's number of
-// shards, and returns the version's shards once every shard has a replica
-// that holds it. A replica that failed is logged; it is sent the request
-// again when a search finds that it lacks the index (catchUp). If a shard
-// has no replica that holds the version, Prepare fails.
-func (c *Client) Prepare(ctx context.Context, version string, items int, cfg shard.Config) (*Shards, error) {
-	if cfg.Shards != len(c.shards) {
-		return nil, fmt.Errorf("%d shards configured, replicas of %d", cfg.Shards, len(c.shards))
-	}
-	mode, ok := map[shard.Mode]annshardpb.Mode{shard.Exact: annshardpb.Mode_MODE_EXACT, shard.HNSW: annshardpb.Mode_MODE_HNSW}[cfg.Mode]
-	if !ok {
-		return nil, fmt.Errorf("shard mode %q", cfg.Mode)
-	}
-	s := &Shards{c: c, cfg: cfg, items: items, indexes: make([]*annshardpb.Index, cfg.Shards)}
+// build its shard, and returns the version's shards once every shard has a
+// replica that holds it. A replica that failed is logged; it is sent the
+// request again when a search finds that it lacks the index (catchUp). If a
+// shard has no replica that holds the version, Prepare fails.
+func (c *Client) Prepare(ctx context.Context, version string, items int) (*Shards, error) {
+	s := &Shards{c: c, items: items, indexes: make([]*annshardpb.Index, len(c.shards))}
 	serving := c.opt.Serving()
-	errs := make([][]error, cfg.Shards) // by shard, then replica
+	if serving == "" { // the first version, which the gateway serves next
+		serving = version
+	}
+	errs := make([][]error, len(c.shards)) // by shard, then replica
 	var wg sync.WaitGroup
 	for i, g := range c.shards {
-		ix := &annshardpb.Index{Version: version, Shard: int32(i), Shards: int32(cfg.Shards), Mode: mode}
-		if cfg.Mode == shard.HNSW {
-			ix.HnswM, ix.HnswEfConstruction, ix.HnswSeed = int32(cfg.HNSW.M), int32(cfg.HNSW.EfConstruction), cfg.HNSW.Seed
-		}
+		ix := c.index(version, i)
 		s.indexes[i] = ix
 		errs[i] = make([]error, len(g.replicas))
 		for j, r := range g.replicas {
@@ -313,7 +354,7 @@ func (c *Client) catchUp(r *replica, x *annshardpb.Index) {
 }
 
 // Config returns the settings the shards are built and searched with.
-func (s *Shards) Config() shard.Config { return s.cfg }
+func (s *Shards) Config() shard.Config { return s.c.opt.Config }
 
 // order returns the shard's replicas in the order a search asks them: those
 // with a ready connection first, a different one leading each time, then
@@ -377,9 +418,10 @@ type answer struct {
 // wraps ctx's, as an in-process search's does when ctx ends first, only if
 // every call ended by the deadline or a cancellation.
 func (s *Shards) Search(ctx context.Context, i int, q []float32, k int, seen map[int32]bool) ([]vec.Hit, error) {
-	req := &annshardpb.SearchRequest{Index: s.indexes[i], Query: q, K: int32(k), Ef: int32(s.cfg.Ef)}
+	cfg := s.c.opt.Config
+	req := &annshardpb.SearchRequest{Index: s.indexes[i], Query: q, K: int32(k), Ef: int32(cfg.Ef)}
 	for id := range seen {
-		if shard.Of(id, s.cfg.Shards) == i {
+		if shard.Of(id, cfg.Shards) == i {
 			req.Exclude = append(req.Exclude, id)
 		}
 	}

@@ -39,8 +39,8 @@ func TestFailureIsNotHiddenByTimeout(t *testing.T) {
 		return handler(ctx, req)
 	}))
 	silent := infratest.NewProxy(t, annshardtest.Start(t, root))
-	c := annshardtest.Dial(t, [][]string{{failing, silent.Addr()}}, annshard.Options{})
-	s, err := c.Prepare(context.Background(), version, 50, shard.Config{Shards: 1, Mode: shard.Exact})
+	c := annshardtest.Dial(t, [][]string{{failing, silent.Addr()}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}})
+	s, err := c.Prepare(context.Background(), version, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestReplicaWithAnItemOutsideFails(t *testing.T) {
 	ctx := context.Background()
 	q := []float32{1, 1}
 
-	alone, err := annshardtest.Dial(t, [][]string{{stray}}, annshard.Options{}).Prepare(ctx, version, 50, cfg)
+	alone, err := annshardtest.Dial(t, [][]string{{stray}}, annshard.Options{Config: cfg}).Prepare(ctx, version, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestReplicaWithAnItemOutsideFails(t *testing.T) {
 		t.Fatalf("err = %v, want one that names the replica %s and the version", err, stray)
 	}
 
-	both, err := annshardtest.Dial(t, [][]string{{stray, annshardtest.Start(t, root)}}, annshard.Options{}).Prepare(ctx, version, 50, cfg)
+	both, err := annshardtest.Dial(t, [][]string{{stray, annshardtest.Start(t, root)}}, annshard.Options{Config: cfg}).Prepare(ctx, version, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,8 +138,8 @@ func TestReplicaDiesDuringSearches(t *testing.T) {
 		return handler(ctx, req)
 	})
 	dying := infratest.NewProxy(t, annshardtest.Start(t, root, hold))
-	c := annshardtest.Dial(t, [][]string{{dying.Addr(), annshardtest.Start(t, root)}}, annshard.Options{})
-	s, err := c.Prepare(context.Background(), version, 200, cfg)
+	c := annshardtest.Dial(t, [][]string{{dying.Addr(), annshardtest.Start(t, root)}}, annshard.Options{Config: cfg})
+	s, err := c.Prepare(context.Background(), version, 200)
 	if err != nil {
 		t.Fatal(err)
 	}

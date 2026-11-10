@@ -310,10 +310,11 @@ func TestKeepsTwoVersions(t *testing.T) {
 	}
 }
 
-// A replica does not drop the version a Prepare says its caller serves,
-// whichever version was named last. After a swap to v2, a request still
-// running on v1 names v1 last; with no search of v2 since, as on a quiet
-// gateway, the naming alone would have v3 replace v2, the version served.
+// A replica does not drop the version that the last Prepare to name one
+// said its caller serves, whichever version was named last (D043). After a
+// swap to v2, a request still running on v1 names v1 last; with no search
+// of v2 since, as on a quiet gateway, the naming alone would have v3 replace
+// v2, the version served. A Prepare that names no version keeps the last.
 func TestKeepsTheServingVersion(t *testing.T) {
 	r := rand.New(rand.NewPCG(6, 6))
 	root := t.TempDir()
@@ -339,13 +340,57 @@ func TestKeepsTheServingVersion(t *testing.T) {
 			}
 		}
 	}
-	prepare(v1, "")
+	prepare(v1, v1)
 	prepare(v2, v1)
 	held(v1)
 	prepare(v3, v2)
 	wantCode(t, search(v1), codes.FailedPrecondition)
-	held(v3, v2) // v2 is named last
-	prepare(v4, v3)
-	wantCode(t, search(v2), codes.FailedPrecondition)
-	held(v3, v4)
+	held(v2, v3) // v3 is named last
+	prepare(v4, "")
+	wantCode(t, search(v3), codes.FailedPrecondition)
+	held(v2, v4)
+}
+
+// A replica is ready, by the standard health service, while it holds the
+// version that the last Prepare to name one said its caller serves (D044):
+// not before, and not while it cannot build that version, whatever else it
+// holds.
+func TestReadyWithTheServingVersion(t *testing.T) {
+	r := rand.New(rand.NewPCG(8, 8))
+	root, elsewhere := t.TempDir(), t.TempDir()
+	v1 := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2))
+	v2 := annshardtest.WriteVectors(t, elsewhere, shardtest.RandomMatrix(r, 50, 2))
+	addr := annshardtest.Start(t, root)
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() }) //nolint:errcheck // the test is over
+	c := annshardpb.NewAnnShardClient(conn)
+	prepare := func(v, serving string) error {
+		_, err := c.Prepare(context.Background(), &annshardpb.PrepareRequest{Index: exactIndex(v, 0, 1), ServingVersion: serving})
+		return err
+	}
+	wantReady := func(want bool) {
+		t.Helper()
+		if got := ready(t, addr); got != want {
+			t.Fatalf("ready = %v, want %v", got, want)
+		}
+	}
+	wantReady(false)
+	if err := prepare(v1, v1); err != nil {
+		t.Fatal(err)
+	}
+	wantReady(true)
+	wantCode(t, prepare(v2, v1), codes.NotFound) // the next version
+	wantReady(true)
+	wantCode(t, prepare(v2, v2), codes.NotFound)
+	wantReady(false)
+	if err := os.Rename(filepath.Join(elsewhere, v2), filepath.Join(root, v2)); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepare(v2, v2); err != nil {
+		t.Fatal(err)
+	}
+	wantReady(true)
 }

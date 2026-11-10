@@ -17,6 +17,8 @@ import (
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 
@@ -62,18 +64,20 @@ func parseIndex(x *annshardpb.Index) (index, error) {
 const KeepVersions = 2
 
 // Server is one annshard replica. It holds the indexes it was asked to
-// prepare, of KeepVersions bundle versions: the one the gateway said it
-// serves when it last had an index prepared, and otherwise those that
-// requests named last. It answers a search only from the index the request
-// names.
+// prepare, of KeepVersions bundle versions: the serving version, the one
+// the last Prepare to name one said its caller serves, and otherwise those
+// that requests named last. It answers a search only from the index the
+// request names, and is ready while it holds the serving version (D044).
 type Server struct {
 	annshardpb.UnimplementedAnnShardServer
-	root string // holds one bundle directory per version
-	log  *slog.Logger
+	root   string // holds one bundle directory per version
+	log    *slog.Logger
+	health *health.Server
 
 	loading  singleflight.Group // one build per index at a time
 	mu       sync.RWMutex
 	versions map[string]*version
+	serving  string
 	clock    atomic.Int64 // counts the requests that named a held version
 }
 
@@ -94,7 +98,26 @@ func ServerOptions() []grpc.ServerOption {
 // NewServer returns a replica that loads bundle versions from the
 // directories under root.
 func NewServer(root string, log *slog.Logger) *Server {
-	return &Server{root: root, log: log, versions: map[string]*version{}}
+	h := health.NewServer()
+	h.SetServingStatus("", healthpb.HealthCheckResponse_NOT_SERVING)
+	return &Server{root: root, log: log, health: h, versions: map[string]*version{}}
+}
+
+// Register serves the replica on gs, with the standard health service,
+// whose status is SERVING while the replica is ready.
+func (s *Server) Register(gs *grpc.Server) {
+	annshardpb.RegisterAnnShardServer(gs, s)
+	healthpb.RegisterHealthServer(gs, s.health)
+}
+
+// setHealth reports whether the replica holds the serving version; the
+// caller holds s.mu, so that the reports keep the order of the changes.
+func (s *Server) setHealth() {
+	st := healthpb.HealthCheckResponse_NOT_SERVING
+	if s.versions[s.serving] != nil {
+		st = healthpb.HealthCheckResponse_SERVING
+	}
+	s.health.SetServingStatus("", st)
 }
 
 // part returns the index ix, nil if the replica does not hold it, and
@@ -112,9 +135,9 @@ func (s *Server) part(ix index) *shard.Part {
 
 // hold adds the index p under ix. If the replica then holds more than
 // KeepVersions versions, it drops every index of the version named longest
-// ago, but never of serving, the version the caller of the Prepare serves
-// (D043); a search already running on a dropped index finishes on it.
-func (s *Server) hold(ix index, p *shard.Part, serving string) {
+// ago, but never of the serving version (D043); a search already running on
+// a dropped index finishes on it.
+func (s *Server) hold(ix index, p *shard.Part) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v := s.versions[ix.version]
@@ -127,7 +150,7 @@ func (s *Server) hold(ix index, p *shard.Part, serving string) {
 	for len(s.versions) > KeepVersions {
 		oldest := ""
 		for name, o := range s.versions {
-			if name == serving {
+			if name == s.serving {
 				continue
 			}
 			if oldest == "" || o.named.Load() < s.versions[oldest].named.Load() {
@@ -137,18 +160,25 @@ func (s *Server) hold(ix index, p *shard.Part, serving string) {
 		delete(s.versions, oldest)
 		s.log.Info("version dropped", "version", oldest)
 	}
+	s.setHealth()
 }
 
 // Prepare loads the vectors of the index's bundle version, verifies them
-// against the bundle's manifest and builds the index. Requests for one
-// index share one build, and the serving version of the first of them; the
-// build goes on if they give up.
+// against the bundle's manifest and builds the index. The serving version
+// it names, if any, becomes the replica's at once. Requests for one index
+// share one build, which goes on if they give up.
 func (s *Server) Prepare(ctx context.Context, req *annshardpb.PrepareRequest) (*annshardpb.PrepareResponse, error) {
 	ix, err := parseIndex(req.GetIndex())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	done := s.loading.DoChan(fmt.Sprintf("%+v", ix), func() (any, error) { return nil, s.prepare(ix, req.GetServingVersion()) })
+	if v := req.GetServingVersion(); v != "" {
+		s.mu.Lock()
+		s.serving = v
+		s.setHealth()
+		s.mu.Unlock()
+	}
+	done := s.loading.DoChan(fmt.Sprintf("%+v", ix), func() (any, error) { return nil, s.prepare(ix) })
 	select {
 	case r := <-done:
 		if r.Err != nil {
@@ -160,9 +190,9 @@ func (s *Server) Prepare(ctx context.Context, req *annshardpb.PrepareRequest) (*
 	}
 }
 
-// prepare builds ix unless the replica holds it, keeping the version
-// serving; its error is a gRPC status.
-func (s *Server) prepare(ix index, serving string) error {
+// prepare builds ix unless the replica holds it; its error is a gRPC
+// status.
+func (s *Server) prepare(ix index) error {
 	if s.part(ix) != nil {
 		return nil
 	}
@@ -181,7 +211,7 @@ func (s *Server) prepare(ix index, serving string) error {
 	if err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
-	s.hold(ix, p, serving)
+	s.hold(ix, p)
 	s.log.Info("index prepared", "version", ix.version, "shard", ix.shard, "shards", ix.cfg.Shards, "mode", ix.cfg.Mode,
 		"items", p.Len(), "took", time.Since(start))
 	return nil

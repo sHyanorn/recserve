@@ -55,10 +55,11 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] A/B assignment; property test 3 with its broken variant; the arm joins the result cache key (D030)
 - [ ] OpenTelemetry tracing
 - [ ] Dockerfiles and docker compose with Prometheus, Grafana and Jaeger. An alert rule on the growth of `recserve_shard_failovers_total`: a failure that another replica makes up for is counted there and not logged (D041). The counter is labelled by shard, so telling which replica fails needs a replica label
-- [ ] kind manifests: probes, resource limits, HPA with metrics-server (D022)
+- [ ] kind manifests: probes, resource limits, HPA with metrics-server (D022). The replicas' readiness probe on `grpc.health.v1`, their addresses resolvable while not ready, and `minReadySeconds` above the 5 s reconnect wait with several gateways; check that the gateway finds a restarted Pod's new address in time (D044)
 - [ ] NetworkPolicy that lets only the gateways reach the annshard port: the shard API has no TLS or authentication (D040)
 - [ ] Swaps across several gateways in an order that keeps at most two versions in use: the replicas hold two (D042)
-- [ ] annshard: Dockerfile, readiness on `grpc.health.v1`, graceful shutdown beyond finishing the calls in flight. A restarted replica is empty until catch-up and serves at once, so a rolling restart must not take a shard's next replica before the first holds the index again (D042)
+- [x] annshard readiness on `grpc.health.v1`: ready while it holds the version served, which the gateway has a restarted replica prepare as soon as its connection is back (D044)
+- [ ] annshard: Dockerfile, graceful shutdown beyond finishing the calls in flight
 - [ ] Graceful shutdown: readiness flip, preStop wait, drain, offset commit
 - [ ] Zero-error check under load through a rollout restart and a bundle swap
 - [ ] Through the gateway binary on annshard replicas: two or more swaps in a row over three bundles, with a search of the previous version arriving after each prepare, and no shard skipped for `FAILED_PRECONDITION`. The gateway passing the version it serves on to the replicas has no test of its own (D043)

@@ -286,14 +286,14 @@ func openShards(replicas [][]string, cfg shard.Config, hedgeDelay, timeout time.
 			return s, nil
 		}, nil, func() {}, nil
 	}
-	client, err := annshard.Dial(replicas, annshard.Options{HedgeDelay: hedgeDelay, PrepareTimeout: timeout, Serving: serving, Log: log})
+	client, err := annshard.Dial(replicas, annshard.Options{Config: cfg, HedgeDelay: hedgeDelay, PrepareTimeout: timeout, Serving: serving, Log: log})
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	return func(b *bundle.Bundle) (recommend.Shards, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		s, err := client.Prepare(ctx, b.ModelVersion, b.ItemCount, cfg)
+		s, err := client.Prepare(ctx, b.ModelVersion, b.ItemCount)
 		if err != nil {
 			return nil, err
 		}
