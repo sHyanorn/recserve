@@ -470,10 +470,8 @@ func (p *Pipeline) cacheKey(req Request, hist []int32) cache.Key {
 	if !p.keyWithoutVersion {
 		b = str(b, p.Bundle.ModelVersion)
 	}
-	if p.Shards != nil {
-		// Gateways that share a cache may search with other settings.
-		b = str(b, fmt.Sprintf("%+v", p.Shards.Config()))
-	}
+	// Gateways that share a cache may search with other settings.
+	b = str(b, fmt.Sprintf("%+v", p.Shards.Config()))
 	b = binary.AppendUvarint(str(b, req.User), uint64(req.K))
 	exclude := slices.Compact(slices.Sorted(slices.Values(req.Exclude)))
 	b = binary.AppendUvarint(b, uint64(len(exclude)))

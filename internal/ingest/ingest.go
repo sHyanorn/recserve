@@ -146,9 +146,6 @@ func (c *Consumer) Run(ctx context.Context) error {
 		// their offsets, until AllowRebalance: revoked never sees those
 		// offsets without held.
 		c.held.Store(true)
-		if fetches.IsClientClosed() {
-			return kgo.ErrClientClosed
-		}
 		failed := false
 		if ctx.Err() == nil {
 			fetches.EachError(func(topic string, partition int32, err error) {
@@ -279,9 +276,6 @@ func ensureTopic(ctx context.Context, brokers []string, topic string) error {
 	req.Topics = append(req.Topics, rt)
 	resp, err := req.RequestWith(ctx, cl)
 	if err == nil {
-		if len(resp.Topics) != 1 {
-			return fmt.Errorf("creating topic %s: %d topics in the response", topic, len(resp.Topics))
-		}
 		err = kerr.ErrorForCode(resp.Topics[0].ErrorCode)
 	}
 	if err != nil && !errors.Is(err, kerr.TopicAlreadyExists) {

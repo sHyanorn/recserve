@@ -86,7 +86,7 @@ func TestRealDataValkey(t *testing.T) {
 	if err := vstore.Append(ctx, evs); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("%d events of %d requests' splits appended to Valkey in %v", len(evs), len(qs), time.Since(loaded).Round(time.Millisecond))
+	t.Logf("%d events appended to Valkey in %v, for %d requests", len(evs), time.Since(loaded).Round(time.Millisecond), len(qs))
 	vcache, err := cache.NewValkey[Response](addr, time.Hour)
 	if err != nil {
 		t.Fatal(err)

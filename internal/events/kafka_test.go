@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
-	"net"
 	"slices"
 	"testing"
 	"time"
@@ -33,7 +32,8 @@ func TestKafkaKeysByUserAndKeepsOrder(t *testing.T) {
 	r := rand.New(rand.NewPCG(1, 0))
 	const users, total = 20, 600
 	sent := map[string][]int64{}
-	for n := 0; n < total; {
+	n := 0
+	for n < total {
 		var batch []Event
 		for range 1 + r.IntN(8) {
 			n++
@@ -46,7 +46,7 @@ func TestKafkaKeysByUserAndKeepsOrder(t *testing.T) {
 		}
 	}
 	got, partition, used := map[string][]int64{}, map[string]int32{}, map[int32]bool{}
-	for _, rec := range infratest.Records(t, topic, len(sentTotal(sent))) {
+	for _, rec := range infratest.Records(t, topic, n) {
 		e, err := Decode(rec.Value)
 		if err != nil || string(rec.Key) != e.UserID {
 			t.Fatalf("record key %q, value %q: %v", rec.Key, rec.Value, err)
@@ -65,14 +65,6 @@ func TestKafkaKeysByUserAndKeepsOrder(t *testing.T) {
 	if len(used) < 2 {
 		t.Fatalf("%d users are all in partitions %v", users, used)
 	}
-}
-
-func sentTotal(sent map[string][]int64) []int64 {
-	var all []int64
-	for _, s := range sent {
-		all = append(all, s...)
-	}
-	return all
 }
 
 // An event produced twice is two records, and one event in a history that
@@ -105,34 +97,9 @@ func TestKafkaSameEventTwice(t *testing.T) {
 // silentServer accepts connections and never answers.
 func silentServer(t *testing.T) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var conns []net.Conn
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			conns = append(conns, c)
-		}
-	}()
-	t.Cleanup(func() {
-		if err := ln.Close(); err != nil {
-			t.Error(err)
-		}
-		<-done
-		for _, c := range conns {
-			if err := c.Close(); err != nil {
-				t.Error(err)
-			}
-		}
-	})
-	return ln.Addr().String()
+	p := infratest.NewProxy(t, "") // nothing behind it: no connection is passed on
+	p.Blackhole()
+	return p.Addr()
 }
 
 // Without a broker that takes the record, Produce fails: by itself once the
