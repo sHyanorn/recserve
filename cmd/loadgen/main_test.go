@@ -33,9 +33,11 @@ func fakeGateway(t *testing.T, stall func(), status int) string {
 	return strings.TrimPrefix(s.URL, "http://")
 }
 
+// testConfig offers 500 requests/s: a rate the tests reach with the race
+// detector on while other packages' tests use the CPUs.
 func testConfig(addr string) config {
 	return config{
-		addr: addr, rate: 2000, warmup: 200 * time.Millisecond, duration: time.Second, conns: 16,
+		addr: addr, rate: 500, warmup: 200 * time.Millisecond, duration: time.Second, conns: 16,
 		work: &datasetWorkload{rows: []row{{"u", "i", 1}, {"v", "j", 2}}, k: 5, writeShare: 0.1},
 	}
 }
@@ -48,8 +50,8 @@ func TestMeasure(t *testing.T) {
 	if !r.Valid {
 		t.Fatalf("invalid: %v", r.Problems)
 	}
-	// 2,000 measured requests, a tenth of them writes.
-	if n := r.Outcomes["recommend_ok"] + r.Outcomes["events_ok"]; n < 1980 || n > 2000 || r.Outcomes["events_ok"] < 190 || r.Outcomes["events_ok"] > 210 {
+	// 500 measured requests, a tenth of them writes.
+	if n := r.Outcomes["recommend_ok"] + r.Outcomes["events_ok"]; n < 495 || n > 500 || r.Outcomes["events_ok"] < 47 || r.Outcomes["events_ok"] > 53 {
 		t.Fatalf("outcomes %v", r.Outcomes)
 	}
 }
@@ -73,7 +75,7 @@ func TestStallIsChargedToEveryDelayedRequest(t *testing.T) {
 	const stall = 400 * time.Millisecond
 	var n atomic.Int64
 	addr := fakeGateway(t, func() {
-		if n.Add(1) == 800 { // about 0.2 s into the measured second
+		if n.Add(1) == 200 { // about 0.2 s into the measured second
 			time.Sleep(stall)
 		}
 	}, http.StatusOK)
@@ -81,7 +83,7 @@ func TestStallIsChargedToEveryDelayedRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// About stall*rate = 800 requests were due during the stall, 40% of those
+	// About stall*rate = 200 requests were due during the stall, 40% of those
 	// measured; most waited over 100 ms, while only 16 were in flight.
 	const limit = 100_000 // µs
 	if p := r.Latency["reply"].P90; p < limit {
