@@ -30,7 +30,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] Two-phase bundle swap; property test 4 (D031)
 
 ## M3 Event pipeline and shared state
-- [ ] Kafka (KRaft) and Valkey in docker compose (D019, D020)
+- [x] Kafka (KRaft) and Valkey in docker compose (D019, D020)
 - [ ] `/v1/events` produces to the `events` topic, keyed by user, idempotent producer
 - [ ] `cmd/ingest`: consumer group, idempotent apply to Valkey, commit after apply; property tests 8 and 9
 - [ ] History store and result cache on Valkey; singleflight; property test 11. A hit still reads the history to key it (D030); if that costs too much, key by a per-user history version instead
