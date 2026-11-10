@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -8,6 +9,26 @@ import (
 )
 
 func key(i int) Key { return Key{byte(i), byte(i >> 8)} }
+
+// store is what both caches offer.
+type store[V any] interface {
+	Get(ctx context.Context, k Key) (V, bool, error)
+	Put(ctx context.Context, k Key, v V) error
+}
+
+func get[V any](c store[V], k Key) (V, bool) {
+	v, ok, err := c.Get(context.Background(), k)
+	if err != nil {
+		panic(err)
+	}
+	return v, ok
+}
+
+func put[V any](c store[V], k Key, v V) {
+	if err := c.Put(context.Background(), k, v); err != nil {
+		panic(err)
+	}
+}
 
 // testCache returns a cache whose clock the test sets and whose jitter
 // draws come from draw.
@@ -23,20 +44,20 @@ func TestEvictsLeastRecentlyUsed(t *testing.T) {
 	draw := 0.5
 	c, _ := testCache(3, time.Hour, &draw)
 	for i := range 3 {
-		c.Put(key(i), i)
+		put(c, key(i), i)
 	}
-	c.Get(key(0)) // 1 is now the least recently used
-	c.Put(key(3), 3)
-	if _, ok := c.Get(key(1)); ok {
+	get(c, key(0)) // 1 is now the least recently used
+	put(c, key(3), 3)
+	if _, ok := get(c, key(1)); ok {
 		t.Fatal("1 not evicted")
 	}
 	for _, i := range []int{0, 2, 3} {
-		if v, ok := c.Get(key(i)); !ok || v != i {
+		if v, ok := get(c, key(i)); !ok || v != i {
 			t.Fatalf("Get(%d) = %d, %v", i, v, ok)
 		}
 	}
-	c.Put(key(2), 20) // replacing an entry evicts nothing
-	if v, _ := c.Get(key(2)); v != 20 || c.Len() != 3 {
+	put(c, key(2), 20) // replacing an entry evicts nothing
+	if v, _ := get(c, key(2)); v != 20 || c.Len() != 3 {
 		t.Fatalf("replaced value %d, %d entries", v, c.Len())
 	}
 }
@@ -51,13 +72,13 @@ func TestExpiresWithJitter(t *testing.T) {
 	}{{0, 90 * time.Second}, {0.5, ttl}, {0.999999, 110 * time.Second}} {
 		draw := c.draw
 		cc, now := testCache(10, ttl, &draw)
-		cc.Put(key(1), 1)
+		put(cc, key(1), 1)
 		*now = now.Add(c.life - time.Second)
-		if _, ok := cc.Get(key(1)); !ok {
+		if _, ok := get(cc, key(1)); !ok {
 			t.Fatalf("draw %v: expired before %v", c.draw, c.life)
 		}
 		*now = now.Add(time.Second)
-		if _, ok := cc.Get(key(1)); ok {
+		if _, ok := get(cc, key(1)); ok {
 			t.Fatalf("draw %v: alive at %v", c.draw, c.life)
 		}
 		if cc.Len() != 0 {
@@ -73,10 +94,10 @@ func TestConcurrentUse(t *testing.T) {
 		wg.Go(func() {
 			for i := range 10000 {
 				k := key((g*7 + i) % 200)
-				if v, ok := c.Get(k); ok && v != int(k[0])|int(k[1])<<8 {
+				if v, ok := get(c, k); ok && v != int(k[0])|int(k[1])<<8 {
 					panic(fmt.Sprint("wrong value ", v, " for ", k))
 				}
-				c.Put(k, int(k[0])|int(k[1])<<8)
+				put(c, k, int(k[0])|int(k[1])<<8)
 			}
 		})
 	}
@@ -89,8 +110,8 @@ func TestConcurrentUse(t *testing.T) {
 func TestNoSizeStoresNothing(t *testing.T) {
 	for _, size := range []int{0, -1} {
 		c := New[int](size, time.Hour)
-		c.Put(key(1), 1)
-		if _, ok := c.Get(key(1)); ok || c.Len() != 0 {
+		put(c, key(1), 1)
+		if _, ok := get(c, key(1)); ok || c.Len() != 0 {
 			t.Fatalf("size %d: stored an entry", size)
 		}
 	}

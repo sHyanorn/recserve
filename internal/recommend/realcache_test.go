@@ -26,18 +26,19 @@ func TestRealDataCache(t *testing.T) {
 	}
 	ctx := context.Background()
 	before := heapAlloc()
-	p.Cache = cache.New[Response](len(qs), time.Hour)
+	c := cache.New[Response](len(qs), time.Hour)
+	p.Cache = c
 	for _, q := range qs {
 		q.req.K = MaxK
 		if _, err := p.Recommend(ctx, q.req); err != nil {
 			t.Fatal(err)
 		}
 	}
-	n := p.Cache.Len()
+	n := c.Len()
 	per := float64(heapAlloc()-before) / float64(n)
 	const size = 13000 // the gateway's -cache-size
 	t.Logf("k = %d: %d entries, %.0f bytes each on the heap; %d entries take %.1f MB", MaxK, n, per, size, per*size/1e6)
-	runtime.KeepAlive(p.Cache)
+	runtime.KeepAlive(c)
 
 	p.Cache = cache.New[Response](len(qs), time.Hour)
 	first := make([]Response, len(qs))

@@ -60,6 +60,7 @@ var Reasons = []string{
 // Stages of a request, as the test hook names them.
 const (
 	stageHistory = "history"
+	stageCache   = "cache"
 	stageEncoder = "encoder"
 	stageVector  = SourceVector // one call per shard
 	stageCooc    = SourceCooc
@@ -127,6 +128,17 @@ type Response struct {
 	// Cached is true for a response from the cache, nil if the
 	// pipeline has none or the history could not be read.
 	Cached *bool `json:"-"`
+	// CacheErr is the first error of reading or writing the cache. The
+	// request went on as a miss and is not degraded by it.
+	CacheErr error `json:"-"`
+}
+
+// Cache holds responses under the key of what they depend on. An error of
+// either method costs the request nothing but the cache: it is answered as
+// a miss.
+type Cache interface {
+	Get(ctx context.Context, k cache.Key) (Response, bool, error)
+	Put(ctx context.Context, k cache.Key, r Response) error
 }
 
 // Coverage counts the shards searched for vector retrieval and those that
@@ -208,10 +220,11 @@ type Pipeline struct {
 	History history.Store
 	Budgets Budgets
 	// Cache, if not nil, holds responses that were not degraded. It may be
-	// shared by pipelines over different bundles: keys include the bundle
-	// version. Responses from it share their slices; callers must not
-	// modify them.
-	Cache *cache.Cache[Response]
+	// shared by pipelines over different bundles, in this process or, on
+	// Valkey, in others: keys include the bundle version. Responses from it
+	// may share their slices; callers must not modify them. A read and a
+	// write each run within Budgets.History.
+	Cache Cache
 
 	rankWith          Ranker // test only: replaces the bundle's ranker
 	skipSeenFilter    bool   // test only: the broken variant of property 2
@@ -263,7 +276,7 @@ type candidate struct {
 // fails or runs out of time is skipped or falls back, and the response
 // reports why. If ctx ends, the request fails with an error that wraps
 // ctx.Err(). A request that fails after its cache lookup returns a response
-// that holds Cached only, so the lookup can still be counted.
+// that holds Cached and CacheErr only, so the lookup can still be counted.
 func (p *Pipeline) Recommend(ctx context.Context, req Request) (out Response, err error) {
 	if req.K <= 0 || req.K > MaxK {
 		return Response{}, fmt.Errorf("k must be in 1..%d", MaxK)
@@ -278,16 +291,25 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (out Response, er
 		return Response{}, err
 	}
 	var key cache.Key
+	var cacheErr error
 	useCache := p.Cache != nil && len(d.reasons) == 0
 	if useCache {
 		key = p.cacheKey(req, hist)
-		if resp, ok := p.Cache.Get(key); ok {
+		cctx, cancel := within(ctx, p.Budgets.History)
+		resp, ok, gerr := p.Cache.Get(cctx, key)
+		cancel()
+		if gerr != nil {
+			if err := ended(ctx, stageCache); err != nil {
+				return Response{}, err
+			}
+			cacheErr = gerr
+		} else if ok {
 			resp.Cached = &ok
 			return resp, nil
 		}
 		defer func() {
 			if err != nil {
-				out = Response{Cached: new(bool)}
+				out = Response{Cached: new(bool), CacheErr: cacheErr}
 			}
 		}()
 	}
@@ -339,15 +361,21 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (out Response, er
 		if len(resp.Degraded) == 0 {
 			stored := resp
 			stored.Dropped, stored.Cached = 0, nil // a hit ranks nothing
-			p.Cache.Put(key, stored)
+			cctx, cancel := within(ctx, p.Budgets.History)
+			perr := p.Cache.Put(cctx, key, stored)
+			cancel()
+			if cacheErr == nil && ctx.Err() == nil { // a request that ended while writing is no cache failure
+				cacheErr = perr
+			}
 		}
+		resp.CacheErr = cacheErr
 	}
 	return resp, nil
 }
 
 // cacheKey returns the digest of what a response depends on, given the
-// history: the bundle version, the user, k, the exclusions as a set and the
-// history items in order. The request time only selects the history, and
+// history: the bundle version, the shard settings, the user, k, the
+// exclusions as a set and the history items in order. The request time only selects the history, and
 // the recent items are used only when the history cannot be read, which
 // is never cached.
 func (p *Pipeline) cacheKey(req Request, hist []int32) cache.Key {
@@ -355,6 +383,10 @@ func (p *Pipeline) cacheKey(req Request, hist []int32) cache.Key {
 	var b []byte
 	if !p.keyWithoutVersion {
 		b = str(b, p.Bundle.ModelVersion)
+	}
+	if p.Shards != nil {
+		// Gateways that share a cache may search with other settings.
+		b = str(b, fmt.Sprintf("%+v", p.Shards.Config()))
 	}
 	b = binary.AppendUvarint(str(b, req.User), uint64(req.K))
 	exclude := slices.Compact(slices.Sorted(slices.Values(req.Exclude)))

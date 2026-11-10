@@ -541,6 +541,38 @@ func TestCacheLookupsAreCounted(t *testing.T) {
 	}
 }
 
+// brokenCache cannot be read or written.
+type brokenCache struct{}
+
+func (brokenCache) Get(context.Context, cache.Key) (recommend.Response, bool, error) {
+	return recommend.Response{}, false, errors.New("cache down")
+}
+
+func (brokenCache) Put(context.Context, cache.Key, recommend.Response) error {
+	return errors.New("cache down")
+}
+
+// A cache that fails is counted as an error; the response is complete and
+// not degraded.
+func TestCacheErrorIsCountedNotDegraded(t *testing.T) {
+	s, ts := testServer(t)
+	p, release, err := s.Live.Acquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	p.Cache = brokenCache{}
+	code, out := post(t, ts.URL+"/v1/recommend", `{"user_id":"u","k":2}`)
+	if code != http.StatusOK || len(ids(out)) != 2 || len(out["degraded"].([]any)) != 0 {
+		t.Fatalf("%d %v", code, out)
+	}
+	for result, want := range map[string]float64{"error": 1, "miss": 0, "hit": 0} {
+		if got := testutil.ToFloat64(s.cacheLookups.WithLabelValues(result)); got != want {
+			t.Fatalf("%s: %v, want %v", result, got, want)
+		}
+	}
+}
+
 // A request that fails after its cache lookup is counted like any other.
 func TestCacheLookupOfFailedRequestIsCounted(t *testing.T) {
 	s, _ := testServer(t)

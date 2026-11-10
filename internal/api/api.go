@@ -82,7 +82,7 @@ func New(l *recommend.Live, h history.Store, log *slog.Logger) *Server {
 		s.degraded.WithLabelValues(r)
 	}
 	s.cacheLookups = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "recserve_cache_lookups_total", Help: "Result cache lookups by result: hit or miss.",
+		Name: "recserve_cache_lookups_total", Help: "Result cache lookups by result: hit, miss, or error (the cache could not be read or written; answered as a miss).",
 	}, []string{"result"})
 	s.swaps = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "recserve_swaps_total", Help: "Bundle swaps by result: ok, rejected (the bundle failed to prepare or is already active) or busy (another swap was running).",
@@ -248,7 +248,13 @@ func (s *Server) recommend(w http.ResponseWriter, r *http.Request) error {
 	resp, err := s.Live.Recommend(r.Context(), req)
 	if resp.Cached != nil { // also set when the request failed after the lookup
 		result := "miss"
-		if *resp.Cached {
+		switch {
+		case resp.CacheErr != nil:
+			result = "error"
+			if !errors.Is(resp.CacheErr, context.DeadlineExceeded) {
+				s.Log.Warn("result cache failed; answered as a miss", "err", resp.CacheErr)
+			}
+		case *resp.Cached:
 			result = "hit"
 		}
 		s.cacheLookups.WithLabelValues(result).Inc()

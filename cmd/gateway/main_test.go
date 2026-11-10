@@ -224,6 +224,32 @@ func TestOpenStore(t *testing.T) {
 	}
 }
 
+// The result cache is in the process without a Valkey address and on the
+// server with one; a size of 0 means no cache, and must be a nil interface
+// for the pipeline to see none.
+func TestOpenCache(t *testing.T) {
+	c, closeCache, err := openCache("", 10, time.Minute)
+	if _, ok := c.(*cache.Cache[recommend.Response]); !ok || err != nil {
+		t.Fatalf("no address: %T, %v", c, err)
+	}
+	closeCache()
+	for _, addr := range []string{"", "127.0.0.1:1"} {
+		c, closeCache, err = openCache(addr, 0, time.Minute)
+		if c != nil || err != nil {
+			t.Fatalf("size 0 at %q: %T, %v", addr, c, err)
+		}
+		closeCache()
+	}
+	if _, _, err := openCache("127.0.0.1:1", 10, time.Minute); err == nil {
+		t.Fatal("a closed port opened a cache")
+	}
+	c, closeCache, err = openCache(infratest.ValkeyAddr(t), 10, time.Minute)
+	if _, ok := c.(*cache.Valkey[recommend.Response]); !ok || err != nil {
+		t.Fatalf("valkey: %T, %v", c, err)
+	}
+	closeCache()
+}
+
 // Without brokers /v1/events writes the store itself; with them it
 // produces to Kafka, and the client is not asked to connect at the start.
 func TestOpenProducer(t *testing.T) {

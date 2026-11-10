@@ -36,7 +36,7 @@ func main() {
 	dir := flag.String("bundle", "", "bundle directory")
 	testSplit := flag.String("test-split", "", "test split file; its first event bounds the bundle's train cutoff")
 	preload := flag.String("preload", "", "comma-separated split files whose events are loaded into the history store at start")
-	valkeyAddr := flag.String("valkey-addr", "", "Valkey address for the user histories; empty keeps them in this process")
+	valkeyAddr := flag.String("valkey-addr", "", "Valkey address for the user histories and the result cache; empty keeps them in this process")
 	kafkaBrokers := flag.String("kafka-brokers", "", "comma-separated Kafka brokers: /v1/events produces to the events topic; empty makes it write the histories itself")
 	eventsTimeout := flag.Duration("events-timeout", api.DefaultEventsTimeout, "time /v1/events waits for its events to be accepted before it answers 503; at least 1s with -kafka-brokers, 0 for none without")
 	drain := flag.Duration("drain", 10*time.Second, "time allowed for in-flight requests at shutdown")
@@ -51,7 +51,7 @@ func main() {
 	flag.DurationVar(&budgets.Retrieval, "budget-retrieval", budgets.Retrieval, "retrieval budget, all sources; 0 for none")
 	flag.DurationVar(&budgets.Shard, "budget-shard", budgets.Shard, "budget of each shard search; 0 for none")
 	flag.DurationVar(&budgets.Ranker, "budget-ranker", budgets.Ranker, "ranker budget; 0 for none")
-	cacheSize := flag.Int("cache-size", 13000, "result cache entries; 0 for no cache")
+	cacheSize := flag.Int("cache-size", 13000, "result cache entries; 0 for no cache. With -valkey-addr the cache is on Valkey, bounded by the server's memory, and this only turns it on or off")
 	cacheTTL := flag.Duration("cache-ttl", 5*time.Minute, "result cache time to live, changed by up to 10% either way")
 	flag.Parse()
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -83,15 +83,16 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 	} else {
 		log.Warn("no -test-split: the bundle's train cutoff is not checked")
 	}
-	var c *cache.Cache[recommend.Response]
-	if cacheSize > 0 {
-		c = cache.New[recommend.Response](cacheSize, cacheTTL)
-	}
 	store, closeStore, err := openStore(valkeyAddr)
 	if err != nil {
 		return err
 	}
 	defer closeStore()
+	c, closeCache, err := openCache(valkeyAddr, cacheSize, cacheTTL)
+	if err != nil {
+		return err
+	}
+	defer closeCache()
 	prepare := preparer(opt, store, shards, budgets, c)
 	p, err := prepare(dir)
 	if err != nil {
@@ -183,6 +184,23 @@ func openStore(addr string) (history.Store, func(), error) {
 	return v, v.Close, nil
 }
 
+// openCache returns the result cache and the function that closes it: on
+// the Valkey server at addr, where every instance shares it, or in this
+// process without an address; none if size is 0.
+func openCache(addr string, size int, ttl time.Duration) (recommend.Cache, func(), error) {
+	switch {
+	case size <= 0:
+		return nil, func() {}, nil
+	case addr == "":
+		return cache.New[recommend.Response](size, ttl), func() {}, nil
+	}
+	v, err := cache.NewValkey[recommend.Response](addr, ttl)
+	if err != nil {
+		return nil, nil, err
+	}
+	return v, v.Close, nil
+}
+
 // openProducer returns what takes the events of /v1/events, and the
 // function that closes it: a producer to the events topic on the brokers,
 // or, without brokers, one that writes them to store itself.
@@ -202,7 +220,7 @@ func openProducer(brokers string, store history.Store, timeout time.Duration) (e
 // checksums, golden cases and train cutoff are checked against opt, and
 // the vectors split into shards by cfg. The pipelines share store and
 // cache c, and have budgets.
-func preparer(opt bundle.Options, store history.Store, cfg shard.Config, budgets recommend.Budgets, c *cache.Cache[recommend.Response]) func(dir string) (*recommend.Pipeline, error) {
+func preparer(opt bundle.Options, store history.Store, cfg shard.Config, budgets recommend.Budgets, c recommend.Cache) func(dir string) (*recommend.Pipeline, error) {
 	return func(dir string) (*recommend.Pipeline, error) {
 		b, err := bundle.Load(dir, opt)
 		if errors.Is(err, onnx.ErrNotInitialized) {

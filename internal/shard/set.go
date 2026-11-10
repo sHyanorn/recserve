@@ -108,6 +108,9 @@ func (s *Set) WithEf(ef int) *Set {
 // Shards returns the number of shards.
 func (s *Set) Shards() int { return len(s.parts) }
 
+// Config returns the settings the set was built and is searched with.
+func (s *Set) Config() Config { return s.cfg }
+
 // Zeroes returns the number of items left out for a zero vector.
 func (s *Set) Zeroes() int { return s.zeroes }
 
