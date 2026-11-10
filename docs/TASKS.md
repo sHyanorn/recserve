@@ -65,6 +65,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] Per rate of the sweep, the share of requests whose history read or cache call runs past `-budget-history`; decide on the budget or the per-user history version left open in D039
 - [ ] A cache-on workload with repeated requests: replaying the test split never hits (BENCHMARKS, M3)
 - [ ] Fault runs with toxiproxy and container control (D021)
+- [ ] Valkey connections are opened within the request's history budget, so a slow connection setup keeps the circuit breaker open with Valkey healthy (D037, Limits): open them outside it, and show it with latency added to setup only
 - [ ] ANN and sharded recall and latency on glove-100 and synthetic vectors
 - [ ] `annbench` in shards mode labels results with the `-m` and `-efc` flags even when it reuses graph files built with other values; record the graphs' own parameters
 - [ ] Latency during bundle swaps under load, and the cause of its largest values, GC or CPU contention with prepare (D031)

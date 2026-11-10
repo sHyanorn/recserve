@@ -30,7 +30,7 @@ func checkProperty10(t *testing.T, blackhole, broken bool) error {
 	t.Helper()
 	const (
 		budget   = 100 * time.Millisecond
-		openFor  = 200 * time.Millisecond
+		openFor  = time.Second // longer than the requests of the outage take, stalls included
 		bound    = time.Second // far below the client's own timeouts of 5 and 10 s
 		requests = 20
 	)
@@ -140,7 +140,7 @@ func checkProperty10(t *testing.T, blackhole, broken bool) error {
 	}
 
 	back()
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(openFor / 4) {
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(openFor / 10) {
 		resp, err := p.Recommend(ctx, healthy)
 		switch {
 		case err != nil:

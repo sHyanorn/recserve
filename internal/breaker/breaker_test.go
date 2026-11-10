@@ -35,7 +35,7 @@ func (s *server) Put(context.Context, cache.Key, int) error { s.calls++; return 
 func TestBreaker(t *testing.T) {
 	ctx := context.Background()
 	down := errors.New("down")
-	const openFor = 50 * time.Millisecond
+	const openFor = 300 * time.Millisecond // long against a stall of the test between two calls
 	var changes []string
 	srv := &server{}
 	b := New(3, openFor, func(from, to string) { changes = append(changes, from+">"+to) })

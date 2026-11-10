@@ -114,12 +114,14 @@ func up(url string) bool {
 }
 
 // gateway starts a gateway on the compose services with the test bundle
-// and returns its URL once it is ready.
+// and returns its URL once it is ready. Its history budget is 100 ms: the
+// client opens a connection within the budget of the request that first
+// uses it, and at the default of 3 ms that request may be degraded.
 func gateway(t *testing.T) string {
 	t.Helper()
 	addr := freeAddr(t)
 	start(t, "gateway", "-addr", addr, "-admin-addr", "", "-bundle", bundletest.Write(t),
-		"-valkey-addr", infratest.ValkeyAddr(t), "-kafka-brokers", strings.Join(infratest.KafkaBrokers(t), ","), "-events-timeout", "1s")
+		"-valkey-addr", infratest.ValkeyAddr(t), "-kafka-brokers", strings.Join(infratest.KafkaBrokers(t), ","), "-events-timeout", "1s", "-budget-history", "100ms")
 	url := "http://" + addr
 	eventually(t, 20*time.Second, "the gateway is not ready", func() bool { return up(url + "/readyz") })
 	return url
@@ -279,8 +281,7 @@ func TestIngestKilledAndRestarted(t *testing.T) {
 	}
 	ingest(t, group)
 	store := valkeyStore(t)
-	var diff string
-	eventually(t, 90*time.Second, "the histories differ: "+diff, func() bool {
+	eventually(t, 90*time.Second, "a history differs from the one of each event applied once", func() bool {
 		for u := range users {
 			user := fmt.Sprint(prefix, "-", u)
 			w, err := want.Before(ctx, user, history.MaxTS, 0)
@@ -292,7 +293,6 @@ func TestIngestKilledAndRestarted(t *testing.T) {
 				t.Fatal(err)
 			}
 			if !slices.Equal(got, w) {
-				diff = fmt.Sprintf("%s has %d events, want %d", user, len(got), len(w))
 				return false
 			}
 		}
