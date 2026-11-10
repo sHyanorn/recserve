@@ -47,7 +47,7 @@ The catalog served has 25.6k items (Amazon Reviews 2023 Video_Games, 5-core). At
 
 - User histories keep every event: no cap per user and no expiry (D023, D033). In Valkey they are never evicted (`maxmemory` is 1 GB in compose; a long history takes about 87 bytes per event). Once they fill it, reads go on and writes fail: `/v1/events` answers 503 until memory is added or histories are deleted.
 - Valkey persists with snapshots only, so events since the last snapshot are lost if it stops uncleanly.
-- A Valkey server that accepts connections and never answers costs each request its history budget (3 ms) for up to a second after the open connections have timed out, before the circuit breaker opens (D037).
+- Once every connection to Valkey is lost, and while the server accepts new ones without answering, each request waits out its history budget (3 ms) for up to a second before the circuit breaker opens (D037).
 - With four workers saturating the four CPUs that Valkey shares, the history read and cache lookup took 4.3 ms at p99 against a budget of 3 ms; at 200 requests/s, 0.2 to 0.3% of the responses fell back for that reason (docs/BENCHMARKS.md, M3).
 
 ## License

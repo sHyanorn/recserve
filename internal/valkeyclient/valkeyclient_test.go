@@ -27,8 +27,10 @@ import (
 func checkSlowSetup(t *testing.T, client func(addr string) (*valkeyclient.Client, error)) error {
 	t.Helper()
 	const (
-		budget   = 250 * time.Millisecond // long against a stall of the test
-		setup    = 600 * time.Millisecond
+		// A stall of the test may take up to the budget, and up to what
+		// setup leaves of the second a handshake may take.
+		budget   = 350 * time.Millisecond
+		setup    = 550 * time.Millisecond
 		warmUp   = 10 * time.Second
 		requests = 50
 	)
@@ -151,4 +153,17 @@ func TestServerGoneAndBack(t *testing.T) {
 	if _, err := ping(); !errors.Is(err, valkeyclient.ErrClosed) {
 		t.Fatalf("after Close: %v", err)
 	}
+}
+
+// A server that accepts the connection and never answers the handshake
+// fails New.
+func TestNewFailsOnSilentServer(t *testing.T) {
+	proxy := infratest.NewProxy(t, infratest.ValkeyAddr(t))
+	proxy.Blackhole()
+	c, err := valkeyclient.New(proxy.Addr())
+	if err == nil {
+		c.Close()
+		t.Fatal("connected to a server that does not answer")
+	}
+	t.Log(err)
 }

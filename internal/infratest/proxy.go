@@ -129,6 +129,11 @@ func (p *Proxy) serve(ln net.Listener, c net.Conn) {
 		return
 	}
 	p.mu.Lock()
+	if p.silent || !p.conns[c] { // taken away while it was being set up
+		p.mu.Unlock()
+		up.Close() //nolint:errcheck // nothing was sent on it
+		return
+	}
 	p.conns[up] = false
 	p.mu.Unlock()
 	go func() {
