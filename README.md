@@ -35,12 +35,15 @@ A replica has no settings of its own: the gateway tells it which shard of which 
 
 Start order with Kafka: `make infra-up`, then `bin/ingest -kafka-brokers localhost:9094 -valkey-addr localhost:6379`, which creates the topic, then the gateways. A gateway started earlier answers 503 on `/v1/events` until the topic exists.
 
-## In place after M4
+## In place
 
 - Retrieval from co-occurrence, popularity and vectors, searched exactly or with a hand-written HNSW in two shards, in the gateway or on replicas (D016, D024, D028)
 - Shard tier over gRPC: `annshard` replicas answer only from the index a request names, and the gateway merges their results as it does its own shards' (D040)
 - Per shard, a search goes to the next replica at once when one fails and to a second one when the first is slow, at most one hedge per search and about one search in ten; a keepalive takes a replica that went silent out of use (D041)
-- Bundle swaps across replicas: every replica prepares the version, one per shard is enough to go on, and a replica that missed it catches up when a search finds it lacking; a replica keeps two versions and never drops the one the gateway serves (D042, D043)
+- Bundle swaps across replicas: every replica prepares the version, one per shard is enough to go on, and a replica that missed it, or restarted, catches up as soon as the gateway's connection to it is up; a replica keeps two versions and never drops the one the gateway serves (D042, D043)
+- Replica readiness on `grpc.health.v1`: ready while it holds the version the gateway serves, so a rolling restart that waits for it keeps every shard served (D044)
+- Shutdown on SIGTERM: a replica reports not ready and drains its calls within `-drain`; the gateway answers `/readyz` with 503, goes on answering for `-shutdown-delay` with each response closing its connection, then drains (D045)
+- A bundle's version is the digest of its files, checked by the gateway and by every replica (D046)
 - User encoder and ranker through ONNX Runtime (D026, D027)
 - Seen-item filter, deduplication and MMR; per-stage deadlines with degradation reasons and shard coverage in every response (D029)
 - Result cache keyed by bundle version and the user's history (D030)
@@ -48,7 +51,7 @@ Start order with Kafka: `make infra-up`, then `bin/ingest -kafka-brokers localho
 - Events through Kafka to an ingest consumer that applies them idempotently and commits after applying (D034, D035)
 - User histories and the result cache on Valkey, shared by the gateways; concurrent misses on one key computed once (D033, D036)
 - Circuit breaker on the gateway's Valkey calls; connections to Valkey opened and replaced outside the request path (D037)
-- Tests on the built binaries with ingest killed, Valkey paused, Kafka stopped, and, on four `annshard` processes, a replica killed, a swap, an empty restart and a rejected swap (`make e2e`)
+- Tests on the built binaries with ingest killed, Valkey paused, Kafka stopped, and, on four `annshard` processes, a replica killed, a swap, an empty restart, a rejected swap, swaps in a row over three bundles and a rolling restart of the replicas under requests (`make e2e`)
 - Prometheus metrics; load generator corrected for coordinated omission
 
 ## Scale
