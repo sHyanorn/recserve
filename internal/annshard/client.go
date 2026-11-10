@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 
 	"github.com/sHyanorn/recserve/internal/annshard/annshardpb"
@@ -71,6 +72,30 @@ const (
 	maxReconnectWait = 5 * time.Second
 	connectTimeout   = 5 * time.Second
 )
+
+// The keepalive of a connection: when nothing has been read from a replica
+// for keepaliveTime, the client pings it, and closes the connection if no
+// answer comes within keepaliveTimeout. A replica that has gone silent with
+// its connection up, a paused process or a dead network path, so leaves the
+// ready replicas within their sum. 10 s is the shortest interval grpc-go
+// lets a client ping at.
+const (
+	keepaliveTime    = 10 * time.Second
+	keepaliveTimeout = 3 * time.Second
+)
+
+// DialOptions returns the gRPC options of a connection to a replica: no
+// TLS (D040), and the connection and keepalive settings above. A replica's
+// server needs ServerOptions for the keepalive.
+func DialOptions() []grpc.DialOption {
+	wait := backoff.DefaultConfig
+	wait.MaxDelay = maxReconnectWait
+	return []grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithConnectParams(grpc.ConnectParams{Backoff: wait, MinConnectTimeout: connectTimeout}),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{Time: keepaliveTime, Timeout: keepaliveTimeout, PermitWithoutStream: true}),
+	}
+}
 
 // Client reaches the replicas of every shard. Its connections are opened
 // and kept by gRPC, without TLS (D040). A search asks one replica, another
@@ -131,8 +156,6 @@ func Dial(addrs [][]string, opt Options) (*Client, error) {
 			Help: "Shard searches sent to another replica because one failed, by shard.",
 		}, []string{"shard"}),
 	}
-	wait := backoff.DefaultConfig
-	wait.MaxDelay = maxReconnectWait
 	for i, replicas := range addrs {
 		if len(replicas) == 0 {
 			return nil, errors.Join(fmt.Errorf("shard %d has no replica", i), c.Close())
@@ -145,8 +168,7 @@ func Dial(addrs [][]string, opt Options) (*Client, error) {
 		}
 		c.shards = append(c.shards, g)
 		for _, addr := range replicas {
-			conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()),
-				grpc.WithConnectParams(grpc.ConnectParams{Backoff: wait, MinConnectTimeout: connectTimeout}))
+			conn, err := grpc.NewClient(addr, DialOptions()...)
 			if err != nil {
 				return nil, errors.Join(fmt.Errorf("shard %d, replica %s: %w", i, addr, err), c.Close())
 			}

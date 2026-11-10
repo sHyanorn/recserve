@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"golang.org/x/sync/singleflight"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 
 	"github.com/sHyanorn/recserve/internal/annshard/annshardpb"
@@ -77,6 +79,14 @@ type Server struct {
 type version struct {
 	parts map[index]*shard.Part // guarded by Server.mu
 	named atomic.Int64          // the clock at the last request that named the version
+}
+
+// ServerOptions returns the options a replica's gRPC server needs for the
+// gateway's connections (DialOptions): it accepts their keepalive pings,
+// also with no call in flight. By default grpc-go takes pings less than
+// 5 minutes apart for abuse and closes the connection.
+func ServerOptions() []grpc.ServerOption {
+	return []grpc.ServerOption{grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: keepaliveTime / 2, PermitWithoutStream: true})}
 }
 
 // NewServer returns a replica that loads bundle versions from the

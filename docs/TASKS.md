@@ -55,6 +55,8 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] Dockerfiles and docker compose with Prometheus, Grafana and Jaeger
 - [ ] kind manifests: probes, resource limits, HPA with metrics-server (D022)
 - [ ] NetworkPolicy that lets only the gateways reach the annshard port: the shard API has no TLS or authentication (D040)
+- [ ] Swaps across several gateways in an order that keeps at most two versions in use: the replicas hold two (D042)
+- [ ] annshard: Dockerfile, readiness on `grpc.health.v1`, graceful shutdown beyond finishing the calls in flight
 - [ ] Graceful shutdown: readiness flip, preStop wait, drain, offset commit
 - [ ] Zero-error check under load through a rollout restart and a bundle swap
 - [ ] Logistic-regression ranker over the six features of SPEC §8, trained in `tools/bundle` and exported as `ranker.onnx` (D027), before M6. Its bundle carries a feature consistency golden: Python and Go compute the features of the same fixed requests, and the largest difference must be at most 1e-6
@@ -67,6 +69,8 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] Per rate of the sweep, the share of requests whose history read or cache call runs past `-budget-history`; decide on the budget or the per-user history version left open in D039
 - [ ] A cache-on workload with repeated requests: replaying the test split never hits (BENCHMARKS, M3)
 - [ ] Fault runs with toxiproxy and container control (D021)
+- [ ] In the fault runs, a replica that goes silent with its connection up, and one that answers keepalive pings while its searches hang: the share of responses with `shards_partial` during the 13 s before the keepalive acts, and for as long as the second lasts; decide on outlier detection (D041)
+- [ ] Shard search latency through annshard and the hedge delay's default, from measured latencies (D041)
 - [ ] ANN and sharded recall and latency on glove-100 and synthetic vectors
 - [ ] `annbench` in shards mode labels results with the `-m` and `-efc` flags even when it reuses graph files built with other values; record the graphs' own parameters
 - [ ] Latency during bundle swaps under load, and the cause of its largest values, GC or CPU contention with prepare (D031)

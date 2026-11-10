@@ -55,7 +55,7 @@ func run(log *slog.Logger, addr, bundles string) error {
 // serve answers on ln from the bundle directories under bundles until ctx
 // ends, then lets the calls in flight finish.
 func serve(ctx context.Context, log *slog.Logger, ln net.Listener, bundles string) error {
-	gs := grpc.NewServer()
+	gs := grpc.NewServer(annshard.ServerOptions()...)
 	annshardpb.RegisterAnnShardServer(gs, annshard.NewServer(bundles, log))
 	healthpb.RegisterHealthServer(gs, health.NewServer())
 	go func() {

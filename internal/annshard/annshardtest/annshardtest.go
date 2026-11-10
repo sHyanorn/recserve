@@ -69,7 +69,7 @@ func StartOn(t testing.TB, addr, root string, opts ...grpc.ServerOption) (string
 	if err != nil {
 		t.Fatal(err)
 	}
-	gs := grpc.NewServer(opts...)
+	gs := grpc.NewServer(append(annshard.ServerOptions(), opts...)...)
 	annshardpb.RegisterAnnShardServer(gs, annshard.NewServer(root, slog.New(slog.NewTextHandler(io.Discard, nil))))
 	go gs.Serve(ln) //nolint:errcheck // ends with the Stop below
 	t.Cleanup(gs.Stop)
