@@ -1,4 +1,4 @@
-"""Verify a bundle directory: checksums, shapes, the ranker and golden cases.
+"""Verify a bundle directory: checksums, version, shapes, the ranker and golden cases.
 
 usage: verify.py BUNDLE_DIR
 
@@ -15,7 +15,7 @@ import sys
 
 import numpy as np
 
-from build import RANKER_FEATURES, check_ranker, encode, mean_vector, session, sha256, top_k
+from build import RANKER_FEATURES, check_ranker, encode, mean_vector, session, sha256, top_k, version_of
 
 TOL = 1e-4
 # Read only when the manifest lists them; one on disk that it does not list
@@ -33,6 +33,8 @@ def main(d):
     for name, want in m["sha256"].items():
         if sha256(f"{d}/{name}") != want:
             sys.exit(f"{name}: checksum mismatch")
+    if m["model_version"] != version_of(m["sha256"]):
+        sys.exit(f"model_version {m['model_version']!r}, but the checksums give {version_of(m['sha256'])!r}")
     for name in OPTIONAL:
         if name not in m["sha256"] and os.path.exists(f"{d}/{name}"):
             sys.exit(f"{name} is in the directory but not in the manifest")

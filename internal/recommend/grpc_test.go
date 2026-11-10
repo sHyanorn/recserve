@@ -56,10 +56,10 @@ func TestShardFaultsOverGRPC(t *testing.T) {
 	}
 	local.rankWith = linearRanker
 	root := t.TempDir()
-	annshardtest.WriteVectors(t, root, "v1", local.Bundle.Vectors)
+	version := annshardtest.WriteVectors(t, root, local.Bundle.Vectors)
 	proxies := []*infratest.Proxy{infratest.NewProxy(t, annshardtest.Start(t, root)), infratest.NewProxy(t, annshardtest.Start(t, root))}
 	client := annshardtest.Dial(t, [][]string{{proxies[0].Addr()}, {proxies[1].Addr()}}, annshard.Options{})
-	remote, err := client.Prepare(context.Background(), "v1", local.Bundle.ItemCount, local.Shards.Config())
+	remote, err := client.Prepare(context.Background(), version, local.Bundle.ItemCount, local.Shards.Config())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,6 +136,7 @@ func TestShardFaultsOverGRPC(t *testing.T) {
 // replica of a shard can be made faulty: it is behind a proxy, and fails
 // its searches while failing is set.
 type replicated struct {
+	version string
 	addrs   [][]string
 	proxies []*infratest.Proxy // of each shard's first replica
 	failing atomic.Bool
@@ -144,8 +145,7 @@ type replicated struct {
 func replicate(t *testing.T, m vec.Matrix) *replicated {
 	t.Helper()
 	root := t.TempDir()
-	annshardtest.WriteVectors(t, root, "v1", m)
-	c := &replicated{}
+	c := &replicated{version: annshardtest.WriteVectors(t, root, m)}
 	fail := grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if _, ok := req.(*annshardpb.SearchRequest); ok && c.failing.Load() {
 			return nil, status.Error(codes.Internal, "injected")
@@ -188,7 +188,7 @@ func checkProperty12(t *testing.T, lose func(*replicated), dial func(addrs [][]s
 	}
 	local.rankWith = linearRanker
 	c := replicate(t, local.Bundle.Vectors)
-	remote, err := dial(c.addrs).Prepare(context.Background(), "v1", local.Bundle.ItemCount, local.Shards.Config())
+	remote, err := dial(c.addrs).Prepare(context.Background(), c.version, local.Bundle.ItemCount, local.Shards.Config())
 	if err != nil {
 		return err
 	}
@@ -252,10 +252,10 @@ func TestSlowShardOverGRPC(t *testing.T) {
 	}
 	local.rankWith = linearRanker
 	root := t.TempDir()
-	annshardtest.WriteVectors(t, root, "v1", local.Bundle.Vectors)
+	version := annshardtest.WriteVectors(t, root, local.Bundle.Vectors)
 	slow := []*infratest.Proxy{infratest.NewProxy(t, annshardtest.Start(t, root)), infratest.NewProxy(t, annshardtest.Start(t, root))}
 	addrs := [][]string{{slow[0].Addr(), slow[1].Addr()}, {annshardtest.Start(t, root), annshardtest.Start(t, root)}}
-	remote, err := annshardtest.Dial(t, addrs, annshard.Options{HedgeDelay: 5 * time.Millisecond}).Prepare(context.Background(), "v1", local.Bundle.ItemCount, local.Shards.Config())
+	remote, err := annshardtest.Dial(t, addrs, annshard.Options{HedgeDelay: 5 * time.Millisecond}).Prepare(context.Background(), version, local.Bundle.ItemCount, local.Shards.Config())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,17 +291,19 @@ func TestSlowShardOverGRPC(t *testing.T) {
 	}
 }
 
-// swapReplicas is two shards of two replicas each for the swap tests.
+// swapReplicas is two shards of two replicas each for the swap tests. The
+// replicas know a test bundle's vectors by the version their files give.
 type swapReplicas struct {
-	roots [][]string // the bundle root of each replica, by shard
-	addrs [][]string
+	roots    [][]string // the bundle root of each replica, by shard
+	addrs    [][]string
+	versions map[string]string // by the test bundle's version
 }
 
 // startSwapReplicas starts the replicas, each over a bundle root of its
 // own and with the server options opts returns for it.
 func startSwapReplicas(t *testing.T, opts func() []grpc.ServerOption) *swapReplicas {
 	t.Helper()
-	c := &swapReplicas{roots: make([][]string, 2), addrs: make([][]string, 2)}
+	c := &swapReplicas{roots: make([][]string, 2), addrs: make([][]string, 2), versions: map[string]string{}}
 	for i := range c.roots {
 		for range 2 {
 			root := t.TempDir()
@@ -316,7 +318,7 @@ func startSwapReplicas(t *testing.T, opts func() []grpc.ServerOption) *swapRepli
 // replica j of shard i.
 func (c *swapReplicas) give(t *testing.T, i, j int, v string, items int) {
 	t.Helper()
-	annshardtest.WriteVectors(t, c.roots[i][j], v, swapBundleOf(t, v, nil, items).Vectors)
+	c.versions[v] = annshardtest.WriteVectors(t, c.roots[i][j], swapBundleOf(t, v, nil, items).Vectors)
 }
 
 // prepare returns the function that prepares a bundle's version on the
@@ -324,7 +326,7 @@ func (c *swapReplicas) give(t *testing.T, i, j int, v string, items int) {
 func (c *swapReplicas) prepare(t *testing.T) func(*bundle.Bundle) (Shards, error) {
 	client := annshardtest.Dial(t, c.addrs, annshard.Options{HedgeDelay: 5 * time.Millisecond})
 	return func(b *bundle.Bundle) (Shards, error) {
-		return client.Prepare(context.Background(), b.ModelVersion, b.ItemCount, shard.DefaultConfig)
+		return client.Prepare(context.Background(), c.versions[b.ModelVersion], b.ItemCount, shard.DefaultConfig)
 	}
 }
 

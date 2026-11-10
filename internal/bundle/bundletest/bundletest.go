@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -28,9 +29,9 @@ const CoocWidth = 50
 // Edit changes a bundle's files and manifest before its checksums are written.
 type Edit func(files map[string][]byte, manifest map[string]any)
 
-// Write writes a bundle with user_encoder mean, version "test" and
-// train_cutoff_ts 100 to a new temporary directory and returns it. The
-// edits apply in order.
+// Write writes a bundle with user_encoder mean and train_cutoff_ts 100 to a
+// new temporary directory and returns it. The edits apply in order. Its
+// model_version is the one its files give, unless an edit sets one.
 func Write(t testing.TB, edits ...Edit) string {
 	t.Helper()
 	var ids strings.Builder
@@ -48,7 +49,7 @@ func Write(t testing.TB, edits ...Edit) string {
 	cooc[1*CoocWidth], cooc[1*CoocWidth+1] = 3, 2
 	files["cooc_ids.npy"] = npy.Encode([]int{Items + 1, CoocWidth}, nil, cooc)
 	m := map[string]any{
-		"format_version": 1, "model_version": "test", "dataset": "test", "train_cutoff_ts": 100,
+		"format_version": 1, "dataset": "test", "train_cutoff_ts": 100,
 		"item_count": Items, "dim": 2, "metric": "dot", "normalized": false, "max_seq_len": 50,
 		"pad_id": 0, "user_encoder": "mean",
 	}
@@ -65,15 +66,54 @@ func Write(t testing.TB, edits ...Edit) string {
 		}
 	}
 	m["sha256"] = sums
+	if _, set := m["model_version"]; !set {
+		m["model_version"] = versionOf(sums)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), Marshal(t, m), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return dir
 }
 
-// Version sets the bundle's model_version.
+// versionOf is bundle.VersionOf, which this package cannot call: the
+// bundle package's own tests import it.
+func versionOf(sums map[string]string) string {
+	h := sha256.New()
+	for _, name := range slices.Sorted(maps.Keys(sums)) {
+		h.Write([]byte(name + sums[name]))
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
+}
+
+// Version sets the bundle's model_version, which the loader rejects unless
+// the bundle's files give it.
 func Version(v string) Edit {
 	return func(_ map[string][]byte, m map[string]any) { m["model_version"] = v }
+}
+
+// Variant adds a golden case for the history of item n, 1 to Items, to the
+// bundle Write makes: a bundle of its own version that serves the same
+// responses.
+func Variant(t testing.TB, n int32) Edit {
+	return func(f map[string][]byte, _ map[string]any) {
+		f["golden.jsonl"] = append(f["golden.jsonl"], GoldenLine(t, onnxtest.MeanVectors(), 50, []int32{n})...)
+	}
+}
+
+// VersionOf returns the model_version of the bundle in dir.
+func VersionOf(t testing.TB, dir string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		ModelVersion string `json:"model_version"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	return m.ModelVersion
 }
 
 // GoldenLine is a correct golden case for history over the given

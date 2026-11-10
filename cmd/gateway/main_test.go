@@ -64,7 +64,7 @@ func localShards(t *testing.T) func(*bundle.Bundle) (recommend.Shards, error) {
 func TestPreparerOnReplicas(t *testing.T) {
 	dir := bundletest.Write(t)
 	root := t.TempDir() // the replicas' bundle root: one directory per version
-	if err := os.Symlink(dir, filepath.Join(root, "test")); err != nil {
+	if err := os.Symlink(dir, filepath.Join(root, bundletest.VersionOf(t, dir))); err != nil {
 		t.Fatal(err)
 	}
 	index, _, closeShards, err := openShards(annshardtest.StartAll(t, root, 2, 1), shard.DefaultConfig, 0, 10*time.Second, nil, nil)
@@ -96,7 +96,7 @@ func TestPreparerOnReplicas(t *testing.T) {
 	if len(got.Items) == 0 || !slices.Equal(got.Items, want.Items) || len(got.Degraded) > 0 || *got.Coverage != *want.Coverage {
 		t.Fatalf("got %+v\nwant %+v", got, want)
 	}
-	if _, err := preparer(bundle.Options{}, store, index, recommend.Budgets{}, nil)(bundletest.Write(t, bundletest.Version("other"))); err == nil {
+	if _, err := preparer(bundle.Options{}, store, index, recommend.Budgets{}, nil)(bundletest.Write(t, bundletest.Variant(t, 1))); err == nil {
 		t.Fatal("a version the replicas lack was prepared")
 	}
 }
@@ -124,33 +124,36 @@ func TestSwapThroughPreparer(t *testing.T) {
 	t.Cleanup(apiSrv.Close)
 	t.Cleanup(admin.Close)
 
-	tampered := bundletest.Write(t, bundletest.Version("v3"))
+	tampered := bundletest.Write(t, bundletest.Variant(t, 3))
 	if err := os.WriteFile(filepath.Join(tampered, "popular.npy"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	otherVectors := onnxtest.MeanVectors()
 	otherVectors[2] += 0.5 // item 1
+	first := bundletest.VersionOf(t, bundletest.Write(t))
+	good := bundletest.Write(t, bundletest.Variant(t, 2))
+	otherItems := bundletest.Write(t, func(f map[string][]byte, _ map[string]any) {
+		f["items.ids"] = []byte(strings.Replace(string(f["items.ids"]), "item12\n", "itemX\n", 1))
+	})
 	steps := []struct {
 		name, dir string
 		code      int
 		want      string // in the error, or the version now active
 	}{
 		{"checksum", tampered, http.StatusUnprocessableEntity, "checksum"},
-		{"golden", bundletest.Write(t, bundletest.Version("v4"), func(f map[string][]byte, _ map[string]any) {
+		{"golden", bundletest.Write(t, func(f map[string][]byte, _ map[string]any) {
 			f["golden.jsonl"] = []byte(bundletest.GoldenLine(t, otherVectors, 50, []int32{1}))
 		}), http.StatusUnprocessableEntity, "user vector"},
-		{"cutoff", bundletest.Write(t, bundletest.Version("v5"), func(_ map[string][]byte, m map[string]any) {
+		{"cutoff", bundletest.Write(t, bundletest.Variant(t, 5), func(_ map[string][]byte, m map[string]any) {
 			m["train_cutoff_ts"] = 150
 		}), http.StatusUnprocessableEntity, bundle.ErrCutoff.Error()},
 		{"no directory", filepath.Join(t.TempDir(), "none"), http.StatusUnprocessableEntity, "no such file"},
 		{"same version", bundletest.Write(t), http.StatusConflict, recommend.ErrActive.Error()},
-		{"good", bundletest.Write(t, bundletest.Version("v2")), http.StatusOK, "v2"},
-		{"other items", bundletest.Write(t, bundletest.Version("v6"), func(f map[string][]byte, _ map[string]any) {
-			f["items.ids"] = []byte(strings.Replace(string(f["items.ids"]), "item12\n", "itemX\n", 1))
-		}), http.StatusOK, "v6"},
-		{"back", bundletest.Write(t), http.StatusOK, "test"},
+		{"good", good, http.StatusOK, bundletest.VersionOf(t, good)},
+		{"other items", otherItems, http.StatusOK, bundletest.VersionOf(t, otherItems)},
+		{"back", bundletest.Write(t), http.StatusOK, first},
 	}
-	active := "test"
+	active := first
 	for _, s := range steps {
 		body, err := json.Marshal(api.SwapRequest{Bundle: s.dir})
 		if err != nil {

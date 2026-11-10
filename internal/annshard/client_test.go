@@ -83,10 +83,10 @@ func TestHNSWEqualsInProcess(t *testing.T) {
 func TestSearchErrors(t *testing.T) {
 	r := rand.New(rand.NewPCG(3, 3))
 	root := t.TempDir()
-	annshardtest.WriteVectors(t, root, "v1", shardtest.RandomMatrix(r, 50, 2))
+	v1 := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2))
 	proxy := infratest.NewProxy(t, annshardtest.Start(t, root))
 	c := annshardtest.Dial(t, [][]string{{proxy.Addr()}}, annshard.Options{})
-	s, err := c.Prepare(context.Background(), "v1", 50, shard.Config{Shards: 1, Mode: shard.Exact})
+	s, err := c.Prepare(context.Background(), v1, 50, shard.Config{Shards: 1, Mode: shard.Exact})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,21 +126,21 @@ func TestPrepareErrors(t *testing.T) {
 	r := rand.New(rand.NewPCG(4, 4))
 	m := shardtest.RandomMatrix(r, 50, 2)
 	rootA, rootB := t.TempDir(), t.TempDir()
-	annshardtest.WriteVectors(t, rootA, "v1", m)
-	annshardtest.WriteVectors(t, rootA, "v2", m)
-	annshardtest.WriteVectors(t, rootB, "v1", m)
+	v1 := annshardtest.WriteVectors(t, rootA, m)
+	v2 := annshardtest.WriteVectors(t, rootA, shardtest.RandomMatrix(r, 50, 2))
+	annshardtest.WriteVectors(t, rootB, m)
 	c := annshardtest.Dial(t, [][]string{{annshardtest.Start(t, rootA)}, {annshardtest.Start(t, rootB)}}, annshard.Options{})
 	ctx := context.Background()
 	cfg := shard.Config{Shards: 2, Mode: shard.Exact}
-	if _, err := c.Prepare(ctx, "v1", 50, cfg); err != nil {
+	if _, err := c.Prepare(ctx, v1, 50, cfg); err != nil {
 		t.Fatal(err)
 	}
 	// Shard 1's replica lacks v2.
-	if _, err := c.Prepare(ctx, "v2", 50, cfg); err == nil {
+	if _, err := c.Prepare(ctx, v2, 50, cfg); err == nil {
 		t.Fatal("a version one shard lacks was prepared")
 	}
 	for _, bad := range []shard.Config{{Shards: 3, Mode: shard.Exact}, {Shards: 2, Mode: "ivf"}} {
-		if _, err := c.Prepare(ctx, "v1", 50, bad); err == nil {
+		if _, err := c.Prepare(ctx, v1, 50, bad); err == nil {
 			t.Errorf("%+v accepted", bad)
 		}
 	}
@@ -151,14 +151,14 @@ func TestPrepareNeedsAReplicaPerShard(t *testing.T) {
 	r := rand.New(rand.NewPCG(8, 8))
 	m := shardtest.RandomMatrix(r, 100, 2)
 	full, empty := t.TempDir(), t.TempDir()
-	annshardtest.WriteVectors(t, full, "v1", m)
+	v1 := annshardtest.WriteVectors(t, full, m)
 	has, lacks := func() string { return annshardtest.Start(t, full) }, func() string { return annshardtest.Start(t, empty) }
 	cfg := shard.Config{Shards: 2, Mode: shard.Exact}
 	ctx := context.Background()
-	if _, err := annshardtest.Dial(t, [][]string{{has(), lacks()}, {lacks(), has()}}, annshard.Options{}).Prepare(ctx, "v1", 100, cfg); err != nil {
+	if _, err := annshardtest.Dial(t, [][]string{{has(), lacks()}, {lacks(), has()}}, annshard.Options{}).Prepare(ctx, v1, 100, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := annshardtest.Dial(t, [][]string{{has(), has()}, {lacks(), lacks()}}, annshard.Options{}).Prepare(ctx, "v1", 100, cfg); err == nil {
+	if _, err := annshardtest.Dial(t, [][]string{{has(), has()}, {lacks(), lacks()}}, annshard.Options{}).Prepare(ctx, v1, 100, cfg); err == nil {
 		t.Fatal("prepared with a shard none of whose replicas holds the version")
 	}
 }

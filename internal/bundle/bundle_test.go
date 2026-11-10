@@ -334,6 +334,25 @@ func TestLoadRejectsTamperedFile(t *testing.T) {
 	}
 }
 
+// A bundle's version is derived from its files as tools/bundle/build.py
+// derives it; the expected value was computed with that formula in Python.
+func TestVersionOf(t *testing.T) {
+	if got := VersionOf(map[string]string{"items.npy": "ab", "golden.jsonl": "cd", "items.ids": "ef"}); got != "2e07d71d1077" {
+		t.Fatalf("VersionOf = %q", got)
+	}
+}
+
+// Load and Vectors reject a bundle whose model_version is not the one its
+// files give, as when a bundle is put in the place of another under its name
+// (D046).
+func TestLoadRejectsVersion(t *testing.T) {
+	dir := writeBundle(t, bundletest.Version("v2"))
+	checkRejected(t, dir, Options{}, "model_version")
+	if _, _, err := Vectors(dir); err == nil || !strings.Contains(err.Error(), "model_version") {
+		t.Fatalf("Vectors: err = %v", err)
+	}
+}
+
 // Vectors returns the manifest and the vectors Load does, from a bundle
 // whose other files it does not read, and rejects a changed items.npy.
 func TestVectors(t *testing.T) {

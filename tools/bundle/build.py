@@ -171,6 +171,11 @@ def sha256(path):
     return h.hexdigest()
 
 
+def version_of(sums):
+    """The version of a bundle whose files have these checksums: it names every file."""
+    return hashlib.sha256("".join(f"{name}{sums[name]}" for name in sorted(sums)).encode()).hexdigest()[:12]
+
+
 def main(data, out, encoder):
     train = read_split(data, "train")
     test = read_split(data, "test")
@@ -249,8 +254,8 @@ def main(data, out, encoder):
         f.writelines(json.dumps(g, allow_nan=False) + "\n" for g in golden)
     files = sorted(os.listdir(d))
     sums = {name: sha256(f"{d}/{name}") for name in files}
-    # The version names every file, so a change of any setting gives a new version.
-    version = hashlib.sha256("".join(f"{k}{v}" for k, v in sums.items()).encode()).hexdigest()[:12]
+    # A change of any setting changes a file, and so the version.
+    version = version_of(sums)
     build = {"seed": SEED, "als": ALS, "implicit": implicit.__version__, "cooc_window": COOC_WINDOW, "popular_days": POPULAR_DAYS}
     if enc:
         build["user_encoder"] = {"graph": "mean", "opset": OPSET, "onnx": onnx.__version__, "onnxruntime": ort.__version__}

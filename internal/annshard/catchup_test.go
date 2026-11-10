@@ -71,18 +71,18 @@ func TestReplicaCatchesUp(t *testing.T) {
 	r := rand.New(rand.NewPCG(6, 6))
 	m := shardtest.RandomMatrix(r, 100, 2)
 	full, late := t.TempDir(), t.TempDir()
-	annshardtest.WriteVectors(t, full, "v1", m)
+	v1 := annshardtest.WriteVectors(t, full, m)
 	behind := annshardtest.Start(t, late)
 	c := annshardtest.Dial(t, [][]string{{behind, annshardtest.Start(t, full)}}, annshard.Options{})
-	s, err := c.Prepare(context.Background(), "v1", 100, shard.Config{Shards: 1, Mode: shard.Exact})
+	s, err := c.Prepare(context.Background(), v1, 100, shard.Config{Shards: 1, Mode: shard.Exact})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if holds(t, behind, "v1") {
+	if holds(t, behind, v1) {
 		t.Fatal("the replica without the bundle holds its index")
 	}
-	annshardtest.WriteVectors(t, late, "v1", m)
-	searchUntil(t, s, m, func() bool { return holds(t, behind, "v1") })
+	annshardtest.WriteVectors(t, late, m)
+	searchUntil(t, s, m, func() bool { return holds(t, behind, v1) })
 }
 
 // The client tells a replica which version the gateway serves, when it
@@ -90,20 +90,20 @@ func TestReplicaCatchesUp(t *testing.T) {
 // keeps that version although another was named later (D043).
 func TestReplicasKeepTheServingVersion(t *testing.T) {
 	r := rand.New(rand.NewPCG(17, 17))
-	m := shardtest.RandomMatrix(r, 100, 2)
+	matrices := make([]vec.Matrix, 4)
+	for i := range matrices {
+		matrices[i] = shardtest.RandomMatrix(r, 100, 2)
+	}
 	rootA, rootB := t.TempDir(), t.TempDir()
-	for _, v := range []string{"v1", "v3", "v4"} {
-		annshardtest.WriteVectors(t, rootA, v, m)
-	}
-	for _, v := range []string{"v1", "v2"} {
-		annshardtest.WriteVectors(t, rootB, v, m)
-	}
+	v1, v2 := annshardtest.WriteVectors(t, rootB, matrices[0]), annshardtest.WriteVectors(t, rootB, matrices[1])
+	v3, v4 := annshardtest.WriteVectors(t, rootA, matrices[2]), annshardtest.WriteVectors(t, rootA, matrices[3])
+	annshardtest.WriteVectors(t, rootA, matrices[0])
 	a := annshardtest.Start(t, rootA)
-	c := annshardtest.Dial(t, [][]string{{a, annshardtest.Start(t, rootB)}}, annshard.Options{Serving: func() string { return "v1" }})
+	c := annshardtest.Dial(t, [][]string{{a, annshardtest.Start(t, rootB)}}, annshard.Options{Serving: func() string { return v1 }})
 	ctx := context.Background()
 	cfg := shard.Config{Shards: 1, Mode: shard.Exact}
 	var s2 *annshard.Shards
-	for _, v := range []string{"v1", "v3", "v2"} { // a holds v1 and v3, v3 named last
+	for _, v := range []string{v1, v3, v2} { // a holds v1 and v3, v3 named last
 		s, err := c.Prepare(ctx, v, 100, cfg)
 		if err != nil {
 			t.Fatal(err)
@@ -111,19 +111,19 @@ func TestReplicasKeepTheServingVersion(t *testing.T) {
 		s2 = s
 	}
 	// Catching up on v2, a has three versions and drops v3, not v1.
-	annshardtest.WriteVectors(t, rootA, "v2", m)
-	searchUntil(t, s2, m, func() bool { return holds(t, a, "v2") })
-	if holds(t, a, "v3") || !holds(t, a, "v1") {
+	annshardtest.WriteVectors(t, rootA, matrices[1])
+	searchUntil(t, s2, matrices[1], func() bool { return holds(t, a, v2) })
+	if holds(t, a, v3) || !holds(t, a, v1) {
 		t.Fatal("catching up, the replica dropped the version served")
 	}
 	// Preparing v4, it drops v2, which the probe below names last, not v1.
-	if !holds(t, a, "v2") {
+	if !holds(t, a, v2) {
 		t.Fatal("the replica lost v2")
 	}
-	if _, err := c.Prepare(ctx, "v4", 100, cfg); err != nil {
+	if _, err := c.Prepare(ctx, v4, 100, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if holds(t, a, "v2") || !holds(t, a, "v1") {
+	if holds(t, a, v2) || !holds(t, a, v1) {
 		t.Fatal("preparing a version, the replica dropped the version served")
 	}
 }
@@ -135,14 +135,14 @@ func TestReplicaRestartsEmpty(t *testing.T) {
 	r := rand.New(rand.NewPCG(7, 7))
 	m := shardtest.RandomMatrix(r, 100, 2)
 	root := t.TempDir()
-	annshardtest.WriteVectors(t, root, "v1", m)
+	v1 := annshardtest.WriteVectors(t, root, m)
 	addr, stop := annshardtest.StartOn(t, "127.0.0.1:0", root)
 	c := annshardtest.Dial(t, [][]string{{addr, annshardtest.Start(t, root)}}, annshard.Options{})
-	s, err := c.Prepare(context.Background(), "v1", 100, shard.Config{Shards: 1, Mode: shard.Exact})
+	s, err := c.Prepare(context.Background(), v1, 100, shard.Config{Shards: 1, Mode: shard.Exact})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !holds(t, addr, "v1") {
+	if !holds(t, addr, v1) {
 		t.Fatal("the replica does not hold the index it prepared")
 	}
 	stop()
@@ -153,6 +153,6 @@ func TestReplicaRestartsEmpty(t *testing.T) {
 			down = false
 			return false
 		}
-		return holds(t, addr, "v1")
+		return holds(t, addr, v1)
 	})
 }

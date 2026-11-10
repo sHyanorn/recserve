@@ -94,11 +94,11 @@ func TestSilentReplicaStopsCostingHedges(t *testing.T) {
 	r := rand.New(rand.NewPCG(9, 9))
 	m := shardtest.RandomMatrix(r, 100, 2)
 	root := t.TempDir()
-	annshardtest.WriteVectors(t, root, "v1", m)
+	version := annshardtest.WriteVectors(t, root, m)
 	silent := infratest.NewProxy(t, annshardtest.Start(t, root))
 	c := annshardtest.Dial(t, [][]string{{silent.Addr(), annshardtest.Start(t, root)}}, annshard.Options{HedgeDelay: 20 * time.Millisecond})
 	cfg := shard.Config{Shards: 1, Mode: shard.Exact}
-	s, err := c.Prepare(context.Background(), "v1", 100, cfg)
+	s, err := c.Prepare(context.Background(), version, 100, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

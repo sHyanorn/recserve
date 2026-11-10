@@ -25,7 +25,7 @@ func TestServe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	annshardtest.WriteVectors(t, root, "v1", m)
+	version := annshardtest.WriteVectors(t, root, m)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +45,7 @@ func TestServe(t *testing.T) {
 	if err != nil || h.GetStatus() != healthpb.HealthCheckResponse_SERVING {
 		t.Fatalf("health: %v, %v", h.GetStatus(), err)
 	}
-	ix := &annshardpb.Index{Version: "v1", Shards: 1, Mode: annshardpb.Mode_MODE_EXACT}
+	ix := &annshardpb.Index{Version: version, Shards: 1, Mode: annshardpb.Mode_MODE_EXACT}
 	c := annshardpb.NewAnnShardClient(conn)
 	if _, err := c.Prepare(call, &annshardpb.PrepareRequest{Index: ix}); err != nil {
 		t.Fatal(err)

@@ -31,7 +31,7 @@ import (
 func TestFailureIsNotHiddenByTimeout(t *testing.T) {
 	r := rand.New(rand.NewPCG(15, 15))
 	root := t.TempDir()
-	annshardtest.WriteVectors(t, root, "v1", shardtest.RandomMatrix(r, 50, 2))
+	version := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2))
 	failing := annshardtest.Start(t, root, grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if _, ok := req.(*annshardpb.SearchRequest); ok {
 			return nil, status.Error(codes.Internal, "injected")
@@ -40,7 +40,7 @@ func TestFailureIsNotHiddenByTimeout(t *testing.T) {
 	}))
 	silent := infratest.NewProxy(t, annshardtest.Start(t, root))
 	c := annshardtest.Dial(t, [][]string{{failing, silent.Addr()}}, annshard.Options{})
-	s, err := c.Prepare(context.Background(), "v1", 50, shard.Config{Shards: 1, Mode: shard.Exact})
+	s, err := c.Prepare(context.Background(), version, 50, shard.Config{Shards: 1, Mode: shard.Exact})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,17 +67,22 @@ func TestFailureIsNotHiddenByTimeout(t *testing.T) {
 	}
 }
 
-// A replica given other vectors under a version's name may return an item
-// the gateway's bundle does not hold. Its answer is a failure that names
-// the replica and the version: the shard's other replica answers, and with
-// no other the search fails.
-func TestReplicaWithAnotherCatalogFails(t *testing.T) {
+// A replica that returns an item the gateway's bundle does not hold, as a
+// faulty one may, fails: its answer is an error that names the replica and
+// the version, the shard's other replica answers, and with no other the
+// search fails. The gateway has no vector for such an item.
+func TestReplicaWithAnItemOutsideFails(t *testing.T) {
 	r := rand.New(rand.NewPCG(16, 16))
 	m := shardtest.RandomMatrix(r, 50, 2)
-	root, larger := t.TempDir(), t.TempDir()
-	annshardtest.WriteVectors(t, root, "v1", m)
-	annshardtest.WriteVectors(t, larger, "v1", shardtest.RandomMatrix(r, 60, 2))
-	stray := annshardtest.Start(t, larger)
+	root := t.TempDir()
+	version := annshardtest.WriteVectors(t, root, m)
+	stray := annshardtest.Start(t, root, grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		resp, err := handler(ctx, req)
+		if s, ok := resp.(*annshardpb.SearchResponse); ok && err == nil {
+			s.Ids[0] = 51
+		}
+		return resp, err
+	}))
 	cfg := shard.Config{Shards: 1, Mode: shard.Exact}
 	local, err := shard.Build(m, cfg)
 	if err != nil {
@@ -86,16 +91,16 @@ func TestReplicaWithAnotherCatalogFails(t *testing.T) {
 	ctx := context.Background()
 	q := []float32{1, 1}
 
-	alone, err := annshardtest.Dial(t, [][]string{{stray}}, annshard.Options{}).Prepare(ctx, "v1", 50, cfg)
+	alone, err := annshardtest.Dial(t, [][]string{{stray}}, annshard.Options{}).Prepare(ctx, version, 50, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = alone.Search(ctx, 0, q, 60, nil)
-	if err == nil || !strings.Contains(err.Error(), stray) || !strings.Contains(err.Error(), "v1") {
+	if err == nil || !strings.Contains(err.Error(), stray) || !strings.Contains(err.Error(), version) {
 		t.Fatalf("err = %v, want one that names the replica %s and the version", err, stray)
 	}
 
-	both, err := annshardtest.Dial(t, [][]string{{stray, annshardtest.Start(t, root)}}, annshard.Options{}).Prepare(ctx, "v1", 50, cfg)
+	both, err := annshardtest.Dial(t, [][]string{{stray, annshardtest.Start(t, root)}}, annshard.Options{}).Prepare(ctx, version, 50, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +125,7 @@ func TestReplicaDiesDuringSearches(t *testing.T) {
 	r := rand.New(rand.NewPCG(5, 5))
 	m := shardtest.RandomMatrix(r, 200, 2)
 	root := t.TempDir()
-	annshardtest.WriteVectors(t, root, "v1", m)
+	version := annshardtest.WriteVectors(t, root, m)
 	cfg := shard.Config{Shards: 1, Mode: shard.Exact}
 	// The replica that dies holds every search it gets until it is gone.
 	const searches = 8
@@ -134,7 +139,7 @@ func TestReplicaDiesDuringSearches(t *testing.T) {
 	})
 	dying := infratest.NewProxy(t, annshardtest.Start(t, root, hold))
 	c := annshardtest.Dial(t, [][]string{{dying.Addr(), annshardtest.Start(t, root)}}, annshard.Options{})
-	s, err := c.Prepare(context.Background(), "v1", 200, cfg)
+	s, err := c.Prepare(context.Background(), version, 200, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

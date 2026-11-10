@@ -63,6 +63,17 @@ func holdsIndex(t *testing.T, addr, version string) bool {
 	}) == nil
 }
 
+// link puts the bundle in dir under root, in the directory named by its
+// version, as a replica finds it, and returns the version.
+func link(t *testing.T, root, dir string) string {
+	t.Helper()
+	v := bundletest.VersionOf(t, dir)
+	if err := os.Symlink(dir, filepath.Join(root, v)); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
 // The gateway binary on four annshard processes, two shards of two
 // replicas: a replica killed with SIGKILL under requests costs no response;
 // a swap through the admin API goes through with that replica down; the
@@ -73,11 +84,7 @@ func TestShardReplicasKilledAndSwapped(t *testing.T) {
 	// The replicas' bundle root holds one directory per version; the two
 	// versions have the same items and vectors.
 	root := t.TempDir()
-	for _, v := range []string{"test", "v2"} {
-		if err := os.Symlink(bundletest.Write(t, bundletest.Version(v)), filepath.Join(root, v)); err != nil {
-			t.Fatal(err)
-		}
-	}
+	v1, v2 := link(t, root, bundletest.Write(t)), link(t, root, bundletest.Write(t, bundletest.Variant(t, 2)))
 	replica := func(addr string) *exec.Cmd {
 		t.Helper()
 		cmd := start(t, "annshard", "-addr", addr, "-bundles", root)
@@ -92,7 +99,7 @@ func TestShardReplicasKilledAndSwapped(t *testing.T) {
 	addr, admin := freeAddr(t), freeAddr(t)
 	// No result cache, so that every request searches the shards, and
 	// generous budgets: the test is about replicas that fail, not slow ones.
-	start(t, "gateway", "-addr", addr, "-admin-addr", admin, "-bundle", filepath.Join(root, "test"), "-cache-size", "0",
+	start(t, "gateway", "-addr", addr, "-admin-addr", admin, "-bundle", filepath.Join(root, v1), "-cache-size", "0",
 		"-shard-addrs", addrs[0]+","+addrs[1]+";"+addrs[2]+","+addrs[3], "-budget-retrieval", "10s", "-budget-shard", "10s")
 	gw := "http://" + addr
 	eventually(t, 20*time.Second, "the gateway is not ready", func() bool { return up(gw + "/readyz") })
@@ -132,7 +139,7 @@ func TestShardReplicasKilledAndSwapped(t *testing.T) {
 			}
 		}
 	}
-	complete(20, "test")
+	complete(20, v1)
 
 	// A replica of shard 0 is killed while requests run.
 	killed := make(chan struct{})
@@ -147,9 +154,9 @@ func TestShardReplicasKilledAndSwapped(t *testing.T) {
 			running = false
 		default:
 		}
-		complete(10, "test")
+		complete(10, v1)
 	}
-	complete(50, "test")
+	complete(50, v1)
 
 	// A swap goes through on the replicas that are left.
 	swap := func(dir string) int {
@@ -161,26 +168,26 @@ func TestShardReplicasKilledAndSwapped(t *testing.T) {
 		defer resp.Body.Close() //nolint:errcheck // only the status is used
 		return resp.StatusCode
 	}
-	if status := swap(filepath.Join(root, "v2")); status != http.StatusOK {
+	if status := swap(filepath.Join(root, v2)); status != http.StatusOK {
 		t.Fatalf("swap with one replica down: status %d", status)
 	}
-	complete(20, "v2")
+	complete(20, v2)
 
 	// The killed replica comes back empty; searches that reach it have it
 	// prepare the active version. Then it serves shard 0 alone.
 	procs[0] = replica(addrs[0])
 	eventually(t, 60*time.Second, "the restarted replica was not prepared again", func() bool {
-		complete(1, "v2")
-		return holdsIndex(t, addrs[0], "v2")
+		complete(1, v2)
+		return holdsIndex(t, addrs[0], v2)
 	})
 	kill(procs[1])
-	complete(20, "v2")
+	complete(20, v2)
 
 	// A version that no replica has is rejected, and v2 goes on serving.
-	if status := swap(bundletest.Write(t, bundletest.Version("v3"))); status != http.StatusUnprocessableEntity {
+	if status := swap(bundletest.Write(t, bundletest.Variant(t, 3))); status != http.StatusUnprocessableEntity {
 		t.Fatalf("swap to a version the replicas lack: status %d", status)
 	}
-	complete(20, "v2")
+	complete(20, v2)
 
 	resp, err := http.Get(gw + "/metrics")
 	if err != nil {

@@ -1,6 +1,7 @@
 package annshard_test
 
 import (
+	"bytes"
 	"context"
 	"math/rand/v2"
 	"os"
@@ -51,7 +52,7 @@ func TestSearchEqualsInProcess(t *testing.T) {
 	const n, dim, shards = 400, 3, 3
 	m := shardtest.RandomMatrix(r, n, dim)
 	root := t.TempDir()
-	annshardtest.WriteVectors(t, root, "v1", m)
+	v1 := annshardtest.WriteVectors(t, root, m)
 	c := replica(t, root)
 	ctx := context.Background()
 	for _, cfg := range []shard.Config{
@@ -59,7 +60,7 @@ func TestSearchEqualsInProcess(t *testing.T) {
 		{Shards: shards, Mode: shard.HNSW, HNSW: hnsw.Config{M: 8, EfConstruction: 50, Seed: 7}, Ef: 60},
 	} {
 		for i := range shards {
-			ix := exactIndex("v1", i, shards)
+			ix := exactIndex(v1, i, shards)
 			if cfg.Mode == shard.HNSW {
 				ix.Mode, ix.HnswM, ix.HnswEfConstruction, ix.HnswSeed = annshardpb.Mode_MODE_HNSW, 8, 50, 7
 			}
@@ -105,15 +106,15 @@ func TestSearchEqualsInProcess(t *testing.T) {
 func TestSearchNeedsTheNamedIndex(t *testing.T) {
 	r := rand.New(rand.NewPCG(2, 2))
 	root := t.TempDir()
-	annshardtest.WriteVectors(t, root, "v1", shardtest.RandomMatrix(r, 50, 2))
-	annshardtest.WriteVectors(t, root, "v2", shardtest.RandomMatrix(r, 50, 2))
+	v1 := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2))
+	v2 := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2))
 	c := replica(t, root)
 	ctx := context.Background()
 	search := func(ix *annshardpb.Index) error {
 		_, err := c.Search(ctx, &annshardpb.SearchRequest{Index: ix, Query: []float32{1, 1}, K: 5})
 		return err
 	}
-	held := exactIndex("v1", 0, 2)
+	held := exactIndex(v1, 0, 2)
 	wantCode(t, search(held), codes.FailedPrecondition)
 	if _, err := c.Prepare(ctx, &annshardpb.PrepareRequest{Index: held}); err != nil {
 		t.Fatal(err)
@@ -121,9 +122,9 @@ func TestSearchNeedsTheNamedIndex(t *testing.T) {
 	if err := search(held); err != nil {
 		t.Fatal(err)
 	}
-	hnsw := exactIndex("v1", 0, 2)
+	hnsw := exactIndex(v1, 0, 2)
 	hnsw.Mode, hnsw.HnswM, hnsw.HnswEfConstruction = annshardpb.Mode_MODE_HNSW, 8, 50
-	for _, other := range []*annshardpb.Index{exactIndex("v2", 0, 2), exactIndex("v1", 1, 2), exactIndex("v1", 0, 3), hnsw} {
+	for _, other := range []*annshardpb.Index{exactIndex(v2, 0, 2), exactIndex(v1, 1, 2), exactIndex(v1, 0, 3), hnsw} {
 		wantCode(t, search(other), codes.FailedPrecondition)
 	}
 }
@@ -132,7 +133,7 @@ func TestPrepare(t *testing.T) {
 	r := rand.New(rand.NewPCG(3, 3))
 	root := t.TempDir()
 	m := shardtest.RandomMatrix(r, 50, 2)
-	annshardtest.WriteVectors(t, root, "v1", m)
+	v1 := annshardtest.WriteVectors(t, root, m)
 	c := replica(t, root)
 	ctx := context.Background()
 	prepare := func(ix *annshardpb.Index) error {
@@ -144,10 +145,10 @@ func TestPrepare(t *testing.T) {
 	errs := make([]error, 8)
 	var wg sync.WaitGroup
 	for i := range errs {
-		wg.Go(func() { errs[i] = prepare(exactIndex("v1", 0, 1)) })
+		wg.Go(func() { errs[i] = prepare(exactIndex(v1, 0, 1)) })
 	}
 	wg.Wait()
-	for _, err := range append(errs, prepare(exactIndex("v1", 0, 1))) {
+	for _, err := range append(errs, prepare(exactIndex(v1, 0, 1))) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -156,22 +157,42 @@ func TestPrepare(t *testing.T) {
 	wantCode(t, prepare(exactIndex("v9", 0, 1)), codes.NotFound)
 
 	// A directory that holds another version than its name says.
-	annshardtest.WriteVectors(t, root, "v2", m)
-	if err := os.Rename(filepath.Join(root, "v2"), filepath.Join(root, "v3")); err != nil {
+	v2 := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2))
+	if err := os.Rename(filepath.Join(root, v2), filepath.Join(root, "v3")); err != nil {
 		t.Fatal(err)
 	}
 	wantCode(t, prepare(exactIndex("v3", 0, 1)), codes.FailedPrecondition)
 
+	// Other vectors under a version's name, listed in its manifest with their
+	// own checksum: the version is not the one the files give (D046).
+	other := t.TempDir()
+	v4 := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2))
+	impostor := filepath.Join(other, annshardtest.WriteVectors(t, other, shardtest.RandomMatrix(r, 50, 2)))
+	for _, name := range []string{"manifest.json", "items.npy"} {
+		data, err := os.ReadFile(filepath.Join(impostor, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name == "manifest.json" {
+			data = bytes.Replace(data, []byte(filepath.Base(impostor)), []byte(v4), 1)
+		}
+		if err := os.WriteFile(filepath.Join(root, v4, name), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantCode(t, prepare(exactIndex(v4, 0, 1)), codes.FailedPrecondition)
+
 	// Vectors that are not the ones the manifest lists.
-	annshardtest.WriteVectors(t, root, "v4", m)
-	if err := os.WriteFile(filepath.Join(root, "v4", "items.npy"), []byte("tampered"), 0o644); err != nil {
+	m5 := shardtest.RandomMatrix(r, 50, 2)
+	v5 := annshardtest.WriteVectors(t, root, m5)
+	if err := os.WriteFile(filepath.Join(root, v5, "items.npy"), []byte("tampered"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	wantCode(t, prepare(exactIndex("v4", 0, 1)), codes.FailedPrecondition)
+	wantCode(t, prepare(exactIndex(v5, 0, 1)), codes.FailedPrecondition)
 
 	// A failed build is tried again by the next request.
-	annshardtest.WriteVectors(t, root, "v4", m)
-	if err := prepare(exactIndex("v4", 0, 1)); err != nil {
+	annshardtest.WriteVectors(t, root, m5)
+	if err := prepare(exactIndex(v5, 0, 1)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -179,14 +200,14 @@ func TestPrepare(t *testing.T) {
 func TestInvalidRequests(t *testing.T) {
 	r := rand.New(rand.NewPCG(4, 4))
 	root := t.TempDir()
-	annshardtest.WriteVectors(t, root, "v1", shardtest.RandomMatrix(r, 50, 2))
+	v1 := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2))
 	// A version must not lead out of the bundle root, here to a bundle
 	// beside it in the test's temporary directory.
-	annshardtest.WriteVectors(t, filepath.Dir(root), "outside", shardtest.RandomMatrix(r, 50, 2))
+	outside := annshardtest.WriteVectors(t, filepath.Dir(root), shardtest.RandomMatrix(r, 50, 2))
 	c := replica(t, root)
 	ctx := context.Background()
 	edit := func(f func(*annshardpb.Index)) *annshardpb.Index {
-		ix := exactIndex("v1", 0, 2)
+		ix := exactIndex(v1, 0, 2)
 		f(ix)
 		return ix
 	}
@@ -194,7 +215,7 @@ func TestInvalidRequests(t *testing.T) {
 		"no index":        nil,
 		"no version":      edit(func(ix *annshardpb.Index) { ix.Version = "" }),
 		"parent":          edit(func(ix *annshardpb.Index) { ix.Version = ".." }),
-		"path":            edit(func(ix *annshardpb.Index) { ix.Version = "../outside" }),
+		"path":            edit(func(ix *annshardpb.Index) { ix.Version = "../" + outside }),
 		"shard too high":  edit(func(ix *annshardpb.Index) { ix.Shard = 2 }),
 		"negative shard":  edit(func(ix *annshardpb.Index) { ix.Shard = -1 }),
 		"no shards":       edit(func(ix *annshardpb.Index) { ix.Shards = 0 }),
@@ -206,7 +227,7 @@ func TestInvalidRequests(t *testing.T) {
 			t.Errorf("prepare, %s: err = %v", name, err)
 		}
 	}
-	ix := exactIndex("v1", 0, 2)
+	ix := exactIndex(v1, 0, 2)
 	if _, err := c.Prepare(ctx, &annshardpb.PrepareRequest{Index: ix}); err != nil {
 		t.Fatal(err)
 	}
@@ -234,9 +255,8 @@ func TestInvalidRequests(t *testing.T) {
 func TestKeepsTwoVersions(t *testing.T) {
 	r := rand.New(rand.NewPCG(5, 5))
 	root := t.TempDir()
-	for _, v := range []string{"v1", "v2", "v3", "v4"} {
-		annshardtest.WriteVectors(t, root, v, shardtest.RandomMatrix(r, 50, 2))
-	}
+	write := func() string { return annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2)) }
+	v1, v2, v3, v4 := write(), write(), write(), write()
 	c := replica(t, root)
 	ctx := context.Background()
 	prepare := func(v string, shard int) {
@@ -250,11 +270,11 @@ func TestKeepsTwoVersions(t *testing.T) {
 		return err
 	}
 	// Two shards of a version are one version.
-	prepare("v1", 0)
-	prepare("v1", 1)
-	prepare("v2", 0)
-	prepare("v2", 1)
-	for _, v := range []string{"v1", "v2"} {
+	prepare(v1, 0)
+	prepare(v1, 1)
+	prepare(v2, 0)
+	prepare(v2, 1)
+	for _, v := range []string{v1, v2} {
 		for shard := range 2 {
 			if err := search(v, shard); err != nil {
 				t.Fatalf("%s shard %d: %v", v, shard, err)
@@ -262,30 +282,30 @@ func TestKeepsTwoVersions(t *testing.T) {
 		}
 	}
 	// v2 was named last, then v1 again: v3 replaces v2.
-	if err := search("v1", 0); err != nil {
+	if err := search(v1, 0); err != nil {
 		t.Fatal(err)
 	}
-	prepare("v3", 0)
-	wantCode(t, search("v2", 0), codes.FailedPrecondition)
-	wantCode(t, search("v2", 1), codes.FailedPrecondition)
+	prepare(v3, 0)
+	wantCode(t, search(v2, 0), codes.FailedPrecondition)
+	wantCode(t, search(v2, 1), codes.FailedPrecondition)
 	for _, held := range []struct {
 		v     string
 		shard int
-	}{{"v1", 0}, {"v1", 1}, {"v3", 0}} {
+	}{{v1, 0}, {v1, 1}, {v3, 0}} {
 		if err := search(held.v, held.shard); err != nil {
 			t.Fatalf("%s shard %d: %v", held.v, held.shard, err)
 		}
 	}
 	// A Prepare names a version as a search does: v1, named again, outlives v3.
-	prepare("v1", 0)
-	prepare("v4", 0)
-	wantCode(t, search("v3", 0), codes.FailedPrecondition)
-	if err := search("v1", 1); err != nil {
+	prepare(v1, 0)
+	prepare(v4, 0)
+	wantCode(t, search(v3, 0), codes.FailedPrecondition)
+	if err := search(v1, 1); err != nil {
 		t.Fatal(err)
 	}
 	// A dropped version is prepared again on request.
-	prepare("v2", 0)
-	if err := search("v2", 0); err != nil {
+	prepare(v2, 0)
+	if err := search(v2, 0); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -297,9 +317,8 @@ func TestKeepsTwoVersions(t *testing.T) {
 func TestKeepsTheServingVersion(t *testing.T) {
 	r := rand.New(rand.NewPCG(6, 6))
 	root := t.TempDir()
-	for _, v := range []string{"v1", "v2", "v3", "v4"} {
-		annshardtest.WriteVectors(t, root, v, shardtest.RandomMatrix(r, 50, 2))
-	}
+	write := func() string { return annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2)) }
+	v1, v2, v3, v4 := write(), write(), write(), write()
 	c := replica(t, root)
 	ctx := context.Background()
 	prepare := func(v, serving string) {
@@ -320,13 +339,13 @@ func TestKeepsTheServingVersion(t *testing.T) {
 			}
 		}
 	}
-	prepare("v1", "")
-	prepare("v2", "v1")
-	held("v1")
-	prepare("v3", "v2")
-	wantCode(t, search("v1"), codes.FailedPrecondition)
-	held("v3", "v2") // v2 is named last
-	prepare("v4", "v3")
-	wantCode(t, search("v2"), codes.FailedPrecondition)
-	held("v3", "v4")
+	prepare(v1, "")
+	prepare(v2, v1)
+	held(v1)
+	prepare(v3, v2)
+	wantCode(t, search(v1), codes.FailedPrecondition)
+	held(v3, v2) // v2 is named last
+	prepare(v4, v3)
+	wantCode(t, search(v2), codes.FailedPrecondition)
+	held(v3, v4)
 }

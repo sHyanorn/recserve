@@ -64,16 +64,16 @@ func (s *slowOnce) intercept(ctx context.Context, req any, _ *grpc.UnaryServerIn
 
 // checkProperty13 runs n searches, ten at a time, against a shard of two
 // replicas that both take longer than the hedge delay, through search,
-// which is given the two replicas' addresses. Every search must succeed,
+// which is given the two replicas' addresses and the version they hold. Every search must succeed,
 // the hedges must stay within 10 + n/10, some must be sent, and every
 // hedge, which loses by construction, must see its caller cancel it.
-func checkProperty13(t *testing.T, n int, client func(addrs []string) func(ctx context.Context, k int) error) error {
+func checkProperty13(t *testing.T, n int, client func(addrs []string, version string) func(ctx context.Context, k int) error) error {
 	r := rand.New(rand.NewPCG(13, 13))
 	root := t.TempDir()
-	annshardtest.WriteVectors(t, root, "v1", shardtest.RandomMatrix(r, n+50, 2))
+	version := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, n+50, 2))
 	slow := &slowOnce{service: 60 * time.Millisecond, arrived: map[int32]bool{}}
 	opt := grpc.UnaryInterceptor(slow.intercept)
-	search := client([]string{annshardtest.Start(t, root, opt), annshardtest.Start(t, root, opt)})
+	search := client([]string{annshardtest.Start(t, root, opt), annshardtest.Start(t, root, opt)}, version)
 	errs := make([]error, n)
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 10)
@@ -110,9 +110,9 @@ const property13HedgeDelay = 10 * time.Millisecond
 // Property 13: with every replica slower than the hedge delay, n searches
 // send at most 10 + n/10 hedges, and the call that loses is cancelled.
 func TestProperty13HedgesStayWithinBudget(t *testing.T) {
-	err := checkProperty13(t, 150, func(addrs []string) func(ctx context.Context, k int) error {
+	err := checkProperty13(t, 150, func(addrs []string, version string) func(ctx context.Context, k int) error {
 		c := annshardtest.Dial(t, [][]string{addrs}, annshard.Options{HedgeDelay: property13HedgeDelay})
-		s, err := c.Prepare(context.Background(), "v1", 200, shard.Config{Shards: 1, Mode: shard.Exact})
+		s, err := c.Prepare(context.Background(), version, 200, shard.Config{Shards: 1, Mode: shard.Exact})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -129,8 +129,8 @@ func TestProperty13HedgesStayWithinBudget(t *testing.T) {
 // The broken variant hedges as the client does, without a budget: every
 // slow search is sent twice.
 func TestProperty13CatchesBrokenVariant(t *testing.T) {
-	err := checkProperty13(t, 150, func(addrs []string) func(ctx context.Context, k int) error {
-		ix := exactIndex("v1", 0, 1)
+	err := checkProperty13(t, 150, func(addrs []string, version string) func(ctx context.Context, k int) error {
+		ix := exactIndex(version, 0, 1)
 		var replicas []annshardpb.AnnShardClient
 		for _, addr := range addrs {
 			conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))

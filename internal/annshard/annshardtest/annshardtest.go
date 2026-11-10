@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -19,22 +18,25 @@ import (
 
 	"github.com/sHyanorn/recserve/internal/annshard"
 	"github.com/sHyanorn/recserve/internal/annshard/annshardpb"
+	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/npy"
 	"github.com/sHyanorn/recserve/internal/shard"
 	"github.com/sHyanorn/recserve/internal/vec"
 )
 
 // WriteVectors writes what a replica reads of a bundle, its manifest and
-// items.npy, to the directory version under root. m holds the item vectors
-// from row 1 up, after a zero padding row.
-func WriteVectors(t testing.TB, root, version string, m vec.Matrix) {
+// items.npy, under root, in the directory named by the version these files
+// give, and returns the version. m holds the item vectors from row 1 up,
+// after a zero padding row.
+func WriteVectors(t testing.TB, root string, m vec.Matrix) string {
 	t.Helper()
 	items := npy.Encode([]int{m.Rows(), m.Dim}, m.Data, nil)
 	sum := sha256.Sum256(items)
+	sums := map[string]string{"items.npy": hex.EncodeToString(sum[:])}
+	version := bundle.VersionOf(sums)
 	manifest, err := json.Marshal(map[string]any{
 		"format_version": 1, "model_version": version, "item_count": m.Rows() - 1, "dim": m.Dim,
-		"metric": "dot", "pad_id": 0, "user_encoder": "mean", "max_seq_len": 1,
-		"sha256": map[string]string{"items.npy": hex.EncodeToString(sum[:])},
+		"metric": "dot", "pad_id": 0, "user_encoder": "mean", "max_seq_len": 1, "sha256": sums,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -48,6 +50,7 @@ func WriteVectors(t testing.TB, root, version string, m vec.Matrix) {
 			t.Fatal(err)
 		}
 	}
+	return version
 }
 
 // Start serves a replica over the bundle directories under root on a
@@ -113,11 +116,8 @@ func Remote(t testing.TB, maxShards int) func(m vec.Matrix, cfg shard.Config) (*
 	root := t.TempDir()
 	addrs := StartAll(t, root, maxShards, 1)
 	clients := map[int]*annshard.Client{} // by number of shards
-	versions := 0
 	return func(m vec.Matrix, cfg shard.Config) (*annshard.Shards, error) {
-		versions++
-		version := fmt.Sprint("v", versions)
-		WriteVectors(t, root, version, m)
+		version := WriteVectors(t, root, m)
 		if clients[cfg.Shards] == nil {
 			clients[cfg.Shards] = Dial(t, addrs[:cfg.Shards], annshard.Options{})
 		}

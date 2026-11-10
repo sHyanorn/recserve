@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -99,6 +100,18 @@ func Load(dir string, opt Options) (*Bundle, error) {
 	return b, nil
 }
 
+// VersionOf returns the version of a bundle whose files have the given
+// SHA-256 checksums, as tools/bundle/build.py derives it: the first 12 hex
+// digits of the SHA-256 of every file name followed by its checksum, in
+// name order. A version so names the content of every file.
+func VersionOf(sums map[string]string) string {
+	h := sha256.New()
+	for _, name := range slices.Sorted(maps.Keys(sums)) {
+		h.Write([]byte(name + sums[name]))
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
+}
+
 // readManifest reads dir's manifest.json and checks the fields every
 // reader depends on.
 func readManifest(dir string) (Manifest, error) {
@@ -117,6 +130,10 @@ func readManifest(dir string) (Manifest, error) {
 		return m, fmt.Errorf("unsupported metric %q, pad_id %d or user_encoder %q", m.Metric, m.PadID, m.UserEncoder)
 	case m.ItemCount <= 0 || m.Dim <= 0 || m.MaxSeqLen <= 0 || m.ModelVersion == "":
 		return m, errors.New("manifest: item_count, dim, max_seq_len and model_version are required")
+	case m.ModelVersion != VersionOf(m.SHA256):
+		// A replica and the gateway given different files under one name
+		// would otherwise serve them as one version (D046).
+		return m, fmt.Errorf("model_version %q, but the checksums give %q", m.ModelVersion, VersionOf(m.SHA256))
 	}
 	return m, nil
 }
