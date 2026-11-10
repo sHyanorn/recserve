@@ -9,6 +9,7 @@ require (
 	github.com/twmb/franz-go/pkg/kmsg v1.15.1
 	github.com/valkey-io/valkey-go v1.0.79
 	github.com/yalue/onnxruntime_go v1.38.0
+	golang.org/x/sync v0.25.0
 	golang.org/x/sys v0.48.0
 )
 

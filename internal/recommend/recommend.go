@@ -13,7 +13,10 @@ import (
 	"math"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/cache"
@@ -61,6 +64,7 @@ var Reasons = []string{
 const (
 	stageHistory = "history"
 	stageCache   = "cache"
+	stageFlight  = "singleflight"
 	stageEncoder = "encoder"
 	stageVector  = SourceVector // one call per shard
 	stageCooc    = SourceCooc
@@ -226,6 +230,10 @@ type Pipeline struct {
 	// write each run within Budgets.History.
 	Cache Cache
 
+	// flight lets the requests that miss the cache on one key at the same
+	// time compute the response once (once). New sets it.
+	flight *singleflight.Group
+
 	rankWith          Ranker // test only: replaces the bundle's ranker
 	skipSeenFilter    bool   // test only: the broken variant of property 2
 	keyWithoutVersion bool   // test only: the broken variant of property 5
@@ -234,10 +242,20 @@ type Pipeline struct {
 	// returns the bundle whose vectors score the candidates, read again
 	// instead of the one the request started on.
 	scoreBundle func() *bundle.Bundle
+	noFlight    bool // test only: the broken variant of property 11
+	// join, test only, runs when a request has joined the requests on its
+	// cache key, before it computes or waits.
+	join func()
 	// stall, test only, runs at the start of a stage under the stage's
 	// context; shard is the shard searched, -1 outside vector retrieval.
 	// An error fails the stage.
 	stall func(ctx context.Context, stage string, shard int) error
+}
+
+func (p *Pipeline) joined() {
+	if p.join != nil {
+		p.join()
+	}
 }
 
 func (p *Pipeline) stalled(ctx context.Context, stage string, shard int) error {
@@ -254,7 +272,7 @@ func New(b *bundle.Bundle, h history.Store, cfg shard.Config) (*Pipeline, error)
 	if err != nil {
 		return nil, err
 	}
-	return &Pipeline{Bundle: b, Shards: s, History: h}, nil
+	return &Pipeline{Bundle: b, Shards: s, History: h, flight: new(singleflight.Group)}, nil
 }
 
 func (p *Pipeline) ranker() Ranker {
@@ -277,42 +295,115 @@ type candidate struct {
 // reports why. If ctx ends, the request fails with an error that wraps
 // ctx.Err(). A request that fails after its cache lookup returns a response
 // that holds Cached and CacheErr only, so the lookup can still be counted.
-func (p *Pipeline) Recommend(ctx context.Context, req Request) (out Response, err error) {
+func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error) {
 	if req.K <= 0 || req.K > MaxK {
 		return Response{}, fmt.Errorf("k must be in 1..%d", MaxK)
 	}
 	if len(req.Recent) > MaxRecent {
 		return Response{}, fmt.Errorf("recent holds more than %d items", MaxRecent)
 	}
-	b := p.Bundle
 	var d degradation
 	hist, err := p.history(ctx, req, &d)
 	if err != nil {
 		return Response{}, err
 	}
-	var key cache.Key
-	var cacheErr error
-	useCache := p.Cache != nil && len(d.reasons) == 0
-	if useCache {
-		key = p.cacheKey(req, hist)
-		cctx, cancel := within(ctx, p.Budgets.History)
-		resp, ok, gerr := p.Cache.Get(cctx, key)
-		cancel()
-		if gerr != nil {
-			if err := ended(ctx, stageCache); err != nil {
-				return Response{}, err
-			}
-			cacheErr = gerr
-		} else if ok {
-			resp.Cached = &ok
-			return resp, nil
-		}
-		defer func() {
-			if err != nil {
-				out = Response{Cached: new(bool), CacheErr: cacheErr}
-			}
-		}()
+	if p.Cache == nil || len(d.reasons) > 0 {
+		return p.compute(ctx, req, hist, &d)
 	}
+	key := p.cacheKey(req, hist)
+	cctx, cancel := within(ctx, p.Budgets.History)
+	resp, ok, cacheErr := p.Cache.Get(cctx, key)
+	cancel()
+	if cacheErr != nil {
+		if err := ended(ctx, stageCache); err != nil {
+			return Response{}, err
+		}
+	} else if ok {
+		resp.Cached = &ok
+		return resp, nil
+	}
+	resp, led, err := p.once(ctx, key, func() (Response, error) {
+		resp, err := p.compute(ctx, req, hist, &d)
+		if err != nil || len(resp.Degraded) > 0 {
+			return resp, err
+		}
+		cctx, cancel := within(ctx, p.Budgets.History)
+		defer cancel()
+		// A request that ended while writing is no cache failure.
+		if err := p.Cache.Put(cctx, key, resp); ctx.Err() == nil {
+			resp.CacheErr = err
+		}
+		return resp, nil
+	})
+	if err != nil {
+		return Response{Cached: new(bool), CacheErr: cacheErr}, err
+	}
+	if !led {
+		// Another request computed the response: its ranking and its
+		// errors are counted and logged with that request.
+		resp.Dropped, resp.Failures, resp.CacheErr = 0, nil, nil
+	}
+	resp.Cached = new(bool)
+	if cacheErr != nil {
+		resp.CacheErr = cacheErr
+	}
+	return resp, nil
+}
+
+// The states of a request in once.
+const (
+	flightWaiting int32 = iota
+	flightStarted       // its compute runs: the request leads
+	flightLeft          // it returned before its compute could start
+)
+
+// once returns compute's response for key, computed once for the requests
+// that ask for it at the same time: the first of them leads and runs
+// compute, the others wait for its response, each as long as its own ctx
+// allows, and led is false for them. A leader that fails, which it does
+// only when its own ctx ends, takes no other request with it: those that
+// waited start over, and one of them leads.
+func (p *Pipeline) once(ctx context.Context, key cache.Key, compute func() (Response, error)) (resp Response, led bool, err error) {
+	if p.noFlight {
+		p.joined()
+		resp, err := compute()
+		return resp, true, err
+	}
+	for {
+		var state atomic.Int32
+		ch := p.flight.DoChan(string(key[:]), func() (any, error) {
+			if !state.CompareAndSwap(flightWaiting, flightStarted) {
+				return nil, ctx.Err()
+			}
+			return compute()
+		})
+		p.joined()
+		var r singleflight.Result
+		select {
+		case r = <-ch:
+		case <-ctx.Done():
+			if state.CompareAndSwap(flightWaiting, flightLeft) {
+				return Response{}, false, ended(ctx, stageFlight)
+			}
+			r = <-ch // a leader waits for what it started (D029)
+		}
+		led := state.Load() == flightStarted
+		if r.Err == nil {
+			return r.Val.(Response), led, nil
+		}
+		if led {
+			return Response{}, true, r.Err
+		}
+		if err := ended(ctx, stageFlight); err != nil {
+			return Response{}, false, err
+		}
+	}
+}
+
+// compute answers a request from its history, without the cache. The
+// response holds neither Cached nor CacheErr.
+func (p *Pipeline) compute(ctx context.Context, req Request, hist []int32, d *degradation) (Response, error) {
+	b := p.Bundle
 	seen := make(map[int32]bool, len(hist)+len(req.Exclude))
 	for _, id := range hist {
 		seen[id] = true
@@ -322,11 +413,11 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (out Response, er
 			seen[id] = true
 		}
 	}
-	uv, err := p.userVector(ctx, hist, &d)
+	uv, err := p.userVector(ctx, hist, d)
 	if err != nil {
 		return Response{}, err
 	}
-	results, cov, err := p.retrieve(ctx, hist, uv, seen, &d)
+	results, cov, err := p.retrieve(ctx, hist, uv, seen, d)
 	if err != nil {
 		return Response{}, err
 	}
@@ -356,20 +447,6 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (out Response, er
 		resp.Items[i] = Item{ID: b.IDs[h.ID], Score: h.Score}
 	}
 	resp.Degraded, resp.Failures = d.list(), d.failures
-	if useCache {
-		resp.Cached = new(bool)
-		if len(resp.Degraded) == 0 {
-			stored := resp
-			stored.Dropped, stored.Cached = 0, nil // a hit ranks nothing
-			cctx, cancel := within(ctx, p.Budgets.History)
-			perr := p.Cache.Put(cctx, key, stored)
-			cancel()
-			if cacheErr == nil && ctx.Err() == nil { // a request that ended while writing is no cache failure
-				cacheErr = perr
-			}
-		}
-		resp.CacheErr = cacheErr
-	}
 	return resp, nil
 }
 
