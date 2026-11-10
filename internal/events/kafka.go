@@ -19,8 +19,10 @@ const Topic = "events"
 type Kafka struct{ c *kgo.Client }
 
 // NewKafka returns a producer to the topic. It does not connect: brokers
-// that are down fail a Produce, not the start. A record not yet sent to a
-// broker fails once it has waited for the timeout.
+// that are down fail a Produce, not the start. Until the topic's metadata
+// is loaded, a record fails once it has waited for the timeout; after that,
+// a record waiting through a broker outage stays buffered and is produced
+// when the broker is back (D034, point 4).
 func NewKafka(brokers []string, topic string, timeout time.Duration) (*Kafka, error) {
 	if timeout < time.Second {
 		return nil, fmt.Errorf("events timeout %v: the Kafka client takes no record timeout below 1s", timeout)

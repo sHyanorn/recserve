@@ -63,6 +63,13 @@ func CreateTopic(t testing.TB, topic string, partitions int32) {
 	if err != nil {
 		t.Fatalf("creating topic %s: %v", topic, err)
 	}
+	DeleteTopic(t, topic)
+}
+
+// DeleteTopic deletes the topic when the test ends.
+func DeleteTopic(t testing.TB, topic string) {
+	t.Helper()
+	c := kafkaClient(t)
 	t.Cleanup(func() {
 		req := kmsg.NewPtrDeleteTopicsRequest()
 		req.TimeoutMillis = 15_000
