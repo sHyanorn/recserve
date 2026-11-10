@@ -54,13 +54,15 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] Rate limiting and bounded concurrency with 503
 - [ ] A/B assignment; property test 3 with its broken variant; the arm joins the result cache key (D030)
 - [ ] OpenTelemetry tracing
-- [ ] Dockerfiles and docker compose with Prometheus, Grafana and Jaeger
+- [ ] Dockerfiles and docker compose with Prometheus, Grafana and Jaeger. An alert rule on the growth of `recserve_shard_failovers_total`: a failure that another replica makes up for is counted there and not logged (D041). The counter is labelled by shard, so telling which replica fails needs a replica label
 - [ ] kind manifests: probes, resource limits, HPA with metrics-server (D022)
 - [ ] NetworkPolicy that lets only the gateways reach the annshard port: the shard API has no TLS or authentication (D040)
 - [ ] Swaps across several gateways in an order that keeps at most two versions in use: the replicas hold two (D042)
 - [ ] annshard: Dockerfile, readiness on `grpc.health.v1`, graceful shutdown beyond finishing the calls in flight. A restarted replica is empty until catch-up and serves at once, so a rolling restart must not take a shard's next replica before the first holds the index again (D042)
 - [ ] Graceful shutdown: readiness flip, preStop wait, drain, offset commit
 - [ ] Zero-error check under load through a rollout restart and a bundle swap
+- [ ] Through the gateway binary on annshard replicas: two or more swaps in a row over three bundles, with a search of the previous version arriving after each prepare, and no shard skipped for `FAILED_PRECONDITION`. The gateway passing the version it serves on to the replicas has no test of its own (D043)
+- [ ] Decide before deployment: a `Prepare` that carries the sha256 of the gateway's `items.npy`, so that a replica given other vectors under the version's name fails to prepare (a proto change). Today only an ID outside the bundle is caught (D040)
 - [ ] Logistic-regression ranker over the six features of SPEC §8, trained in `tools/bundle` and exported as `ranker.onnx` (D027), before M6. Its bundle carries a feature consistency golden: Python and Go compute the features of the same fixed requests, and the largest difference must be at most 1e-6
 - [ ] With that ranker, the load check changes more than row 0: several rows, and rows past the first, must leave the other rows' scores unchanged
 - [ ] An ONNX Runtime error that coincides with the end of the stage's context is reported as a timeout, since the call wraps the context's error; classify it by the error the run returned
