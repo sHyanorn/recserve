@@ -133,6 +133,27 @@ The share of degraded responses is reported per run, and runs above 1% are marke
 
 **Cross-check.** One rate is also driven by vegeta at the same constant rate, and the two p99 values are reported side by side.
 
+## Valkey path (M3, D039)
+
+Two checks of the gateway with its histories and result cache on Valkey, fixed here before either was run. The second is an interim figure for M3: the sweep and the headline stay with M6.
+
+**Stage check.** `TestRealDataValkey` in `internal/recommend`, on the baseline bundle and the 2,000 requests of the M2 real-data tests (every 20th test event in time order, k = 50, the request time the event's), with the events of all three splits as histories.
+
+- Four workers share the requests; each request is sent once per round, in two rounds, so that with a cache the first round misses and the second hits.
+- Four configurations: history store and cache in the process, or both on the compose Valkey over loopback through the gateway's circuit breaker; each with the cache on and off. No budgets, so a slow read is measured and not cut off.
+- Per request: the latency, and the time in the stage "history read, then cache lookup": the sum of the two calls, timed around the store and the cache, which leaves out the digest of the key between them.
+- Control, for the Valkey configurations: the four workers send 2,000 `GET`s of one 16-byte value, timed the same way.
+- The test runs three times, each in a new process, with a noise baseline before and after on CPU 0; the processes are not pinned, since the workers use all four CPUs. All three runs are reported; the median of their p99 values counts.
+- **Pass** if, on Valkey with the cache on, the stage's p99 is at most 3 ms (SPEC §5) in the first round and in the second.
+- If it fails: a per-user history version in the cache key (D036 point 6) is taken up only if the control's p99 is at least 30% below the p99 of the history read alone in the same run. Otherwise the budget is recorded as not met and the decision is left open.
+
+**Load at 200 requests/s.** One rate of Load tests, by its Run and Valid run rules: a gateway started fresh for each run with `-valkey-addr`, `-kafka-brokers` and its default flags (cache on, two exact shards, the budgets of SPEC §5) on the baseline bundle; loadgen with its defaults (k = 20, 64 connections) replaying the test split; 10 s warmup and 60 s measured; loadgen on CPU 0, the gateway and the Valkey and Kafka containers on CPUs 1 to 3; a noise baseline on CPU 1 before and after, a flagged run rerun as Noise baseline says.
+
+- Valkey holds the histories of the three splits, loaded once before the first run; its result cache entries are deleted before each run. Kafka runs and receives nothing: the scenario has no writes.
+- Arms come with M5, so "every response carries an arm and versions" is not checked; loadgen's own checks stand for a valid run (99% of the target sent, no failed request).
+- Per run: p50, p90, p99, p99.9 and max from the due time, the degraded share by reason and the cache hit rate from the gateway's `/metrics`, the noise baselines.
+- **Pass** if all three runs are valid and each has p99 ≤ 50 ms.
+
 ## Fault injection under load
 
 Faults (D021), each in its own run: one shard replica killed; 50 ms of added latency on every connection to one shard; Valkey unavailable; the ingest consumer paused, with `/v1/events` writes at 10% of requests.
