@@ -360,9 +360,10 @@ type answer struct {
 // after the hedge delay, it asks one more replica, one that is connected,
 // as long as the shard's hedge budget allows. The first answer wins and the
 // calls still out are cancelled; Search returns once all of them have. A
-// call that the deadline or a cancellation ended is not tried elsewhere,
-// and if ctx ends first the error wraps ctx's, as an in-process search's
-// does.
+// call that the deadline or a cancellation ended is not tried elsewhere.
+// If no replica answers, the error is that of the replicas that failed; it
+// wraps ctx's, as an in-process search's does when ctx ends first, only if
+// every call ended by the deadline or a cancellation.
 func (s *Shards) Search(ctx context.Context, i int, q []float32, k int, seen map[int32]bool) ([]vec.Hit, error) {
 	req := &annshardpb.SearchRequest{Index: s.indexes[i], Query: q, K: int32(k), Ef: int32(s.cfg.Ef)}
 	for id := range seen {
@@ -396,7 +397,7 @@ func (s *Shards) Search(ctx context.Context, i int, q []float32, k int, seen map
 		hedgeDue = t.C
 	}
 	hedged := false
-	var errs []error
+	var failed, ended []error
 	for returned := 0; returned < asked; {
 		select {
 		case a := <-answers:
@@ -414,9 +415,12 @@ func (s *Shards) Search(ctx context.Context, i int, q []float32, k int, seen map
 				}
 				return a.hits, nil
 			}
-			errs = append(errs, a.err)
-			ended := errors.Is(a.err, context.DeadlineExceeded) || errors.Is(a.err, context.Canceled)
-			if !ended && asked < len(order) && ctx.Err() == nil {
+			if errors.Is(a.err, context.DeadlineExceeded) || errors.Is(a.err, context.Canceled) {
+				ended = append(ended, a.err)
+				continue
+			}
+			failed = append(failed, a.err)
+			if asked < len(order) && ctx.Err() == nil {
 				g.failover.Inc()
 				ask(false)
 			}
@@ -435,7 +439,12 @@ func (s *Shards) Search(ctx context.Context, i int, q []float32, k int, seen map
 	if hedged {
 		g.hedgeLost.Inc()
 	}
-	return nil, errors.Join(errs...)
+	// A replica's failure is not to pass for a timeout because another
+	// replica then ran out of time: the caller logs failures only (D029).
+	if len(failed) > 0 {
+		return nil, errors.Join(failed...)
+	}
+	return nil, errors.Join(ended...)
 }
 
 // search runs one search on the replica.

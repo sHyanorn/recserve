@@ -132,6 +132,50 @@ func TestSearchErrors(t *testing.T) {
 	}
 }
 
+// A replica's failure is not hidden by another replica's timeout: with one
+// replica that fails every search and one that is silent, a search that
+// asks the failing one first, and then waits for the silent one in vain,
+// returns the failure and is no timeout (D029). One that asks the silent
+// one first is a timeout: it asks no other.
+func TestFailureIsNotHiddenByTimeout(t *testing.T) {
+	r := rand.New(rand.NewPCG(15, 15))
+	root := t.TempDir()
+	annshardtest.WriteVectors(t, root, "v1", shardtest.RandomMatrix(r, 50, 2))
+	failing := annshardtest.Start(t, root, grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if _, ok := req.(*annshardpb.SearchRequest); ok {
+			return nil, status.Error(codes.Internal, "injected")
+		}
+		return handler(ctx, req)
+	}))
+	silent := infratest.NewProxy(t, annshardtest.Start(t, root))
+	c := annshardtest.Dial(t, [][]string{{failing, silent.Addr()}}, annshard.Options{})
+	s, err := c.Prepare(context.Background(), "v1", shard.Config{Shards: 1, Mode: shard.Exact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	silent.Blackhole()
+	// Both connections are ready, so the two searches lead with one replica each.
+	var failures, timeouts int
+	for range 2 {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		_, err := s.Search(ctx, 0, []float32{1, 1}, 5, nil)
+		cancel()
+		switch {
+		case err == nil:
+			t.Fatal("a search succeeded with no replica that answers")
+		case errors.Is(err, context.DeadlineExceeded):
+			timeouts++
+		case status.Code(err) == codes.Internal:
+			failures++
+		default:
+			t.Fatal(err)
+		}
+	}
+	if failures != 1 || timeouts != 1 {
+		t.Fatalf("%d failures and %d timeouts, want one of each", failures, timeouts)
+	}
+}
+
 func TestPrepareErrors(t *testing.T) {
 	r := rand.New(rand.NewPCG(4, 4))
 	m := shardtest.RandomMatrix(r, 50, 2)
