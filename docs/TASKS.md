@@ -62,7 +62,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] annshard Dockerfile
 - [x] Graceful shutdown: on SIGTERM annshard reports NOT_SERVING and drains its calls within `-drain`; the gateway answers `/readyz` with 503, closes connections after their response for `-shutdown-delay`, then drains; ingest commits its offsets as before (D045)
 - [ ] Zero-error check under load through a rollout restart and a bundle swap
-- [ ] Through the gateway binary on annshard replicas: two or more swaps in a row over three bundles, with a search of the previous version arriving after each prepare, and no shard skipped for `FAILED_PRECONDITION`. The gateway passing the version it serves on to the replicas has no test of its own (D043)
+- [x] Through the gateway binary on annshard replicas: swaps in a row over three bundles, with a search of the previous version arriving after each prepare, and no shard skipped for `FAILED_PRECONDITION` (D043)
 - [x] A bundle's version must be the digest of its files, so a replica given other vectors under a version's name fails to prepare it; no proto change (D046)
 - [ ] Logistic-regression ranker over the six features of SPEC §8, trained in `tools/bundle` and exported as `ranker.onnx` (D027), before M6. Its bundle carries a feature consistency golden: Python and Go compute the features of the same fixed requests, and the largest difference must be at most 1e-6
 - [ ] With that ranker, the load check changes more than row 0: several rows, and rows past the first, must leave the other rows' scores unchanged

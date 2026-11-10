@@ -166,7 +166,7 @@ Data is downloaded by `make data` and never committed. Development and benchmark
 
 - Unit and table-driven tests for every stage; property tests for section 7; fuzzing for request parsing and the bundle loader
 - Fault injection: slow and dead shards, lost, silent and restarted replicas (ready again with no request), slow ranker, failed swaps, Valkey down, consumer killed; under load per docs/BENCHMARKS.md
-- Integration tests against real Kafka and Valkey containers; `internal/e2e` runs the gateway and ingest binaries on them, kills ingest, pauses Valkey and stops Kafka, and runs the gateway on four `annshard` processes through a killed replica, a swap, an empty restart and a rejected swap (`make e2e`, on its own, since it takes the services away from other tests)
+- Integration tests against real Kafka and Valkey containers; `internal/e2e` runs the gateway and ingest binaries on them, kills ingest, pauses Valkey and stops Kafka, and runs the gateway on four `annshard` processes through a killed replica, a swap, an empty restart, a rejected swap and swaps in a row over three bundles (`make e2e`, on its own, since it takes the services away from other tests)
 - The replicas of the shard tests are real gRPC servers on loopback ports, in the test's process, with faults put in the network by a TCP proxy of the test or in the replica by a server interceptor
 - `make test-real` runs the pipeline on the real data and bundle, also with the shards on replicas, where every response must equal the in-process one
 - All tests run under `-race`
