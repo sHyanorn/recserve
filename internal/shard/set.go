@@ -167,9 +167,6 @@ func (s *Set) WithEf(ef int) *Set {
 	return &c
 }
 
-// Shards returns the number of shards.
-func (s *Set) Shards() int { return len(s.parts) }
-
 // Config returns the settings the set was built and is searched with.
 func (s *Set) Config() Config { return s.cfg }
 

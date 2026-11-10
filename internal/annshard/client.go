@@ -88,9 +88,10 @@ const (
 	keepaliveTimeout = 3 * time.Second
 )
 
-// DialOptions returns the gRPC options of a connection to a replica: no
+// DialOptions returns the gRPC options Dial connects to a replica with: no
 // TLS (D040), and the connection and keepalive settings above. A replica's
-// server needs ServerOptions for the keepalive.
+// server needs ServerOptions for the keepalive. Dial is the only caller
+// outside the tests, which check the keepalive on a connection of their own.
 func DialOptions() []grpc.DialOption {
 	wait := backoff.DefaultConfig
 	wait.MaxDelay = maxReconnectWait
@@ -219,10 +220,9 @@ type Shards struct {
 // Prepare has every replica load version, a bundle of items items, and
 // build its shard by cfg, whose Shards must be the client's number of
 // shards, and returns the version's shards once every shard has a replica
-// that holds it. A replica that
-// failed is logged; it is sent the request again when a search finds that
-// it lacks the index (catchUp). If a shard has no replica that holds the
-// version, Prepare fails.
+// that holds it. A replica that failed is logged; it is sent the request
+// again when a search finds that it lacks the index (catchUp). If a shard
+// has no replica that holds the version, Prepare fails.
 func (c *Client) Prepare(ctx context.Context, version string, items int, cfg shard.Config) (*Shards, error) {
 	if cfg.Shards != len(c.shards) {
 		return nil, fmt.Errorf("%d shards configured, replicas of %d", cfg.Shards, len(c.shards))

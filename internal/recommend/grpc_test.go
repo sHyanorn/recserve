@@ -324,11 +324,7 @@ func (c *swapReplicas) give(t *testing.T, i, j int, v string, items int) {
 func (c *swapReplicas) prepare(t *testing.T) func(*bundle.Bundle) (Shards, error) {
 	client := annshardtest.Dial(t, c.addrs, annshard.Options{HedgeDelay: 5 * time.Millisecond})
 	return func(b *bundle.Bundle) (Shards, error) {
-		s, err := client.Prepare(context.Background(), b.ModelVersion, b.ItemCount, shard.DefaultConfig)
-		if err != nil {
-			return nil, err
-		}
-		return s, nil
+		return client.Prepare(context.Background(), b.ModelVersion, b.ItemCount, shard.DefaultConfig)
 	}
 }
 
