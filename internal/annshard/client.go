@@ -49,7 +49,11 @@ type Options struct {
 	// PrepareTimeout bounds the Prepare a replica is sent when a search
 	// finds that it lacks the index; 0 for no bound.
 	PrepareTimeout time.Duration
-	Log            *slog.Logger // nil logs nothing
+	// Serving returns the bundle version the gateway serves at the moment,
+	// "" if none yet. Every Prepare tells the replica, which then does not
+	// drop that version to make room (D043). nil is none.
+	Serving func() string
+	Log     *slog.Logger // nil logs nothing
 }
 
 // catchUpWait is how long a replica that failed to prepare an index it
@@ -144,6 +148,9 @@ func Dial(addrs [][]string, opt Options) (*Client, error) {
 	if opt.Log == nil {
 		opt.Log = slog.New(slog.DiscardHandler)
 	}
+	if opt.Serving == nil {
+		opt.Serving = func() string { return "" }
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
 		opt: opt, ctx: ctx, cancel: cancel, catching: map[lacking]bool{},
@@ -225,6 +232,7 @@ func (c *Client) Prepare(ctx context.Context, version string, items int, cfg sha
 		return nil, fmt.Errorf("shard mode %q", cfg.Mode)
 	}
 	s := &Shards{c: c, cfg: cfg, items: items, indexes: make([]*annshardpb.Index, cfg.Shards)}
+	serving := c.opt.Serving()
 	errs := make([][]error, cfg.Shards) // by shard, then replica
 	var wg sync.WaitGroup
 	for i, g := range c.shards {
@@ -235,7 +243,9 @@ func (c *Client) Prepare(ctx context.Context, version string, items int, cfg sha
 		s.indexes[i] = ix
 		errs[i] = make([]error, len(g.replicas))
 		for j, r := range g.replicas {
-			wg.Go(func() { _, errs[i][j] = r.rpc.Prepare(ctx, &annshardpb.PrepareRequest{Index: ix}) })
+			wg.Go(func() {
+				_, errs[i][j] = r.rpc.Prepare(ctx, &annshardpb.PrepareRequest{Index: ix, ServingVersion: serving})
+			})
 		}
 	}
 	wg.Wait()
@@ -285,7 +295,7 @@ func (c *Client) catchUp(r *replica, x *annshardpb.Index) {
 		if c.opt.PrepareTimeout > 0 {
 			ctx, cancel = context.WithTimeout(ctx, c.opt.PrepareTimeout)
 		}
-		_, err := r.rpc.Prepare(ctx, &annshardpb.PrepareRequest{Index: x})
+		_, err := r.rpc.Prepare(ctx, &annshardpb.PrepareRequest{Index: x, ServingVersion: c.opt.Serving()})
 		cancel()
 		if err == nil {
 			c.opt.Log.Info("a replica prepared an index it lacked", "replica", r.addr, "version", ix.version, "shard", ix.shard)

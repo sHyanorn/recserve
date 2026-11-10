@@ -111,7 +111,14 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 		}
 		shards.Shards = len(replicas)
 	}
-	index, shardMetrics, closeShards, err := openShards(replicas, shards, hedgeDelay, prepareTimeout, log)
+	var live *recommend.Live
+	serving := func() string {
+		if live == nil { // the first bundle is being prepared
+			return ""
+		}
+		return live.Version()
+	}
+	index, shardMetrics, closeShards, err := openShards(replicas, shards, hedgeDelay, prepareTimeout, serving, log)
 	if err != nil {
 		return err
 	}
@@ -121,7 +128,7 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 	if err != nil {
 		return err
 	}
-	live := recommend.NewLive(p, log)
+	live = recommend.NewLive(p, log)
 	closeLive := true // until serving starts; then shutdown closes it
 	defer func() {
 		if closeLive {
@@ -267,8 +274,9 @@ func openProducer(brokers string, store history.Store, timeout time.Duration) (e
 // by cfg, the metrics of the shard tier and the function that releases what
 // it holds: the shards are built in this process or, given replicas,
 // prepared on the annshard replicas of every shard, each call within
-// timeout, and searched with hedgeDelay.
-func openShards(replicas [][]string, cfg shard.Config, hedgeDelay, timeout time.Duration, log *slog.Logger) (func(*bundle.Bundle) (recommend.Shards, error), []prometheus.Collector, func(), error) {
+// timeout, and searched with hedgeDelay. serving returns the version the
+// gateway serves, which the replicas are told to keep.
+func openShards(replicas [][]string, cfg shard.Config, hedgeDelay, timeout time.Duration, serving func() string, log *slog.Logger) (func(*bundle.Bundle) (recommend.Shards, error), []prometheus.Collector, func(), error) {
 	if replicas == nil {
 		return func(b *bundle.Bundle) (recommend.Shards, error) {
 			s, err := shard.Build(b.Vectors, cfg)
@@ -278,7 +286,7 @@ func openShards(replicas [][]string, cfg shard.Config, hedgeDelay, timeout time.
 			return s, nil
 		}, nil, func() {}, nil
 	}
-	client, err := annshard.Dial(replicas, annshard.Options{HedgeDelay: hedgeDelay, PrepareTimeout: timeout, Log: log})
+	client, err := annshard.Dial(replicas, annshard.Options{HedgeDelay: hedgeDelay, PrepareTimeout: timeout, Serving: serving, Log: log})
 	if err != nil {
 		return nil, nil, nil, err
 	}

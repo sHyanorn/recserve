@@ -289,3 +289,44 @@ func TestKeepsTwoVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A replica does not drop the version a Prepare says its caller serves,
+// whichever version was named last. After a swap to v2, a request still
+// running on v1 names v1 last; with no search of v2 since, as on a quiet
+// gateway, the naming alone would have v3 replace v2, the version served.
+func TestKeepsTheServingVersion(t *testing.T) {
+	r := rand.New(rand.NewPCG(6, 6))
+	root := t.TempDir()
+	for _, v := range []string{"v1", "v2", "v3", "v4"} {
+		annshardtest.WriteVectors(t, root, v, shardtest.RandomMatrix(r, 50, 2))
+	}
+	c := replica(t, root)
+	ctx := context.Background()
+	prepare := func(v, serving string) {
+		t.Helper()
+		if _, err := c.Prepare(ctx, &annshardpb.PrepareRequest{Index: exactIndex(v, 0, 1), ServingVersion: serving}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	search := func(v string) error {
+		_, err := c.Search(ctx, &annshardpb.SearchRequest{Index: exactIndex(v, 0, 1), Query: []float32{1, 1}, K: 5})
+		return err
+	}
+	held := func(vs ...string) {
+		t.Helper()
+		for _, v := range vs {
+			if err := search(v); err != nil {
+				t.Fatalf("%s: %v", v, err)
+			}
+		}
+	}
+	prepare("v1", "")
+	prepare("v2", "v1")
+	held("v1")
+	prepare("v3", "v2")
+	wantCode(t, search("v1"), codes.FailedPrecondition)
+	held("v3", "v2") // v2 is named last
+	prepare("v4", "v3")
+	wantCode(t, search("v2"), codes.FailedPrecondition)
+	held("v3", "v4")
+}

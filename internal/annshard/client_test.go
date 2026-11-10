@@ -538,6 +538,49 @@ func TestReplicaCatchesUp(t *testing.T) {
 	searchUntil(t, s, m, func() bool { return holds(t, behind, "v1") })
 }
 
+// The client tells a replica which version the gateway serves, when it
+// prepares a version and when it has a replica catch up, and the replica
+// keeps that version although another was named later (D043).
+func TestReplicasKeepTheServingVersion(t *testing.T) {
+	r := rand.New(rand.NewPCG(17, 17))
+	m := shardtest.RandomMatrix(r, 100, 2)
+	rootA, rootB := t.TempDir(), t.TempDir()
+	for _, v := range []string{"v1", "v3", "v4"} {
+		annshardtest.WriteVectors(t, rootA, v, m)
+	}
+	for _, v := range []string{"v1", "v2"} {
+		annshardtest.WriteVectors(t, rootB, v, m)
+	}
+	a := annshardtest.Start(t, rootA)
+	c := annshardtest.Dial(t, [][]string{{a, annshardtest.Start(t, rootB)}}, annshard.Options{Serving: func() string { return "v1" }})
+	ctx := context.Background()
+	cfg := shard.Config{Shards: 1, Mode: shard.Exact}
+	var s2 *annshard.Shards
+	for _, v := range []string{"v1", "v3", "v2"} { // a holds v1 and v3, v3 named last
+		s, err := c.Prepare(ctx, v, 100, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s2 = s
+	}
+	// Catching up on v2, a has three versions and drops v3, not v1.
+	annshardtest.WriteVectors(t, rootA, "v2", m)
+	searchUntil(t, s2, m, func() bool { return holds(t, a, "v2") })
+	if holds(t, a, "v3") || !holds(t, a, "v1") {
+		t.Fatal("catching up, the replica dropped the version served")
+	}
+	// Preparing v4, it drops v2, which the probe below names last, not v1.
+	if !holds(t, a, "v2") {
+		t.Fatal("the replica lost v2")
+	}
+	if _, err := c.Prepare(ctx, "v4", 100, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if holds(t, a, "v2") || !holds(t, a, "v1") {
+		t.Fatal("preparing a version, the replica dropped the version served")
+	}
+}
+
 // A replica that restarts has no index. The searches go on, answered by
 // the other replica, and the restarted one is prepared again by the first
 // search that reaches it.

@@ -306,10 +306,14 @@ func (x *SearchResponse) GetScores() []float64 {
 }
 
 type PrepareRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Index         *Index                 `protobuf:"bytes,1,opt,name=index,proto3" json:"index,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Index *Index                 `protobuf:"bytes,1,opt,name=index,proto3" json:"index,omitempty"`
+	// The bundle version the caller serves at the moment, empty if it serves
+	// none yet. The replica does not drop that version to make room for the
+	// index it prepares.
+	ServingVersion string `protobuf:"bytes,2,opt,name=serving_version,json=servingVersion,proto3" json:"serving_version,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *PrepareRequest) Reset() {
@@ -347,6 +351,13 @@ func (x *PrepareRequest) GetIndex() *Index {
 		return x.Index
 	}
 	return nil
+}
+
+func (x *PrepareRequest) GetServingVersion() string {
+	if x != nil {
+		return x.ServingVersion
+	}
+	return ""
 }
 
 type PrepareResponse struct {
@@ -406,9 +417,10 @@ const file_recserve_annshard_v1_annshard_proto_rawDesc = "" +
 	"\x02ef\x18\x05 \x01(\x05R\x02ef\":\n" +
 	"\x0eSearchResponse\x12\x10\n" +
 	"\x03ids\x18\x01 \x03(\x05R\x03ids\x12\x16\n" +
-	"\x06scores\x18\x02 \x03(\x01R\x06scores\"C\n" +
+	"\x06scores\x18\x02 \x03(\x01R\x06scores\"l\n" +
 	"\x0ePrepareRequest\x121\n" +
-	"\x05index\x18\x01 \x01(\v2\x1b.recserve.annshard.v1.IndexR\x05index\"\x11\n" +
+	"\x05index\x18\x01 \x01(\v2\x1b.recserve.annshard.v1.IndexR\x05index\x12'\n" +
+	"\x0fserving_version\x18\x02 \x01(\tR\x0eservingVersion\"\x11\n" +
 	"\x0fPrepareResponse*;\n" +
 	"\x04Mode\x12\x14\n" +
 	"\x10MODE_UNSPECIFIED\x10\x00\x12\x0e\n" +

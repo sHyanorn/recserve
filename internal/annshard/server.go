@@ -62,8 +62,10 @@ func parseIndex(x *annshardpb.Index) (index, error) {
 const KeepVersions = 2
 
 // Server is one annshard replica. It holds the indexes it was asked to
-// prepare, of the KeepVersions bundle versions that requests named last,
-// and answers a search only from the index the request names.
+// prepare, of KeepVersions bundle versions: the one the gateway said it
+// serves when it last had an index prepared, and otherwise those that
+// requests named last. It answers a search only from the index the request
+// names.
 type Server struct {
 	annshardpb.UnimplementedAnnShardServer
 	root string // holds one bundle directory per version
@@ -110,8 +112,9 @@ func (s *Server) part(ix index) *shard.Part {
 
 // hold adds the index p under ix. If the replica then holds more than
 // KeepVersions versions, it drops every index of the version named longest
-// ago; a search already running on one of them finishes on it.
-func (s *Server) hold(ix index, p *shard.Part) {
+// ago, but never of serving, the version the caller of the Prepare serves
+// (D043); a search already running on a dropped index finishes on it.
+func (s *Server) hold(ix index, p *shard.Part, serving string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v := s.versions[ix.version]
@@ -124,6 +127,9 @@ func (s *Server) hold(ix index, p *shard.Part) {
 	for len(s.versions) > KeepVersions {
 		oldest := ""
 		for name, o := range s.versions {
+			if name == serving {
+				continue
+			}
 			if oldest == "" || o.named.Load() < s.versions[oldest].named.Load() {
 				oldest = name
 			}
@@ -135,13 +141,14 @@ func (s *Server) hold(ix index, p *shard.Part) {
 
 // Prepare loads the vectors of the index's bundle version, verifies them
 // against the bundle's manifest and builds the index. Requests for one
-// index share one build, which goes on if they give up.
+// index share one build, and the serving version of the first of them; the
+// build goes on if they give up.
 func (s *Server) Prepare(ctx context.Context, req *annshardpb.PrepareRequest) (*annshardpb.PrepareResponse, error) {
 	ix, err := parseIndex(req.GetIndex())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	done := s.loading.DoChan(fmt.Sprintf("%+v", ix), func() (any, error) { return nil, s.prepare(ix) })
+	done := s.loading.DoChan(fmt.Sprintf("%+v", ix), func() (any, error) { return nil, s.prepare(ix, req.GetServingVersion()) })
 	select {
 	case r := <-done:
 		if r.Err != nil {
@@ -153,8 +160,9 @@ func (s *Server) Prepare(ctx context.Context, req *annshardpb.PrepareRequest) (*
 	}
 }
 
-// prepare builds ix unless the replica holds it; its error is a gRPC status.
-func (s *Server) prepare(ix index) error {
+// prepare builds ix unless the replica holds it, keeping the version
+// serving; its error is a gRPC status.
+func (s *Server) prepare(ix index, serving string) error {
 	if s.part(ix) != nil {
 		return nil
 	}
@@ -173,7 +181,7 @@ func (s *Server) prepare(ix index) error {
 	if err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
-	s.hold(ix, p)
+	s.hold(ix, p, serving)
 	s.log.Info("index prepared", "version", ix.version, "shard", ix.shard, "shards", ix.cfg.Shards, "mode", ix.cfg.Mode,
 		"items", p.Len(), "took", time.Since(start))
 	return nil
