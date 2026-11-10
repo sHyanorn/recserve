@@ -73,3 +73,55 @@ func TestProperty6PipelineCatchesBrokenVariant(t *testing.T) {
 		t.Fatal("the check passed shards that return ceil(VectorTop/n) items each")
 	}
 }
+
+// strayShards answers shard 0's searches with one hit more, for an ID the
+// bundle does not hold: what a replica returns that was given another
+// bundle under the version's name.
+type strayShards struct {
+	Shards
+	id int32
+}
+
+func (s strayShards) Search(ctx context.Context, i int, q []float32, k int, seen map[int32]bool) ([]vec.Hit, error) {
+	hits, err := s.Shards.Search(ctx, i, q, k, seen)
+	if i == 0 && err == nil {
+		hits = append([]vec.Hit{{ID: s.id, Score: 1e9}}, hits...)
+	}
+	return hits, err
+}
+
+// A shard that returns an item outside the bundle counts as one that
+// failed: the response is the one without that shard, and the error is kept.
+func TestShardReturningUnknownItemIsSkipped(t *testing.T) {
+	r := rand.New(rand.NewPCG(14, 14))
+	local, err := randomPipeline(r, 300, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	skipped := &fault{faults: []stageFault{{stageVector, 0, false}}, reason: ShardsPartial}
+	for _, id := range []int32{-1, 0, int32(local.Bundle.ItemCount) + 1} {
+		p := *local
+		p.Shards = strayShards{local.Shards, id}
+		searched := 0
+		for range 20 {
+			req := Request{User: fmt.Sprint("u", r.IntN(3)), K: 1 + r.IntN(MaxK), TS: int64(r.IntN(110))}
+			got, err := p.Recommend(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Coverage == nil {
+				continue
+			}
+			searched++
+			if err := sameResponse(got, want(t, local, skipped, req)); err != nil {
+				t.Fatalf("item %d, %+v: %v", id, req, err)
+			}
+			if len(got.Failures) != 1 || got.Failures[0].Reason != ShardsPartial {
+				t.Fatalf("item %d: failures %v, want the shard's", id, got.Failures)
+			}
+		}
+		if searched == 0 {
+			t.Fatal("no request had a user vector")
+		}
+	}
+}
