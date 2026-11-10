@@ -64,15 +64,15 @@ All load tests run on one 4-vCPU VM. Kafka, Valkey, the shards and their replica
              ┌─────────────────────────┼───────────────────┐
      ┌───────▼───────┐          ┌──────▼────────┐
      │ annshard 0    │          │ annshard 1    │   each shard: R replicas
-     │ replica a, b  │          │ replica a, b  │   HNSW + exact search
-     └───────────────┘          └───────────────┘   versioned index snapshot
+     │ replica a, b  │          │ replica a, b  │   exact search or HNSW
+     └───────────────┘          └───────────────┘   indexes of two versions
 ```
 
 - **gateway** holds item features, the co-occurrence table, the popularity list and the models in memory, loaded from versioned bundles; per-user state lives in Valkey, so gateway instances are interchangeable.
 - **ingest** is a Kafka consumer group that applies events to the user histories in Valkey (§7, properties 8 and 9).
 - **Valkey** holds each user's events as a sorted set (member: event ID and raw item ID, score: event time; D033), none of them trimmed or expired, and the result cache. Item features stay in the gateway: they are part of the bundle, immutable per version, and a request reads about 500 of them (D020).
-- **annshard** holds one shard of the item vectors. Items are assigned to shards by hash of their internal ID.
-- **Versions.** A bundle version names the vectors, the ID map and the models together. A swap is two-phase: every shard loads and verifies the new version (prepare), then the gateway activates it and pins each request to one version; shards keep the previous version until no request uses it. Until M4 the shards live in the gateway, which prepares the bundle, its golden cases, cutoff and shard indexes in the background, activates it with one atomic store, and closes the previous bundle once no request holds it. The new bundle may hold other items: histories are stored by raw item ID, and each request maps its history with the bundle it runs on (D032).
+- **annshard** is one replica of a shard of the item vectors. Items are assigned to shards by hash of their internal ID. A replica has no shard settings of its own: every request names its index (the bundle version, the shard and the number of shards, the mode and the HNSW build parameters), and the replica answers from that index or refuses (D040). The gateway lists the replicas in `-shard-addrs`; without the flag it holds the shards itself, behind the same interface, and its responses are the same.
+- **Versions.** A bundle version names the vectors, the ID map and the models together. A swap is two-phase. Prepare: the gateway loads the bundle and checks its checksums, golden cases and cutoff in the background, then has the shards built, in the process or by a `Prepare` to every replica; each shard needs one replica that holds the version, or the swap is rejected and the active version stays. Activate: one atomic store in the gateway; each request runs on one version and names it in every shard search, so no response mixes versions whatever the replicas hold, and the previous bundle is closed once no request holds it. A replica that missed the prepare, or restarted empty, is sent it again when a search finds it lacking, while the shard's other replica answers. A replica keeps the indexes of two versions and drops the one named longest ago for a third, never the one the gateway says it serves (D042, D043). The new bundle may hold other items: histories are stored by raw item ID, and each request maps its history with the bundle it runs on (D032).
 
 ## 5. Request path and latency budget
 
@@ -81,7 +81,7 @@ All load tests run on one 4-vCPU VM. Kafka, Valkey, the shards and their replica
 | Rate limit, A/B | 1 ms | — |
 | Feature lookup (Valkey), then cache lookup | 3 ms | history from the request's `recent` only: `history_unavailable` |
 | User encoder | 5 ms | vector retrieval skipped: `encoder_timeout`, `encoder_error` |
-| Retrieval (parallel; shard deadline 15 ms) | 15 ms | shards that did not answer skipped: `vector_timeout` (every shard timed out), `vector_error` (none answered, one failed) or `shards_partial` (some answered); source skipped: `cooc_timeout`, `cooc_error`, `popular_timeout`, `popular_error` |
+| Retrieval (parallel; shard deadline 15 ms, replicas included) | 15 ms | shards that did not answer skipped: `vector_timeout` (every shard timed out), `vector_error` (none answered, one failed) or `shards_partial` (some answered); source skipped: `cooc_timeout`, `cooc_error`, `popular_timeout`, `popular_error` |
 | Ranking (at most 512 candidates) | 15 ms | retrieval order kept: `ranker_timeout`, `ranker_error` |
 | Re-ranking and filters | 2 ms | — |
 | Other overhead | 9 ms | — |
@@ -92,6 +92,8 @@ The service target is a server-side p99 of 50 ms; the headline figure is the hig
 The cache is looked up after the history, since its key includes the history (D030); a response is cached only if it was not degraded, so a request whose history cannot be read neither reads nor writes it. With `-valkey-addr` the cache is on Valkey and shared by the gateways; the cache read shares the history budget with the history read, the cache write gets it once more, and a cache that cannot be read or written within it costs the request nothing but the cache: it is answered in full as a miss, and is not degraded (D036). The gateway's calls to Valkey go through a circuit breaker: after five failures in a row it answers from `recent` without asking Valkey, and tries Valkey again after a second (D037). Connections to Valkey are opened in the background: a request that finds none waits for one within its history budget, and falls back the same way without counting as a failure. Requests that miss on the same key at the same time compute the response once and share it.
 
 Each stage runs under its own deadline, set by the gateway flags `-budget-history`, `-budget-encoder`, `-budget-retrieval`, `-budget-shard` and `-budget-ranker` (0 for none); a shard search ends at the earlier of its own deadline and the retrieval deadline. A stage that runs out of time or fails is skipped or falls back as the table says, and the response lists the reasons in `degraded`, in the table's order, each once; `recserve_degraded_total{reason}` counts them, and an error other than a timeout is logged. The stages check their deadline themselves (exact search every 1,024 rows, ONNX Runtime between nodes), and the gateway waits for each to return, so a stage ends shortly after its deadline (D029). A request that its client cancels fails with status 499, and one past a deadline its caller set fails with 504; neither is a degradation.
+
+With the shards on replicas, a shard search is one call to one replica, within the shard deadline, which the call carries to the replica. Among a shard's replicas with a ready connection the gateway takes a different one each time. If the call fails, the search goes to the next replica at once, each at most once. If the first replica has not answered after `-hedge-delay` (5 ms), the search also asks a second one, takes the first answer and cancels the other call; a shard's hedges are limited to 10 in reserve plus one for every ten searches, so slow replicas are not sent twice the load. A shard is skipped only when no replica answers in time: as a timeout if its calls ended at the deadline, as an error if a replica failed. A replica from which nothing was read for 10 s is pinged, and its connection closed after 3 s without an answer (D041).
 
 ## 6. API (draft)
 
@@ -113,14 +115,16 @@ Each property is an executable test; those marked * also run against a deliberat
 1. * Features use only events strictly before the request timestamp (property test against a naive scan)
 2. * No response contains an item from the user's history before the request, or the same item twice
 3. * A/B assignment is uniform (chi-square over 1M IDs), stable across processes and restarts (golden cases), and matches the configured split within tolerance; the broken variant assigns with an in-process random seed
-4. * During concurrent queries and repeated swaps, every returned score recomputes exactly from the vectors of the version the response names; the broken variant scores with the bundle active when scoring starts
+4. * During concurrent queries and repeated swaps, every returned score recomputes exactly from the vectors of the version the response names; the broken variant scores with the bundle active when scoring starts. Also with the shards on replicas, where the broken variant is a replica that answers from the version it prepared last
 5. * The cache never serves a result from another index or model version, including right after a swap
-6. * Scatter-gather top-k in exact mode equals single-node exact top-k item by item on small data; ties break by internal ID ascending
+6. * Scatter-gather top-k in exact mode equals single-node exact top-k item by item on small data; ties break by internal ID ascending. The same check runs on the in-process shards and on replicas over gRPC
 7. * The load generator charges a server stall to every request it delayed (coordinated omission)
 8. * Delivering any event more than once, in any order relative to other events, leaves every user history and every response unchanged; the broken variant appends without the event ID
 9. * After the ingest consumer is killed at random points and restarted, every user history equals the one built by applying each produced event exactly once
 10. * With Valkey unavailable, every response is 200, uses only the request's `recent` items as history, reports `history_unavailable`, and is never written to the cache, also after Valkey returns; the broken variant caches it
 11. * Concurrent identical requests that miss the cache compute the result once per gateway instance (singleflight)
+12. * With one replica of every shard lost (it refuses connections, does not answer, or answers with errors), every response equals the one with all replicas healthy: every shard answered, nothing degraded; for the replica that does not answer, within the hedge budget. The broken variant knows only the lost replicas
+13. * With every replica slower than the hedge delay, n searches of a shard send at most 10 + n/10 hedges, and each hedge that loses is cancelled; the broken variant hedges every slow search
 
 ## 8. Model bundle contract with seqrec-lab
 
@@ -161,8 +165,10 @@ Data is downloaded by `make data` and never committed. Development and benchmark
 ## 10. Testing strategy
 
 - Unit and table-driven tests for every stage; property tests for section 7; fuzzing for request parsing and the bundle loader
-- Fault injection: slow and dead shards, slow ranker, failed swaps, Valkey down, consumer killed; under load per docs/BENCHMARKS.md
-- Integration tests against real Kafka and Valkey containers; `internal/e2e` runs the gateway and ingest binaries on them, kills ingest, pauses Valkey and stops Kafka (`make e2e`, on its own, since it takes the services away from other tests)
+- Fault injection: slow and dead shards, lost, silent and restarted replicas, slow ranker, failed swaps, Valkey down, consumer killed; under load per docs/BENCHMARKS.md
+- Integration tests against real Kafka and Valkey containers; `internal/e2e` runs the gateway and ingest binaries on them, kills ingest, pauses Valkey and stops Kafka, and runs the gateway on four `annshard` processes through a killed replica, a swap, an empty restart and a rejected swap (`make e2e`, on its own, since it takes the services away from other tests)
+- The replicas of the shard tests are real gRPC servers on loopback ports, in the test's process, with faults put in the network by a TCP proxy of the test or in the replica by a server interceptor
+- `make test-real` runs the pipeline on the real data and bundle, also with the shards on replicas, where every response must equal the in-process one
 - All tests run under `-race`
 - Benchmarks and evaluation follow docs/BENCHMARKS.md, fixed before results are looked at
 
