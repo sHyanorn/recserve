@@ -279,6 +279,7 @@ def main(data, out, encoder):
     final = os.path.join(out, version)
     if os.path.exists(final):
         sys.exit(f"{final} exists")
+    os.chmod(d, 0o755)  # mkdtemp makes it 0700; services read bundles as another user
     os.rename(d, final)
     print(version)
 
