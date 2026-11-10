@@ -606,8 +606,7 @@ func (p *Pipeline) retrieve(ctx context.Context, hist []int32, uv []float32, see
 }
 
 // searchShards searches every shard in parallel, each within the shard
-// budget, for the VectorTop unseen items closest to uv. A shard that
-// returns an item the bundle does not hold has failed.
+// budget, for the VectorTop unseen items closest to uv.
 func (p *Pipeline) searchShards(ctx context.Context, uv []float32, seen map[int32]bool) ([][]vec.Hit, []error) {
 	n := p.Shards.Config().Shards
 	hits, errs := make([][]vec.Hit, n), make([]error, n)
@@ -623,26 +622,10 @@ func (p *Pipeline) searchShards(ctx context.Context, uv []float32, seen map[int3
 			if errs[i] = p.stalled(sctx, stageVector, i); errs[i] == nil {
 				hits[i], errs[i] = p.Shards.Search(sctx, i, uv, top, seen)
 			}
-			if errs[i] == nil {
-				errs[i] = p.inBundle(hits[i])
-			}
 		})
 	}
 	wg.Wait()
 	return hits, errs
-}
-
-// inBundle returns an error if a shard's hits hold an ID that is not an
-// item of the bundle. A replica given other vectors under the version's
-// name can return one (D040), and scoring it would read past the bundle's
-// rows.
-func (p *Pipeline) inBundle(hits []vec.Hit) error {
-	for _, h := range hits {
-		if h.ID < 1 || int(h.ID) > p.Bundle.ItemCount {
-			return fmt.Errorf("returned item %d, the bundle holds 1 to %d", h.ID, p.Bundle.ItemCount)
-		}
-	}
-	return nil
 }
 
 // retrievalScores merges the sources' results and drops seen items. A

@@ -285,7 +285,7 @@ func openShards(replicas [][]string, cfg shard.Config, hedgeDelay, timeout time.
 	return func(b *bundle.Bundle) (recommend.Shards, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		s, err := client.Prepare(ctx, b.ModelVersion, cfg)
+		s, err := client.Prepare(ctx, b.ModelVersion, b.ItemCount, cfg)
 		if err != nil {
 			return nil, err
 		}

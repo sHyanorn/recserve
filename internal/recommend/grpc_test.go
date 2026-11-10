@@ -59,7 +59,7 @@ func TestShardFaultsOverGRPC(t *testing.T) {
 	annshardtest.WriteVectors(t, root, "v1", local.Bundle.Vectors)
 	proxies := []*infratest.Proxy{infratest.NewProxy(t, annshardtest.Start(t, root)), infratest.NewProxy(t, annshardtest.Start(t, root))}
 	client := annshardtest.Dial(t, [][]string{{proxies[0].Addr()}, {proxies[1].Addr()}}, annshard.Options{})
-	remote, err := client.Prepare(context.Background(), "v1", local.Shards.Config())
+	remote, err := client.Prepare(context.Background(), "v1", local.Bundle.ItemCount, local.Shards.Config())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func checkProperty12(t *testing.T, lose func(*replicated), dial func(addrs [][]s
 	}
 	local.rankWith = linearRanker
 	c := replicate(t, local.Bundle.Vectors)
-	remote, err := dial(c.addrs).Prepare(context.Background(), "v1", local.Shards.Config())
+	remote, err := dial(c.addrs).Prepare(context.Background(), "v1", local.Bundle.ItemCount, local.Shards.Config())
 	if err != nil {
 		return err
 	}
@@ -255,7 +255,7 @@ func TestSlowShardOverGRPC(t *testing.T) {
 	annshardtest.WriteVectors(t, root, "v1", local.Bundle.Vectors)
 	slow := []*infratest.Proxy{infratest.NewProxy(t, annshardtest.Start(t, root)), infratest.NewProxy(t, annshardtest.Start(t, root))}
 	addrs := [][]string{{slow[0].Addr(), slow[1].Addr()}, {annshardtest.Start(t, root), annshardtest.Start(t, root)}}
-	remote, err := annshardtest.Dial(t, addrs, annshard.Options{HedgeDelay: 5 * time.Millisecond}).Prepare(context.Background(), "v1", local.Shards.Config())
+	remote, err := annshardtest.Dial(t, addrs, annshard.Options{HedgeDelay: 5 * time.Millisecond}).Prepare(context.Background(), "v1", local.Bundle.ItemCount, local.Shards.Config())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func (c *swapReplicas) give(t *testing.T, i, j int, v string, items int) {
 func (c *swapReplicas) prepare(t *testing.T) func(*bundle.Bundle) (Shards, error) {
 	client := annshardtest.Dial(t, c.addrs, annshard.Options{HedgeDelay: 5 * time.Millisecond})
 	return func(b *bundle.Bundle) (Shards, error) {
-		s, err := client.Prepare(context.Background(), b.ModelVersion, shard.DefaultConfig)
+		s, err := client.Prepare(context.Background(), b.ModelVersion, b.ItemCount, shard.DefaultConfig)
 		if err != nil {
 			return nil, err
 		}

@@ -43,7 +43,7 @@ func TestRealDataShardsOverGRPC(t *testing.T) {
 			t.Fatal(err)
 		}
 		start := time.Now()
-		remote, err := client.Prepare(ctx, rd.bundle.ModelVersion, cfg)
+		remote, err := client.Prepare(ctx, rd.bundle.ModelVersion, rd.bundle.ItemCount, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}

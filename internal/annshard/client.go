@@ -205,16 +205,18 @@ func (c *Client) Close() error {
 type Shards struct {
 	c       *Client
 	cfg     shard.Config
+	items   int                 // the bundle's item count
 	indexes []*annshardpb.Index // by shard
 }
 
-// Prepare has every replica load version and build its shard by cfg, whose
-// Shards must be the client's number of shards, and returns the version's
-// shards once every shard has a replica that holds it. A replica that
+// Prepare has every replica load version, a bundle of items items, and
+// build its shard by cfg, whose Shards must be the client's number of
+// shards, and returns the version's shards once every shard has a replica
+// that holds it. A replica that
 // failed is logged; it is sent the request again when a search finds that
 // it lacks the index (catchUp). If a shard has no replica that holds the
 // version, Prepare fails.
-func (c *Client) Prepare(ctx context.Context, version string, cfg shard.Config) (*Shards, error) {
+func (c *Client) Prepare(ctx context.Context, version string, items int, cfg shard.Config) (*Shards, error) {
 	if cfg.Shards != len(c.shards) {
 		return nil, fmt.Errorf("%d shards configured, replicas of %d", cfg.Shards, len(c.shards))
 	}
@@ -222,7 +224,7 @@ func (c *Client) Prepare(ctx context.Context, version string, cfg shard.Config) 
 	if !ok {
 		return nil, fmt.Errorf("shard mode %q", cfg.Mode)
 	}
-	s := &Shards{c: c, cfg: cfg, indexes: make([]*annshardpb.Index, cfg.Shards)}
+	s := &Shards{c: c, cfg: cfg, items: items, indexes: make([]*annshardpb.Index, cfg.Shards)}
 	errs := make([][]error, cfg.Shards) // by shard, then replica
 	var wg sync.WaitGroup
 	for i, g := range c.shards {
@@ -381,7 +383,7 @@ func (s *Shards) Search(ctx context.Context, i int, q []float32, k int, seen map
 		r := order[asked]
 		asked++
 		go func() {
-			hits, err := r.search(ctx, req)
+			hits, err := r.search(ctx, req, s.items)
 			if status.Code(err) == codes.FailedPrecondition {
 				s.c.catchUp(r, req.GetIndex())
 			}
@@ -447,8 +449,10 @@ func (s *Shards) Search(ctx context.Context, i int, q []float32, k int, seen map
 	return nil, errors.Join(ended...)
 }
 
-// search runs one search on the replica.
-func (r *replica) search(ctx context.Context, req *annshardpb.SearchRequest) ([]vec.Hit, error) {
+// search runs one search on the replica. An answer that holds an ID
+// outside 1 to items is a failure: the replica was given other vectors
+// under the version's name (D040), and the gateway has no such row.
+func (r *replica) search(ctx context.Context, req *annshardpb.SearchRequest, items int) ([]vec.Hit, error) {
 	resp, err := r.rpc.Search(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("replica %s: %w", r.addr, contextError(err))
@@ -458,6 +462,9 @@ func (r *replica) search(ctx context.Context, req *annshardpb.SearchRequest) ([]
 	}
 	hits := make([]vec.Hit, len(resp.GetIds()))
 	for j, id := range resp.GetIds() {
+		if id < 1 || int(id) > items {
+			return nil, fmt.Errorf("replica %s: returned item %d, version %s holds 1 to %d", r.addr, id, req.GetIndex().GetVersion(), items)
+		}
 		hits[j] = vec.Hit{ID: id, Score: resp.GetScores()[j]}
 	}
 	return hits, nil

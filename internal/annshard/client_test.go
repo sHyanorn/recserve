@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -96,7 +97,7 @@ func TestSearchErrors(t *testing.T) {
 	annshardtest.WriteVectors(t, root, "v1", shardtest.RandomMatrix(r, 50, 2))
 	proxy := infratest.NewProxy(t, annshardtest.Start(t, root))
 	c := annshardtest.Dial(t, [][]string{{proxy.Addr()}}, annshard.Options{})
-	s, err := c.Prepare(context.Background(), "v1", shard.Config{Shards: 1, Mode: shard.Exact})
+	s, err := c.Prepare(context.Background(), "v1", 50, shard.Config{Shards: 1, Mode: shard.Exact})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +150,7 @@ func TestFailureIsNotHiddenByTimeout(t *testing.T) {
 	}))
 	silent := infratest.NewProxy(t, annshardtest.Start(t, root))
 	c := annshardtest.Dial(t, [][]string{{failing, silent.Addr()}}, annshard.Options{})
-	s, err := c.Prepare(context.Background(), "v1", shard.Config{Shards: 1, Mode: shard.Exact})
+	s, err := c.Prepare(context.Background(), "v1", 50, shard.Config{Shards: 1, Mode: shard.Exact})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,6 +177,53 @@ func TestFailureIsNotHiddenByTimeout(t *testing.T) {
 	}
 }
 
+// A replica given other vectors under a version's name may return an item
+// the gateway's bundle does not hold. Its answer is a failure that names
+// the replica and the version: the shard's other replica answers, and with
+// no other the search fails.
+func TestReplicaWithAnotherCatalogFails(t *testing.T) {
+	r := rand.New(rand.NewPCG(16, 16))
+	m := shardtest.RandomMatrix(r, 50, 2)
+	root, larger := t.TempDir(), t.TempDir()
+	annshardtest.WriteVectors(t, root, "v1", m)
+	annshardtest.WriteVectors(t, larger, "v1", shardtest.RandomMatrix(r, 60, 2))
+	stray := annshardtest.Start(t, larger)
+	cfg := shard.Config{Shards: 1, Mode: shard.Exact}
+	local, err := shard.Build(m, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	q := []float32{1, 1}
+
+	alone, err := annshardtest.Dial(t, [][]string{{stray}}, annshard.Options{}).Prepare(ctx, "v1", 50, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = alone.Search(ctx, 0, q, 60, nil)
+	if err == nil || !strings.Contains(err.Error(), stray) || !strings.Contains(err.Error(), "v1") {
+		t.Fatalf("err = %v, want one that names the replica %s and the version", err, stray)
+	}
+
+	both, err := annshardtest.Dial(t, [][]string{{stray, annshardtest.Start(t, root)}}, annshard.Options{}).Prepare(ctx, "v1", 50, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := local.Search(ctx, 0, q, 60, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 4 { // each replica leads twice
+		got, err := both.Search(ctx, 0, q, 60, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("got %v\nwant %v", got, want)
+		}
+	}
+}
+
 func TestPrepareErrors(t *testing.T) {
 	r := rand.New(rand.NewPCG(4, 4))
 	m := shardtest.RandomMatrix(r, 50, 2)
@@ -186,15 +234,15 @@ func TestPrepareErrors(t *testing.T) {
 	c := annshardtest.Dial(t, [][]string{{annshardtest.Start(t, rootA)}, {annshardtest.Start(t, rootB)}}, annshard.Options{})
 	ctx := context.Background()
 	cfg := shard.Config{Shards: 2, Mode: shard.Exact}
-	if _, err := c.Prepare(ctx, "v1", cfg); err != nil {
+	if _, err := c.Prepare(ctx, "v1", 50, cfg); err != nil {
 		t.Fatal(err)
 	}
 	// Shard 1's replica lacks v2.
-	if _, err := c.Prepare(ctx, "v2", cfg); err == nil {
+	if _, err := c.Prepare(ctx, "v2", 50, cfg); err == nil {
 		t.Fatal("a version one shard lacks was prepared")
 	}
 	for _, bad := range []shard.Config{{Shards: 3, Mode: shard.Exact}, {Shards: 2, Mode: "ivf"}} {
-		if _, err := c.Prepare(ctx, "v1", bad); err == nil {
+		if _, err := c.Prepare(ctx, "v1", 50, bad); err == nil {
 			t.Errorf("%+v accepted", bad)
 		}
 	}
@@ -304,7 +352,7 @@ const property13HedgeDelay = 10 * time.Millisecond
 func TestProperty13HedgesStayWithinBudget(t *testing.T) {
 	err := checkProperty13(t, 150, func(addrs []string) func(ctx context.Context, k int) error {
 		c := annshardtest.Dial(t, [][]string{addrs}, annshard.Options{HedgeDelay: property13HedgeDelay})
-		s, err := c.Prepare(context.Background(), "v1", shard.Config{Shards: 1, Mode: shard.Exact})
+		s, err := c.Prepare(context.Background(), "v1", 200, shard.Config{Shards: 1, Mode: shard.Exact})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -385,7 +433,7 @@ func TestReplicaDiesDuringSearches(t *testing.T) {
 	})
 	dying := infratest.NewProxy(t, annshardtest.Start(t, root, hold))
 	c := annshardtest.Dial(t, [][]string{{dying.Addr(), annshardtest.Start(t, root)}}, annshard.Options{})
-	s, err := c.Prepare(context.Background(), "v1", cfg)
+	s, err := c.Prepare(context.Background(), "v1", 200, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,7 +527,7 @@ func TestReplicaCatchesUp(t *testing.T) {
 	annshardtest.WriteVectors(t, full, "v1", m)
 	behind := annshardtest.Start(t, late)
 	c := annshardtest.Dial(t, [][]string{{behind, annshardtest.Start(t, full)}}, annshard.Options{})
-	s, err := c.Prepare(context.Background(), "v1", shard.Config{Shards: 1, Mode: shard.Exact})
+	s, err := c.Prepare(context.Background(), "v1", 100, shard.Config{Shards: 1, Mode: shard.Exact})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -500,7 +548,7 @@ func TestReplicaRestartsEmpty(t *testing.T) {
 	annshardtest.WriteVectors(t, root, "v1", m)
 	addr, stop := annshardtest.StartOn(t, "127.0.0.1:0", root)
 	c := annshardtest.Dial(t, [][]string{{addr, annshardtest.Start(t, root)}}, annshard.Options{})
-	s, err := c.Prepare(context.Background(), "v1", shard.Config{Shards: 1, Mode: shard.Exact})
+	s, err := c.Prepare(context.Background(), "v1", 100, shard.Config{Shards: 1, Mode: shard.Exact})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,10 +576,10 @@ func TestPrepareNeedsAReplicaPerShard(t *testing.T) {
 	has, lacks := func() string { return annshardtest.Start(t, full) }, func() string { return annshardtest.Start(t, empty) }
 	cfg := shard.Config{Shards: 2, Mode: shard.Exact}
 	ctx := context.Background()
-	if _, err := annshardtest.Dial(t, [][]string{{has(), lacks()}, {lacks(), has()}}, annshard.Options{}).Prepare(ctx, "v1", cfg); err != nil {
+	if _, err := annshardtest.Dial(t, [][]string{{has(), lacks()}, {lacks(), has()}}, annshard.Options{}).Prepare(ctx, "v1", 100, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := annshardtest.Dial(t, [][]string{{has(), has()}, {lacks(), lacks()}}, annshard.Options{}).Prepare(ctx, "v1", cfg); err == nil {
+	if _, err := annshardtest.Dial(t, [][]string{{has(), has()}, {lacks(), lacks()}}, annshard.Options{}).Prepare(ctx, "v1", 100, cfg); err == nil {
 		t.Fatal("prepared with a shard none of whose replicas holds the version")
 	}
 }
@@ -610,7 +658,7 @@ func TestSilentReplicaStopsCostingHedges(t *testing.T) {
 	silent := infratest.NewProxy(t, annshardtest.Start(t, root))
 	c := annshardtest.Dial(t, [][]string{{silent.Addr(), annshardtest.Start(t, root)}}, annshard.Options{HedgeDelay: 20 * time.Millisecond})
 	cfg := shard.Config{Shards: 1, Mode: shard.Exact}
-	s, err := c.Prepare(context.Background(), "v1", cfg)
+	s, err := c.Prepare(context.Background(), "v1", 100, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

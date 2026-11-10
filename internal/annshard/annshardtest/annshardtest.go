@@ -121,6 +121,6 @@ func Remote(t testing.TB, maxShards int) func(m vec.Matrix, cfg shard.Config) (*
 		if clients[cfg.Shards] == nil {
 			clients[cfg.Shards] = Dial(t, addrs[:cfg.Shards], annshard.Options{})
 		}
-		return clients[cfg.Shards].Prepare(context.Background(), version, cfg)
+		return clients[cfg.Shards].Prepare(context.Background(), version, m.Rows()-1, cfg)
 	}
 }
