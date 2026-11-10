@@ -143,7 +143,7 @@ func (st *swapTest) prepare(v string) func() (*Pipeline, error) {
 		st.mu.Lock()
 		st.bundles = append(st.bundles, b)
 		st.mu.Unlock()
-		p, err := New(b, st.store, shard.DefaultConfig)
+		p, err := newLocal(b, st.store, shard.DefaultConfig)
 		if err != nil {
 			return nil, err
 		}

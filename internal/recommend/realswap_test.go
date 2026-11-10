@@ -53,7 +53,7 @@ func TestRealDataSwap(t *testing.T) {
 			if err != nil {
 				return nil, err
 			}
-			return New(b, rd.store, shard.DefaultConfig)
+			return newLocal(b, rd.store, shard.DefaultConfig)
 		}
 	}
 	p, err := prepare(rd.dir)()

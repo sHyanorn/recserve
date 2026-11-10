@@ -47,7 +47,7 @@ func checkProperty5(seed uint64, cases int, newCache func() Cache, broken bool) 
 		}
 		man := b1.Manifest
 		man.ModelVersion = "t2"
-		p2, err := New(bundle.New(man, b1.IDs, m, b1.Cooc, b1.Popular), p1.History, shard.DefaultConfig)
+		p2, err := newLocal(bundle.New(man, b1.IDs, m, b1.Cooc, b1.Popular), p1.History, shard.DefaultConfig)
 		if err != nil {
 			return err
 		}

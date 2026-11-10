@@ -48,11 +48,11 @@ func testServer(t *testing.T) (*Server, *httptest.Server) {
 
 func pipeline(t *testing.T, b *bundle.Bundle, h history.Store) *recommend.Pipeline {
 	t.Helper()
-	p, err := recommend.New(b, h, shard.DefaultConfig)
+	s, err := shard.Build(b.Vectors, shard.DefaultConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return p
+	return recommend.New(b, h, s)
 }
 
 // live serves a pipeline over b and h.

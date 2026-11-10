@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -330,6 +331,37 @@ func TestLoadRejectsTamperedFile(t *testing.T) {
 	}
 	if _, err := Load(dir, Options{}); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// Vectors returns the manifest and the vectors Load does, from a bundle
+// whose other files it does not read, and rejects a changed items.npy.
+func TestVectors(t *testing.T) {
+	dir := writeBundle(t)
+	want := load(t, dir, Options{})
+	if err := os.WriteFile(filepath.Join(dir, "golden.jsonl"), []byte("tampered\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, rows, err := Vectors(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.ModelVersion != want.ModelVersion || rows.Dim != want.Dim || !slices.Equal(rows.Data, want.Vectors.Data) {
+		t.Fatalf("version %q, dim %d, %d values", m.ModelVersion, rows.Dim, len(rows.Data))
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "items.npy"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[len(data)-1] ^= 1
+	if err := os.WriteFile(filepath.Join(dir, "items.npy"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Vectors(dir); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, _, err := Vectors(t.TempDir()); err == nil {
+		t.Fatal("an empty directory was accepted")
 	}
 }
 

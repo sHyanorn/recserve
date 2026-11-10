@@ -57,7 +57,7 @@ func randomPipeline(r *rand.Rand, n, users int) (*Pipeline, error) {
 	if err := store.Append(context.Background(), events); err != nil {
 		return nil, err
 	}
-	return New(b, store, shard.DefaultConfig)
+	return newLocal(b, store, shard.DefaultConfig)
 }
 
 // checkProperty2 returns the first response that contains an item from the
@@ -300,7 +300,7 @@ func matrix(t testing.TB, dim int, data []float32) vec.Matrix {
 // newPipeline returns a pipeline over b and h with the default shards.
 func newPipeline(t testing.TB, b *bundle.Bundle, h history.Store) *Pipeline {
 	t.Helper()
-	p, err := New(b, h, shard.DefaultConfig)
+	p, err := newLocal(b, h, shard.DefaultConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,4 +408,14 @@ func TestCoocScore(t *testing.T) {
 	if want == 1/seed/pos {
 		t.Fatal("the case does not tell the two orders apart")
 	}
+}
+
+// newLocal returns a pipeline over b and h with b's vectors in in-process
+// shards built by cfg.
+func newLocal(b *bundle.Bundle, h history.Store, cfg shard.Config) (*Pipeline, error) {
+	s, err := shard.Build(b.Vectors, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return New(b, h, s), nil
 }

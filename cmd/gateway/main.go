@@ -146,7 +146,7 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 	}
 	srv.SetReady(true)
 	log.Info("serving", "addr", addr, "admin_addr", adminAddr, "model_version", p.Bundle.ModelVersion, "items", p.Bundle.ItemCount,
-		"shards", shards.Shards, "shard_mode", shards.Mode, "zero_vectors", p.Shards.Zeroes())
+		"shards", shards.Shards, "shard_mode", shards.Mode, "zero_vectors", zeroVectors(p.Bundle))
 	var serveErr error
 	select {
 	case serveErr = <-errc:
@@ -258,13 +258,26 @@ func preparer(opt bundle.Options, store history.Store, cfg shard.Config, budgets
 		if err != nil {
 			return nil, err
 		}
-		p, err := recommend.New(b, store, cfg)
+		s, err := shard.Build(b.Vectors, cfg)
 		if err != nil {
 			return nil, errors.Join(err, b.Close())
 		}
+		p := recommend.New(b, store, s)
 		p.Budgets, p.Cache = budgets, c
 		return p, nil
 	}
+}
+
+// zeroVectors returns the number of b's items whose vector is zero, which
+// the shards leave out.
+func zeroVectors(b *bundle.Bundle) int {
+	n := 0
+	for _, inv := range b.InvNorms[1:] {
+		if inv == 0 {
+			n++
+		}
+	}
+	return n
 }
 
 // loopback reports whether a listener's address is reachable from this

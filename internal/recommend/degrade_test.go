@@ -129,20 +129,21 @@ func want(t *testing.T, p *Pipeline, f *fault, req Request) Response {
 	results := make([][]vec.Hit, 3)
 	var resp Response
 	if uv != nil {
-		resp.Coverage = &Coverage{Shards: p.Shards.Shards()}
+		n := p.Shards.Config().Shards
+		resp.Coverage = &Coverage{Shards: n}
 		var answered [][]vec.Hit
-		for i := range p.Shards.Shards() {
+		for i := range n {
 			if f.fails(stageVector, i) {
 				continue
 			}
-			hits, err := p.Shards.Search(ctx, i, uv, VectorTop, func(id int32) bool { return seen[id] })
+			hits, err := p.Shards.Search(ctx, i, uv, VectorTop, seen)
 			if err != nil {
 				t.Fatal(err)
 			}
 			answered = append(answered, hits)
 		}
 		resp.Coverage.Answered = len(answered)
-		if len(answered) < p.Shards.Shards() {
+		if len(answered) < n {
 			d.add(f.reason, nil)
 		}
 		results[srcVector] = shard.Merge(answered, VectorTop)

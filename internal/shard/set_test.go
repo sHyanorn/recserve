@@ -31,10 +31,10 @@ func randomMatrix(r *rand.Rand, n, dim int) vec.Matrix {
 }
 
 // gather searches every shard for perShard(k) items and merges the top k.
-func gather(s *Set, q []float32, k int, skip func(int32) bool, perShard func(k, n int) int) ([]vec.Hit, error) {
+func gather(s *Set, q []float32, k int, seen map[int32]bool, perShard func(k, n int) int) ([]vec.Hit, error) {
 	var results [][]vec.Hit
 	for i := range s.Shards() {
-		hits, err := s.Search(context.Background(), i, q, perShard(k, s.Shards()), skip)
+		hits, err := s.Search(context.Background(), i, q, perShard(k, s.Shards()), seen)
 		if err != nil {
 			return nil, err
 		}
@@ -59,14 +59,13 @@ func checkProperty6(seed uint64, cases int, perShard func(k, n int) int) error {
 		for j := range q {
 			q[j] = float32(r.IntN(5) - 2)
 		}
-		skipped := map[int32]bool{}
+		seen := map[int32]bool{}
 		for range r.IntN(20) {
-			skipped[int32(1+r.IntN(n))] = true
+			seen[int32(1+r.IntN(n))] = true
 		}
-		skip := func(id int32) bool { return skipped[id] }
 		k := 1 + r.IntN(n+10)
-		want := m.TopK(q, k, func(id int32) bool { return skip(id) || zero(m.Row(id)) })
-		got, err := gather(s, q, k, skip, perShard)
+		want := m.TopK(q, k, func(id int32) bool { return seen[id] || zero(m.Row(id)) })
+		got, err := gather(s, q, k, seen, perShard)
 		if err != nil {
 			return err
 		}
@@ -131,9 +130,25 @@ func TestZeroRowsLeftOut(t *testing.T) {
 	}
 }
 
-// An exact search whose context ends stops within checkEvery rows.
+// polled is a context that counts the checks of its state and has ended,
+// cancelled, from check number end on.
+type polled struct {
+	context.Context
+	checks, end int
+}
+
+func (c *polled) Err() error {
+	c.checks++
+	if c.checks >= c.end {
+		return context.Canceled
+	}
+	return nil
+}
+
+// An exact search checks its context at least every checkEvery rows and
+// stops at the first check that finds it ended.
 func TestSearchStopsWhenContextEnds(t *testing.T) {
-	const n, at = 10000, 3000
+	const n = 10000
 	r := rand.New(rand.NewPCG(3, 3))
 	data := make([]float32, (n+1)*2)
 	for i := 2; i < len(data); i++ {
@@ -147,24 +162,19 @@ func TestSearchStopsWhenContextEnds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	scanned := 0
-	_, err = s.Search(ctx, 0, []float32{1, 1}, 10, func(int32) bool {
-		scanned++
-		if scanned == at {
-			cancel()
-		}
-		return false
-	})
-	if !errors.Is(err, context.Canceled) {
+	open := &polled{Context: context.Background(), end: n}
+	if _, err := s.Search(open, 0, []float32{1, 1}, 10, nil); err != nil {
+		t.Fatal(err)
+	}
+	if open.checks < n/checkEvery {
+		t.Fatalf("%d checks of the context over %d rows, want one every %d", open.checks, n, checkEvery)
+	}
+	ends := &polled{Context: context.Background(), end: 4}
+	if _, err := s.Search(ends, 0, []float32{1, 1}, 10, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
-	if scanned > at+checkEvery {
-		t.Fatalf("scanned %d rows after the context ended at row %d", scanned-at, at)
-	}
-	if _, err := s.Search(ctx, 0, []float32{1, 1}, 10, nil); !errors.Is(err, context.Canceled) {
-		t.Fatalf("search with an ended context: %v", err)
+	if ends.checks != ends.end {
+		t.Fatalf("%d checks of a context that ended at check %d", ends.checks, ends.end)
 	}
 }
 
@@ -188,12 +198,11 @@ func TestHNSWMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := m.Row(17)
-	skip := func(id int32) bool { return id == 17 }
-	got, err := s.SearchAll(context.Background(), q, 10, skip)
+	got, err := s.SearchAll(context.Background(), q, 10, map[int32]bool{17: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := m.TopK(q, 10, skip); !slices.Equal(got, want) {
+	if want := m.TopK(q, 10, func(id int32) bool { return id == 17 }); !slices.Equal(got, want) {
 		t.Fatalf("got %v\nwant %v", got, want)
 	}
 }
@@ -206,6 +215,11 @@ func TestBuildRejects(t *testing.T) {
 	for _, cfg := range []Config{{Shards: 0, Mode: Exact}, {Shards: 1, Mode: "ivf"}} {
 		if _, err := Build(m, cfg); err == nil {
 			t.Errorf("%+v accepted", cfg)
+		}
+	}
+	for _, i := range []int{-1, 2} {
+		if _, err := BuildPart(m, Config{Shards: 2, Mode: Exact}, i); err == nil {
+			t.Errorf("shard %d of 2 accepted", i)
 		}
 	}
 }

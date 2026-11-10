@@ -99,41 +99,114 @@ func Load(dir string, opt Options) (*Bundle, error) {
 	return b, nil
 }
 
-func (b *Bundle) load(opt Options) error {
-	raw, err := os.ReadFile(filepath.Join(b.Dir, "manifest.json"))
+// readManifest reads dir's manifest.json and checks the fields every
+// reader depends on.
+func readManifest(dir string) (Manifest, error) {
+	var m Manifest
+	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	if err != nil {
-		return err
+		return m, err
 	}
-	if err := json.Unmarshal(raw, &b.Manifest); err != nil {
-		return fmt.Errorf("manifest: %w", err)
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return m, fmt.Errorf("manifest: %w", err)
 	}
-	m := &b.Manifest
 	switch {
 	case m.FormatVersion != FormatVersion:
-		return fmt.Errorf("format_version %d, want %d", m.FormatVersion, FormatVersion)
+		return m, fmt.Errorf("format_version %d, want %d", m.FormatVersion, FormatVersion)
 	case m.Metric != "dot" || m.PadID != 0 || (m.UserEncoder != "mean" && m.UserEncoder != "onnx"):
-		return fmt.Errorf("unsupported metric %q, pad_id %d or user_encoder %q", m.Metric, m.PadID, m.UserEncoder)
+		return m, fmt.Errorf("unsupported metric %q, pad_id %d or user_encoder %q", m.Metric, m.PadID, m.UserEncoder)
 	case m.ItemCount <= 0 || m.Dim <= 0 || m.MaxSeqLen <= 0 || m.ModelVersion == "":
-		return errors.New("manifest: item_count, dim, max_seq_len and model_version are required")
+		return m, errors.New("manifest: item_count, dim, max_seq_len and model_version are required")
 	}
+	return m, nil
+}
+
+// readListed reads a file of the bundle in dir and verifies it against the
+// checksum the manifest lists for it.
+func (m *Manifest) readListed(dir, name string) ([]byte, error) {
+	want, ok := m.SHA256[name]
+	if !ok {
+		return nil, fmt.Errorf("%s missing from the manifest", name)
+	}
+	if name != filepath.Base(name) || name == "manifest.json" {
+		return nil, fmt.Errorf("manifest lists %q", name)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(data)
+	if hex.EncodeToString(sum[:]) != want {
+		return nil, fmt.Errorf("%s: checksum mismatch", name)
+	}
+	return data, nil
+}
+
+// vectors parses items.npy: finite float32 values, one row of dim per
+// internal ID, the padding row zero.
+func (m *Manifest) vectors(data []byte) (vec.Matrix, error) {
+	a, err := npy.Parse(data)
+	if err != nil {
+		return vec.Matrix{}, fmt.Errorf("items.npy: %w", err)
+	}
+	if a.F32 == nil || !slices.Equal(a.Shape, []int{m.ItemCount + 1, m.Dim}) {
+		return vec.Matrix{}, fmt.Errorf("items.npy: shape %v, want [%d %d] float32", a.Shape, m.ItemCount+1, m.Dim)
+	}
+	for _, v := range a.F32 {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			return vec.Matrix{}, errors.New("items.npy: non-finite value")
+		}
+	}
+	rows, err := vec.NewMatrix(m.Dim, a.F32)
+	if err != nil {
+		return vec.Matrix{}, err
+	}
+	for _, v := range rows.Row(0) {
+		if v != 0 {
+			return vec.Matrix{}, errors.New("items.npy: padding row is not zero")
+		}
+	}
+	return rows, nil
+}
+
+// Vectors reads only the manifest and the item vectors of the bundle in
+// dir, verifying items.npy as Load does: what a shard replica needs. The
+// rest of the bundle, its golden cases and its train cutoff are for Load
+// to check, and ONNX Runtime is not needed.
+func Vectors(dir string) (Manifest, vec.Matrix, error) {
+	fail := func(err error) (Manifest, vec.Matrix, error) {
+		return Manifest{}, vec.Matrix{}, fmt.Errorf("bundle %s: %w", dir, err)
+	}
+	m, err := readManifest(dir)
+	if err != nil {
+		return fail(err)
+	}
+	data, err := m.readListed(dir, "items.npy")
+	if err != nil {
+		return fail(err)
+	}
+	rows, err := m.vectors(data)
+	if err != nil {
+		return fail(err)
+	}
+	return m, rows, nil
+}
+
+func (b *Bundle) load(opt Options) error {
+	var err error
+	if b.Manifest, err = readManifest(b.Dir); err != nil {
+		return err
+	}
+	m := &b.Manifest
 	if opt.FirstTestTS != 0 && m.TrainCutoffTS >= opt.FirstTestTS {
 		return fmt.Errorf("%w: train_cutoff_ts %d, first test event %d", ErrCutoff, m.TrainCutoffTS, opt.FirstTestTS)
 	}
 
 	files := map[string][]byte{}
-	for name, want := range m.SHA256 {
-		if name != filepath.Base(name) || name == "manifest.json" {
-			return fmt.Errorf("manifest lists %q", name)
-		}
-		data, err := os.ReadFile(filepath.Join(b.Dir, name))
-		if err != nil {
+	for name := range m.SHA256 {
+		if files[name], err = m.readListed(b.Dir, name); err != nil {
 			return err
 		}
-		sum := sha256.Sum256(data)
-		if hex.EncodeToString(sum[:]) != want {
-			return fmt.Errorf("%s: checksum mismatch", name)
-		}
-		files[name] = data
 	}
 	// An optional file the manifest does not list would be ignored, so the
 	// bundle would serve without it.
@@ -178,25 +251,8 @@ func (b *Bundle) load(opt Options) error {
 	if err != nil {
 		return err
 	}
-	a, err := npy.Parse(data)
-	if err != nil {
-		return fmt.Errorf("items.npy: %w", err)
-	}
-	if a.F32 == nil || !slices.Equal(a.Shape, []int{m.ItemCount + 1, m.Dim}) {
-		return fmt.Errorf("items.npy: shape %v, want [%d %d] float32", a.Shape, m.ItemCount+1, m.Dim)
-	}
-	for _, v := range a.F32 {
-		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
-			return errors.New("items.npy: non-finite value")
-		}
-	}
-	if b.Vectors, err = vec.NewMatrix(m.Dim, a.F32); err != nil {
+	if b.Vectors, err = m.vectors(data); err != nil {
 		return err
-	}
-	for _, v := range b.Vectors.Row(0) {
-		if v != 0 {
-			return errors.New("items.npy: padding row is not zero")
-		}
 	}
 	b.InvNorms = b.Vectors.InvNorms()
 

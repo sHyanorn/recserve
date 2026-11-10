@@ -219,10 +219,21 @@ type Ranker interface {
 	Rank(ctx context.Context, features []float32) ([]float32, error)
 }
 
+// Shards is the bundle's item vectors split into shards, searched in this
+// process (shard.Set) or on annshard replicas.
+type Shards interface {
+	// Config returns the settings the shards are built and searched with.
+	Config() shard.Config
+	// Search returns shard i's k items with the highest inner product with
+	// q, best first, ties to the lower ID, without the IDs in seen. If ctx
+	// ends first, the error wraps ctx's.
+	Search(ctx context.Context, i int, q []float32, k int, seen map[int32]bool) ([]vec.Hit, error)
+}
+
 // Pipeline answers requests from one bundle and a history store.
 type Pipeline struct {
 	Bundle  *bundle.Bundle
-	Shards  *shard.Set // the bundle's item vectors, for vector retrieval
+	Shards  Shards // the bundle's item vectors, for vector retrieval
 	History history.Store
 	Budgets Budgets
 	// Cache, if not nil, holds responses that were not degraded. It may be
@@ -269,14 +280,9 @@ func (p *Pipeline) stalled(ctx context.Context, stage string, shard int) error {
 	return p.stall(ctx, stage, shard)
 }
 
-// New returns a pipeline over b and h, with b's vectors split into shards
-// by cfg.
-func New(b *bundle.Bundle, h history.Store, cfg shard.Config) (*Pipeline, error) {
-	s, err := shard.Build(b.Vectors, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return &Pipeline{Bundle: b, Shards: s, History: h, flight: new(singleflight.Group)}, nil
+// New returns a pipeline over b and h that searches b's vectors in s.
+func New(b *bundle.Bundle, h history.Store, s Shards) *Pipeline {
+	return &Pipeline{Bundle: b, Shards: s, History: h, flight: new(singleflight.Group)}
 }
 
 func (p *Pipeline) ranker() Ranker {
@@ -602,9 +608,8 @@ func (p *Pipeline) retrieve(ctx context.Context, hist []int32, uv []float32, see
 // searchShards searches every shard in parallel, each within the shard
 // budget, for the VectorTop unseen items closest to uv.
 func (p *Pipeline) searchShards(ctx context.Context, uv []float32, seen map[int32]bool) ([][]vec.Hit, []error) {
-	n := p.Shards.Shards()
+	n := p.Shards.Config().Shards
 	hits, errs := make([][]vec.Hit, n), make([]error, n)
-	skip := func(id int32) bool { return seen[id] }
 	top := VectorTop
 	if p.shardShare {
 		top = (VectorTop + n - 1) / n
@@ -615,7 +620,7 @@ func (p *Pipeline) searchShards(ctx context.Context, uv []float32, seen map[int3
 			sctx, cancel := within(ctx, p.Budgets.Shard)
 			defer cancel()
 			if errs[i] = p.stalled(sctx, stageVector, i); errs[i] == nil {
-				hits[i], errs[i] = p.Shards.Search(sctx, i, uv, top, skip)
+				hits[i], errs[i] = p.Shards.Search(sctx, i, uv, top, seen)
 			}
 		})
 	}

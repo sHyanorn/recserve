@@ -91,7 +91,7 @@ func (o *overshoot) run(t *testing.T, p *Pipeline, qs []realQuery, reasons ...st
 func TestRealDataDegradation(t *testing.T) {
 	rd := loadRealData(t)
 	qs := realQueries(t, rd)
-	p, err := New(rd.bundle, rd.store, shard.DefaultConfig)
+	p, err := newLocal(rd.bundle, rd.store, shard.DefaultConfig)
 	if err != nil {
 		t.Fatal(err)
 	}

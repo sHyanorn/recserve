@@ -82,15 +82,16 @@ func TestRealDataShards(t *testing.T) {
 	ctx := context.Background()
 	one, two := shard.DefaultConfig, shard.DefaultConfig
 	one.Shards = 1
-	p1, err := New(rd.bundle, rd.store, one)
+	s1, err := shard.Build(rd.bundle.Vectors, one)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p2, err := New(rd.bundle, rd.store, two)
+	s2, err := shard.Build(rd.bundle.Vectors, two)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("%d items, %d left out for a zero vector", rd.bundle.ItemCount, p1.Shards.Zeroes())
+	p1, p2 := New(rd.bundle, rd.store, s1), New(rd.bundle, rd.store, s2)
+	t.Logf("%d items, %d left out for a zero vector", rd.bundle.ItemCount, s1.Zeroes())
 
 	truth := make([][]vec.Hit, len(qs))
 	var withVector int
@@ -99,12 +100,11 @@ func TestRealDataShards(t *testing.T) {
 			continue
 		}
 		withVector++
-		skip := func(id int32) bool { return q.seen[id] }
-		a, err := p1.Shards.SearchAll(ctx, q.uv, VectorTop, skip)
+		a, err := s1.SearchAll(ctx, q.uv, VectorTop, q.seen)
 		if err != nil {
 			t.Fatal(err)
 		}
-		b, err := p2.Shards.SearchAll(ctx, q.uv, VectorTop, skip)
+		b, err := s2.SearchAll(ctx, q.uv, VectorTop, q.seen)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -139,9 +139,9 @@ func TestRealDataShards(t *testing.T) {
 			t.Fatal(err)
 		}
 		build := time.Since(start)
-		exact := p1.Shards
+		exact := s1
 		if n == 2 {
-			exact = p2.Shards
+			exact = s2
 		}
 		for _, ef := range []int{200, 400, 800} {
 			s := s.WithEf(ef)
@@ -151,15 +151,14 @@ func TestRealDataShards(t *testing.T) {
 				if q.uv == nil {
 					continue
 				}
-				skip := func(id int32) bool { return q.seen[id] }
 				start := time.Now()
-				got, err := s.SearchAll(ctx, q.uv, VectorTop, skip)
+				got, err := s.SearchAll(ctx, q.uv, VectorTop, q.seen)
 				dh = append(dh, time.Since(start))
 				if err != nil {
 					t.Fatal(err)
 				}
 				start = time.Now()
-				if _, err := exact.SearchAll(ctx, q.uv, VectorTop, skip); err != nil {
+				if _, err := exact.SearchAll(ctx, q.uv, VectorTop, q.seen); err != nil {
 					t.Fatal(err)
 				}
 				de = append(de, time.Since(start))

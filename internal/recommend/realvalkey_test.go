@@ -98,7 +98,7 @@ func TestRealDataValkey(t *testing.T) {
 		{"valkey, cache off", vstore, nil},
 		{"valkey, cache on", vstore, func() Cache { return salted{vcache, rand.Uint64()} }},
 	} {
-		p, err := New(rd.bundle, c.store, shard.DefaultConfig)
+		p, err := newLocal(rd.bundle, c.store, shard.DefaultConfig)
 		if err != nil {
 			t.Fatal(err)
 		}
