@@ -66,6 +66,36 @@ func TestFailuresMakeTheRunInvalid(t *testing.T) {
 	}
 }
 
+// A recommendation that reports a degradation is an answer, counted apart
+// from the others, and every recommendation counts under its version.
+func TestDegradedAndVersions(t *testing.T) {
+	var n atomic.Int64
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /readyz", func(http.ResponseWriter, *http.Request) {})
+	mux.HandleFunc("POST /v1/recommend", func(w http.ResponseWriter, _ *http.Request) {
+		body := `{"items":[],"model_version":"b","degraded":[],"coverage":{"shards":2,"answered":2}}`
+		if n.Add(1)%2 == 0 {
+			body = `{"items":[],"model_version":"a","degraded":["shards_partial"],"coverage":{"shards":2,"answered":1}}`
+		}
+		_, _ = w.Write([]byte(body)) //nolint:errcheck // loadgen may have given up on the request; the test checks what it received
+	})
+	s := httptest.NewServer(mux)
+	t.Cleanup(s.Close)
+	cfg := testConfig(strings.TrimPrefix(s.URL, "http://"))
+	cfg.work = &datasetWorkload{rows: []row{{"u", "i", 1}}, k: 5}
+	r, err := measure(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, degraded := r.Outcomes["recommend_ok"], r.Outcomes["recommend_degraded"]
+	if !r.Valid || ok == 0 || degraded == 0 || ok+degraded < 495 {
+		t.Fatalf("valid %v %v, outcomes %v", r.Valid, r.Problems, r.Outcomes)
+	}
+	if r.Versions["b"] != ok || r.Versions["a"] != degraded || len(r.Versions) != 2 {
+		t.Fatalf("versions %v, outcomes %v", r.Versions, r.Outcomes)
+	}
+}
+
 // Property 7: a stall of the gateway delays every request due during it,
 // not only those in flight, and the latency shows it because it counts from
 // when each request was due. The service time, which counts from the actual

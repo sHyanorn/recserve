@@ -41,6 +41,7 @@ type report struct {
 	Valid      bool               `json:"valid"`
 	Problems   []string           `json:"problems,omitempty"`
 	Outcomes   map[string]int     `json:"outcomes"`
+	Versions   map[string]int     `json:"versions"` // recommendations by the bundle version they name
 	Latency    map[string]summary `json:"latency_us"`
 }
 
@@ -61,6 +62,7 @@ type worker struct {
 	buf    []byte
 
 	outcomes map[string]int
+	versions map[string]int
 	firstErr string
 	sent     int // measured requests sent before the window ended
 	// Latency samples in nanoseconds, of measured requests that succeeded:
@@ -76,6 +78,7 @@ func newWorker(ctx context.Context, cfg config, end time.Time) (*worker, error) 
 			Timeout:   30 * time.Second,
 		},
 		outcomes: map[string]int{},
+		versions: map[string]int{},
 	}
 	status, _, err := w.do(ctx, http.MethodGet, "/readyz", nil)
 	if err == nil && status != http.StatusOK {
@@ -84,9 +87,13 @@ func newWorker(ctx context.Context, cfg config, end time.Time) (*worker, error) 
 	return w, err
 }
 
-var versionField = []byte(`"model_version":"`)
+var (
+	versionField  = []byte(`"model_version":"`)
+	degradedField = []byte(`"degraded":["`)
+)
 
-// classify names a reply's outcome. A recommendation must carry the model version.
+// classify names a reply's outcome. A recommendation must carry the model
+// version; one that reports a degradation is an answer, counted apart.
 func classify(path string, status int, data []byte, err error) string {
 	switch {
 	case err != nil:
@@ -96,9 +103,19 @@ func classify(path string, status int, data []byte, err error) string {
 	case path == "/v1/events" && status == http.StatusAccepted:
 		return "events_ok"
 	case path == "/v1/recommend" && status == http.StatusOK && bytes.Contains(data, versionField):
+		if bytes.Contains(data, degradedField) {
+			return "recommend_degraded"
+		}
 		return "recommend_ok"
 	}
 	return "error"
+}
+
+// version returns the bundle version a recommendation names.
+func version(data []byte) []byte {
+	_, v, _ := bytes.Cut(data, versionField)
+	v, _, _ = bytes.Cut(v, []byte(`"`))
+	return v
 }
 
 func (w *worker) handle(ctx context.Context, j job) {
@@ -112,6 +129,9 @@ func (w *worker) handle(ctx context.Context, j job) {
 	}
 	outcome := classify(path, status, data, err)
 	w.outcomes[outcome]++
+	if outcome == "recommend_ok" || outcome == "recommend_degraded" {
+		w.versions[string(version(data))]++
+	}
 	if sent.Before(w.end) {
 		w.sent++
 	}
@@ -209,7 +229,7 @@ send:
 func summarizeRun(cfg config, workers []*worker) report {
 	r := report{
 		TargetRate: cfg.rate, Warmup: cfg.warmup.Seconds(), Duration: cfg.duration.Seconds(),
-		Conns: cfg.conns, Go: runtime.Version(), CPUs: runtime.NumCPU(), Outcomes: map[string]int{},
+		Conns: cfg.conns, Go: runtime.Version(), CPUs: runtime.NumCPU(), Outcomes: map[string]int{}, Versions: map[string]int{},
 	}
 	var sent int
 	var firstErr string
@@ -217,6 +237,9 @@ func summarizeRun(cfg config, workers []*worker) report {
 	for _, w := range workers {
 		for k, n := range w.outcomes {
 			r.Outcomes[k] += n
+		}
+		for k, n := range w.versions {
+			r.Versions[k] += n
 		}
 		sent += w.sent
 		if firstErr == "" {
