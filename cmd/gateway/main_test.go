@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -196,24 +197,27 @@ func TestLoopback(t *testing.T) {
 	}
 }
 
+func newLive(t *testing.T) *recommend.Live {
+	t.Helper()
+	p, err := preparer(bundle.Options{}, history.NewMemory(), localShards(t), recommend.Budgets{}, nil)(bundletest.Write(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return recommend.NewLive(p, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
 // shutdown closes the bundle once the servers have drained, and does not wait
 // for a request still running past the drain.
 func TestShutdown(t *testing.T) {
-	newLive := func() *recommend.Live {
-		p, err := preparer(bundle.Options{}, history.NewMemory(), localShards(t), recommend.Budgets{}, nil)(bundletest.Write(t))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return recommend.NewLive(p, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	server := func(live *recommend.Live) *api.Server { return api.New(live, history.NewMemory(), log) }
 
-	live := newLive()
-	if err := shutdown(log, nil, live, time.Second); err != nil || live.Version() != "" {
+	live := newLive(t)
+	if err := shutdown(log, server(live), nil, live, 0, time.Second); err != nil || live.Version() != "" {
 		t.Fatalf("drained: err %v, version %q after shutdown", err, live.Version())
 	}
 
-	live = newLive()
+	live = newLive(t)
 	entered, unblock := make(chan struct{}), make(chan struct{})
 	hs := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, release, err := live.Acquire()
@@ -242,7 +246,7 @@ func TestShutdown(t *testing.T) {
 	}()
 	<-entered
 	stopped := make(chan error, 1)
-	go func() { stopped <- shutdown(log, []*http.Server{hs}, live, 20*time.Millisecond) }()
+	go func() { stopped <- shutdown(log, server(live), []*http.Server{hs}, live, 0, 20*time.Millisecond) }()
 	select {
 	case err := <-stopped:
 		if !errors.Is(err, context.DeadlineExceeded) {
@@ -260,6 +264,85 @@ func TestShutdown(t *testing.T) {
 	}
 	if err := <-served; !errors.Is(err, http.ErrServerClosed) {
 		t.Fatal(err)
+	}
+}
+
+// Told to stop, the gateway reports itself not ready at once and closes
+// each connection after its response; it goes on answering for the delay,
+// while the load balancers take it out, then closes its listener, and the
+// requests in flight finish (D045).
+func TestShutdownDelay(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	live := newLive(t)
+	srv := api.New(live, history.NewMemory(), log)
+	srv.SetReady(true)
+	entered, unblock := make(chan struct{}), make(chan struct{})
+	mux := http.NewServeMux()
+	mux.Handle("/", srv.Handler())
+	mux.HandleFunc("GET /slow", func(http.ResponseWriter, *http.Request) {
+		close(entered)
+		<-unblock
+	})
+	hs := &http.Server{Handler: mux, ReadHeaderTimeout: time.Second}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go hs.Serve(ln) //nolint:errcheck // ends with the shutdown below
+	// get asks on a new connection, so that the response shows whether the
+	// server keeps it open.
+	get := func(path string) (*http.Response, error) {
+		tr := &http.Transport{}
+		defer tr.CloseIdleConnections()
+		resp, err := (&http.Client{Transport: tr, Timeout: 5 * time.Second}).Get("http://" + ln.Addr().String() + path)
+		if err != nil {
+			return nil, err
+		}
+		return resp, resp.Body.Close()
+	}
+	slow := make(chan error, 1)
+	go func() {
+		resp, err := get("/slow")
+		if err == nil && resp.StatusCode != http.StatusOK {
+			err = fmt.Errorf("status %d", resp.StatusCode)
+		}
+		slow <- err
+	}()
+	<-entered
+
+	const delay = 2 * time.Second
+	stopped := make(chan error, 1)
+	go func() { stopped <- shutdown(log, srv, []*http.Server{hs}, live, delay, 10*time.Second) }()
+	for deadline := time.Now().Add(time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if resp, err := get("/readyz"); err == nil && resp.StatusCode == http.StatusServiceUnavailable {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("/readyz is not 503 a second after the stop")
+		}
+	}
+	if resp, err := get("/livez"); err != nil || resp.StatusCode != http.StatusOK || !resp.Close {
+		t.Fatalf("during the delay: %v, %v; want 200 with Connection: close", resp, err)
+	}
+	for deadline := time.Now().Add(delay + 5*time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, err := get("/livez"); err != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("still taking requests 5 s after the delay")
+		}
+	}
+	close(unblock)
+	if err := <-slow; err != nil {
+		t.Fatalf("the request in flight: %v", err)
+	}
+	select {
+	case err := <-stopped:
+		if err != nil || live.Version() != "" {
+			t.Fatalf("shutdown: %v, version %q", err, live.Version())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("shutdown did not return")
 	}
 }
 

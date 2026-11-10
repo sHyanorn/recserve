@@ -110,6 +110,9 @@ func (s *Server) Register(gs *grpc.Server) {
 	healthpb.RegisterHealthServer(gs, s.health)
 }
 
+// Shutdown reports the replica not ready from then on, as it stops.
+func (s *Server) Shutdown() { s.health.Shutdown() }
+
 // setHealth reports whether the replica holds the serving version; the
 // caller holds s.mu, so that the reports keep the order of the changes.
 func (s *Server) setHealth() {

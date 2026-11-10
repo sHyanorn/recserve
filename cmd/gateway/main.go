@@ -45,6 +45,7 @@ func main() {
 	kafkaBrokers := flag.String("kafka-brokers", "", "comma-separated Kafka brokers: /v1/events produces to the events topic; empty makes it write the histories itself")
 	eventsTimeout := flag.Duration("events-timeout", api.DefaultEventsTimeout, "time /v1/events waits for its events to be accepted before it answers 503; at least 1s with -kafka-brokers, 0 for none without")
 	drain := flag.Duration("drain", 10*time.Second, "time allowed for in-flight requests at shutdown")
+	shutdownDelay := flag.Duration("shutdown-delay", 0, "time the gateway goes on answering after SIGTERM, with /readyz at 503, before it stops taking requests: long enough for the load balancers to take it out")
 	ortLib := flag.String("ort-lib", "", "ONNX Runtime shared library (libonnxruntime.so.1.31.x), needed by a bundle with an ONNX user encoder or a ranker")
 	shards := shard.DefaultConfig
 	flag.IntVar(&shards.Shards, "shards", shards.Shards, "in-process shards of the item vectors; with -shard-addrs the number of shards is the number of address groups")
@@ -63,13 +64,13 @@ func main() {
 	cacheTTL := flag.Duration("cache-ttl", 5*time.Minute, "result cache time to live, changed by up to 10% either way")
 	flag.Parse()
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if err := run(log, *addr, *adminAddr, *dir, *testSplit, *preload, *ortLib, *valkeyAddr, *kafkaBrokers, *eventsTimeout, shards, *shardAddrs, *hedgeDelay, *prepareTimeout, budgets, *cacheSize, *cacheTTL, *drain); err != nil {
+	if err := run(log, *addr, *adminAddr, *dir, *testSplit, *preload, *ortLib, *valkeyAddr, *kafkaBrokers, *eventsTimeout, shards, *shardAddrs, *hedgeDelay, *prepareTimeout, budgets, *cacheSize, *cacheTTL, *drain, *shutdownDelay); err != nil {
 		log.Error("gateway stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, valkeyAddr, kafkaBrokers string, eventsTimeout time.Duration, shards shard.Config, shardAddrs string, hedgeDelay, prepareTimeout time.Duration, budgets recommend.Budgets, cacheSize int, cacheTTL time.Duration, drain time.Duration) (err error) {
+func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, valkeyAddr, kafkaBrokers string, eventsTimeout time.Duration, shards shard.Config, shardAddrs string, hedgeDelay, prepareTimeout time.Duration, budgets recommend.Budgets, cacheSize int, cacheTTL time.Duration, drain, shutdownDelay time.Duration) (err error) {
 	if dir == "" {
 		return errors.New("-bundle is required")
 	}
@@ -178,16 +179,23 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 	case serveErr = <-errc:
 	case <-ctx.Done():
 	}
-	srv.SetReady(false)
 	closeLive = false
-	return errors.Join(serveErr, shutdown(log, servers, live, drain))
+	return errors.Join(serveErr, shutdown(log, srv, servers, live, shutdownDelay, drain))
 }
 
-// shutdown shuts the servers down, giving requests in flight drain to finish,
-// then closes live. Requests still running at the deadline may hold the
-// active bundle, and closing it would wait for them without limit, so it
-// then logs a warning and returns without closing it.
-func shutdown(log *slog.Logger, servers []*http.Server, live *recommend.Live, drain time.Duration) error {
+// shutdown stops the gateway (D045). It reports srv not ready, has each
+// connection closed after its next response, and goes on answering for
+// delay, while the load balancers take it out. Then it shuts the servers
+// down, giving requests in flight drain to finish, and closes live.
+// Requests still running at the deadline may hold the active bundle, and
+// closing it would wait for them without limit, so it then logs a warning
+// and returns without closing it.
+func shutdown(log *slog.Logger, srv *api.Server, servers []*http.Server, live *recommend.Live, delay, drain time.Duration) error {
+	for _, hs := range servers {
+		hs.SetKeepAlivesEnabled(false)
+	}
+	srv.SetReady(false)
+	time.Sleep(delay)
 	ctx, cancel := context.WithTimeout(context.Background(), drain)
 	defer cancel()
 	var errs []error
