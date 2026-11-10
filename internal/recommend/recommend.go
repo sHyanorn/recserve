@@ -262,8 +262,9 @@ type candidate struct {
 // Recommend answers a request. Each stage runs within its budget; one that
 // fails or runs out of time is skipped or falls back, and the response
 // reports why. If ctx ends, the request fails with an error that wraps
-// ctx.Err().
-func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error) {
+// ctx.Err(). A request that fails after its cache lookup returns a response
+// that holds Cached only, so the lookup can still be counted.
+func (p *Pipeline) Recommend(ctx context.Context, req Request) (out Response, err error) {
 	if req.K <= 0 || req.K > MaxK {
 		return Response{}, fmt.Errorf("k must be in 1..%d", MaxK)
 	}
@@ -284,6 +285,11 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error)
 			resp.Cached = &ok
 			return resp, nil
 		}
+		defer func() {
+			if err != nil {
+				out = Response{Cached: new(bool)}
+			}
+		}()
 	}
 	seen := make(map[int32]bool, len(hist)+len(req.Exclude))
 	for _, id := range hist {

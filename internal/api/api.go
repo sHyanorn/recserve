@@ -235,6 +235,13 @@ func (s *Server) recommend(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	resp, err := s.Live.Recommend(r.Context(), req)
+	if resp.Cached != nil { // also set when the request failed after the lookup
+		result := "miss"
+		if *resp.Cached {
+			result = "hit"
+		}
+		s.cacheLookups.WithLabelValues(result).Inc()
+	}
 	if err != nil {
 		return err
 	}
@@ -244,13 +251,6 @@ func (s *Server) recommend(w http.ResponseWriter, r *http.Request) error {
 	}
 	for _, r := range resp.Degraded {
 		s.degraded.WithLabelValues(r).Inc()
-	}
-	if resp.Cached != nil {
-		result := "miss"
-		if *resp.Cached {
-			result = "hit"
-		}
-		s.cacheLookups.WithLabelValues(result).Inc()
 	}
 	for _, f := range resp.Failures {
 		s.Log.Warn("request degraded", "reason", f.Reason, "err", f.Err)

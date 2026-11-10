@@ -36,7 +36,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] History store and result cache on Valkey; singleflight; property test 11. A hit still reads the history to key it (D030); if that costs too much, key by a per-user history version instead
 - [ ] History store keeps raw item IDs, so a swap may change the item IDs; lift the equal-IDs check of D031
 - [ ] Circuit breaker and `history_unavailable` path; property test 10
-- [ ] Count the result cache lookup of a request that fails after it; today only answered requests are counted
+- [x] Count the result cache lookup of a request that fails after it
 - [ ] Integration tests against real Kafka and Valkey containers
 
 ## M4 Sharded vector tier

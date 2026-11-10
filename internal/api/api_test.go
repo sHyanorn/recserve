@@ -434,3 +434,28 @@ func TestCacheLookupsAreCounted(t *testing.T) {
 		}
 	}
 }
+
+// A request that fails after its cache lookup is counted like any other.
+func TestCacheLookupOfFailedRequestIsCounted(t *testing.T) {
+	s, _ := testServer(t)
+	p, release, err := s.Live.Acquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	p.Cache = cache.New[recommend.Response](10, time.Hour)
+	if err := s.History.Append(context.Background(), []history.Event{{ID: 1, User: "u", Item: 1, TS: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the history and the cache are read, then vector retrieval finds the context ended
+	req := httptest.NewRequest(http.MethodPost, "/v1/recommend", strings.NewReader(`{"user_id":"u","k":2}`)).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 499 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if got := testutil.ToFloat64(s.cacheLookups.WithLabelValues("miss")); got != 1 {
+		t.Fatalf("miss counted %v times, want 1", got)
+	}
+}
