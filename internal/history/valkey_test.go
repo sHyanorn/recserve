@@ -6,6 +6,8 @@ import (
 	"math/rand/v2"
 	"testing"
 
+	"github.com/valkey-io/valkey-go"
+
 	"github.com/sHyanorn/recserve/internal/infratest"
 )
 
@@ -14,35 +16,35 @@ import (
 // deleted when it ends.
 func valkeyStores(t *testing.T) func() Store {
 	t.Helper()
-	base, err := NewValkey(infratest.ValkeyAddr(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	addr := infratest.ValkeyAddr(t)
+	client := infratest.ValkeyClient(t, addr)
 	root := fmt.Sprintf("test:%016x:", rand.Uint64())
-	t.Cleanup(func() {
-		defer base.Close()
-		ctx, c := context.Background(), base.c
-		for cursor := uint64(0); ; {
-			page, err := c.Do(ctx, c.B().Scan().Cursor(cursor).Match(root+"*").Count(1000).Build()).AsScanEntry()
-			if err != nil {
-				t.Errorf("deleting the test's keys: %v", err)
-				return
-			}
-			if len(page.Elements) > 0 {
-				if err := c.Do(ctx, c.B().Unlink().Key(page.Elements...).Build()).Error(); err != nil {
-					t.Errorf("deleting the test's keys: %v", err)
-					return
+	t.Cleanup(func() { // before the client is closed
+		ctx := context.Background()
+		err := client.Do(ctx, func(c valkey.Client) error {
+			for cursor := uint64(0); ; {
+				page, err := c.Do(ctx, c.B().Scan().Cursor(cursor).Match(root+"*").Count(1000).Build()).AsScanEntry()
+				if err != nil {
+					return err
+				}
+				if len(page.Elements) > 0 {
+					if err := c.Do(ctx, c.B().Unlink().Key(page.Elements...).Build()).Error(); err != nil {
+						return err
+					}
+				}
+				if cursor = page.Cursor; cursor == 0 {
+					return nil
 				}
 			}
-			if cursor = page.Cursor; cursor == 0 {
-				return
-			}
+		})
+		if err != nil {
+			t.Errorf("deleting the test's keys: %v", err)
 		}
 	})
 	n := 0
 	return func() Store {
 		n++
-		return &Valkey{c: base.c, prefix: fmt.Sprintf("%s%d:", root, n)}
+		return &Valkey{c: client, prefix: fmt.Sprintf("%s%d:", root, n)}
 	}
 }
 

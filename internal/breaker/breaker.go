@@ -13,6 +13,7 @@ import (
 
 	"github.com/sHyanorn/recserve/internal/cache"
 	"github.com/sHyanorn/recserve/internal/history"
+	"github.com/sHyanorn/recserve/internal/valkeyclient"
 )
 
 // ErrOpen is the error of a call the breaker did not let through.
@@ -26,14 +27,18 @@ type Breaker struct {
 // New returns a closed breaker. It opens after the given number of failures
 // in a row and stays open for the given time; then one call at a time is
 // let through, and the first that succeeds closes it, while one that fails
-// opens it again. A call whose context was cancelled counts as neither.
+// opens it again. A call whose context was cancelled counts as neither, nor
+// does one that ended waiting for a first connection
+// (valkeyclient.ErrConnecting): neither says that the server fails.
 // onChange, if not nil, is called with the states of every change.
 func New(failures uint32, open time.Duration, onChange func(from, to string)) *Breaker {
 	return &Breaker{gobreaker.NewCircuitBreaker[struct{}](gobreaker.Settings{
 		MaxRequests: 1,
 		Timeout:     open,
 		ReadyToTrip: func(c gobreaker.Counts) bool { return c.ConsecutiveFailures >= failures },
-		IsExcluded:  func(err error) bool { return errors.Is(err, context.Canceled) },
+		IsExcluded: func(err error) bool {
+			return errors.Is(err, context.Canceled) || errors.Is(err, valkeyclient.ErrConnecting)
+		},
 		OnStateChange: func(_ string, from, to gobreaker.State) {
 			if onChange != nil {
 				onChange(from.String(), to.String())

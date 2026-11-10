@@ -14,6 +14,8 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
+
+	"github.com/sHyanorn/recserve/internal/valkeyclient"
 )
 
 // ValkeyAddr returns the Valkey address named by RECSERVE_VALKEY_ADDR.
@@ -22,6 +24,18 @@ import (
 func ValkeyAddr(t testing.TB) string {
 	t.Helper()
 	return env(t, "RECSERVE_VALKEY_ADDR")
+}
+
+// ValkeyClient returns a client of the Valkey server at addr, closed when
+// the test ends.
+func ValkeyClient(t testing.TB, addr string) *valkeyclient.Client {
+	t.Helper()
+	c, err := valkeyclient.New(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+	return c
 }
 
 func env(t testing.TB, name string) string {

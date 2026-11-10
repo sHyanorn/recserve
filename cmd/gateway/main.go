@@ -26,6 +26,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/onnx"
 	"github.com/sHyanorn/recserve/internal/recommend"
 	"github.com/sHyanorn/recserve/internal/shard"
+	"github.com/sHyanorn/recserve/internal/valkeyclient"
 )
 
 // defaultAdminAddr keeps the admin API, which has no authentication, on this host.
@@ -181,11 +182,11 @@ func openStore(addr string) (history.Store, func(), error) {
 	if addr == "" {
 		return history.NewMemory(), func() {}, nil
 	}
-	v, err := history.NewValkey(addr)
+	c, err := valkeyclient.New(addr)
 	if err != nil {
 		return nil, nil, err
 	}
-	return v, v.Close, nil
+	return history.NewValkey(c), c.Close, nil
 }
 
 // openCache returns the result cache and the function that closes it: on
@@ -198,11 +199,16 @@ func openCache(addr string, size int, ttl time.Duration) (recommend.Cache, func(
 	case addr == "":
 		return cache.New[recommend.Response](size, ttl), func() {}, nil
 	}
-	v, err := cache.NewValkey[recommend.Response](addr, ttl)
+	c, err := valkeyclient.New(addr) // a client of its own, as the history store has (D036)
 	if err != nil {
 		return nil, nil, err
 	}
-	return v, v.Close, nil
+	v, err := cache.NewValkey[recommend.Response](c, ttl)
+	if err != nil {
+		c.Close()
+		return nil, nil, err
+	}
+	return v, c.Close, nil
 }
 
 // The circuit breaker on Valkey opens after breakerFailures failed calls in

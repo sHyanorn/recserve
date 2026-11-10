@@ -208,12 +208,8 @@ func fake(t *testing.T) []string {
 
 func valkeyStore(t *testing.T) *history.Valkey {
 	t.Helper()
-	v, err := history.NewValkey(infratest.ValkeyAddr(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(v.Close)
-	return v
+	addr := infratest.ValkeyAddr(t)
+	return history.NewValkey(infratest.ValkeyClient(t, addr))
 }
 
 // Property 9: after the consumer is stopped at random points and restarted,

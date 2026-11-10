@@ -35,7 +35,7 @@ Start order with Kafka: `make infra-up`, then `bin/ingest -kafka-brokers localho
 - Two-phase bundle swap: prepare and verify in the background, atomic activation, previous bundle closed once no request holds it (D031)
 - Events through Kafka to an ingest consumer that applies them idempotently and commits after applying (D034, D035)
 - User histories and the result cache on Valkey, shared by the gateways; concurrent misses on one key computed once (D033, D036)
-- Circuit breaker on the gateway's Valkey calls (D037)
+- Circuit breaker on the gateway's Valkey calls; connections to Valkey opened and replaced outside the request path (D037)
 - Tests on the built binaries with ingest killed, Valkey paused and Kafka stopped (`make e2e`)
 - Prometheus metrics; load generator corrected for coordinated omission
 
@@ -47,7 +47,7 @@ The catalog served has 25.6k items (Amazon Reviews 2023 Video_Games, 5-core). At
 
 - User histories keep every event: no cap per user and no expiry (D023, D033). In Valkey they are never evicted (`maxmemory` is 1 GB in compose; a long history takes about 87 bytes per event). Once they fill it, reads go on and writes fail: `/v1/events` answers 503 until memory is added or histories are deleted.
 - Valkey persists with snapshots only, so events since the last snapshot are lost if it stops uncleanly.
-- The gateway opens its Valkey connections within a request's history budget (3 ms): where connection setup takes longer, requests degrade and the circuit breaker can stay open with Valkey healthy (D037).
+- A Valkey server that accepts connections and never answers costs each request its history budget (3 ms) for up to a second after the open connections have timed out, before the circuit breaker opens (D037).
 - With four workers saturating the four CPUs that Valkey shares, the history read and cache lookup took 4.3 ms at p99 against a budget of 3 ms; at 200 requests/s, 0.2 to 0.3% of the responses fell back for that reason (docs/BENCHMARKS.md, M3).
 
 ## License

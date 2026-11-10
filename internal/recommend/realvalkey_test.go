@@ -77,21 +77,16 @@ func TestRealDataValkey(t *testing.T) {
 	if err := rd.store.Append(ctx, evs); err != nil {
 		t.Fatal(err)
 	}
-	vstore, err := history.NewValkey(addr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(vstore.Close)
+	vstore := history.NewValkey(infratest.ValkeyClient(t, addr))
 	loaded := time.Now()
 	if err := vstore.Append(ctx, evs); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("%d events appended to Valkey in %v, for %d requests", len(evs), time.Since(loaded).Round(time.Millisecond), len(qs))
-	vcache, err := cache.NewValkey[Response](addr, time.Hour)
+	vcache, err := cache.NewValkey[Response](infratest.ValkeyClient(t, addr), time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(vcache.Close)
 
 	for _, c := range []struct {
 		name  string
@@ -153,11 +148,10 @@ func TestRealDataValkey(t *testing.T) {
 		}
 	}
 
-	small, err := cache.NewValkey[string](addr, time.Hour)
+	small, err := cache.NewValkey[string](infratest.ValkeyClient(t, addr), time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(small.Close)
 	key := cache.Key{0: 0xbe, 1: 0x9c}
 	if err := small.Put(ctx, key, fmt.Sprintf("%014d", 0)); err != nil { // 16 bytes as JSON
 		t.Fatal(err)

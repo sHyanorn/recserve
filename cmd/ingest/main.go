@@ -23,6 +23,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/events"
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/ingest"
+	"github.com/sHyanorn/recserve/internal/valkeyclient"
 )
 
 func main() {
@@ -43,11 +44,12 @@ func run(log *slog.Logger, brokers, valkeyAddr, group, addr string, sessionTimeo
 	if brokers == "" || valkeyAddr == "" {
 		return errors.New("-kafka-brokers and -valkey-addr are required")
 	}
-	store, err := history.NewValkey(valkeyAddr)
+	vk, err := valkeyclient.New(valkeyAddr)
 	if err != nil {
 		return err
 	}
-	defer store.Close()
+	defer vk.Close()
+	store := history.NewValkey(vk)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	c, err := ingest.New(ctx, ingest.Config{Brokers: strings.Split(brokers, ","), Group: group, Topic: events.Topic, Store: store, Log: log, SessionTimeout: sessionTimeout})

@@ -3,12 +3,14 @@ package breaker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/sHyanorn/recserve/internal/cache"
 	"github.com/sHyanorn/recserve/internal/history"
+	"github.com/sHyanorn/recserve/internal/valkeyclient"
 )
 
 // server stands for Valkey behind a store and a cache: it counts the calls
@@ -48,12 +50,15 @@ func TestBreaker(t *testing.T) {
 		t.Fatalf("closed: %v, %v, %v", v, ok, err)
 	}
 
-	// Cancelled calls are no failures, and a success between failures
-	// starts the count again.
-	srv.err = context.Canceled
-	for range 5 {
-		if _, err := store.Before(ctx, "u", 1, 0); !errors.Is(err, context.Canceled) {
-			t.Fatal(err)
+	// Cancelled calls are no failures, nor are calls that ended waiting
+	// for a first connection, and a success between failures starts the
+	// count again.
+	for _, excluded := range []error{context.Canceled, fmt.Errorf("%w: %w", valkeyclient.ErrConnecting, context.DeadlineExceeded)} {
+		srv.err = excluded
+		for range 5 {
+			if _, err := store.Before(ctx, "u", 1, 0); !errors.Is(err, excluded) {
+				t.Fatal(err)
+			}
 		}
 	}
 	srv.err = down

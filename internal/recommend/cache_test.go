@@ -120,11 +120,11 @@ func (s salted) Put(ctx context.Context, k cache.Key, r Response) error {
 // server.
 func valkeyCache(t *testing.T) Cache {
 	t.Helper()
-	v, err := cache.NewValkey[Response](infratest.ValkeyAddr(t), time.Minute)
+	addr := infratest.ValkeyAddr(t)
+	v, err := cache.NewValkey[Response](infratest.ValkeyClient(t, addr), time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(v.Close)
 	return v
 }
 

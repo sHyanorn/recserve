@@ -9,6 +9,8 @@ import (
 	"strconv"
 
 	"github.com/valkey-io/valkey-go"
+
+	"github.com/sHyanorn/recserve/internal/valkeyclient"
 )
 
 // Valkey is a Store on one Valkey server (docs/DECISIONS.md D033). A user's
@@ -18,7 +20,7 @@ import (
 // the fixed-width ID is the order by ID, so both stores order events alike.
 // Nothing is trimmed and nothing expires.
 type Valkey struct {
-	c      valkey.Client
+	c      *valkeyclient.Client
 	prefix string
 }
 
@@ -31,23 +33,8 @@ const (
 	maxPipeline = 100
 )
 
-// NewValkey connects to the Valkey server at addr; it fails if the server
-// does not answer.
-func NewValkey(addr string) (*Valkey, error) {
-	c, err := valkey.NewClient(valkey.ClientOption{
-		InitAddress:       []string{addr},
-		ForceSingleClient: true, // one server: no cluster probe
-		DisableCache:      true, // no client-side caching, so no CLIENT TRACKING
-		DisableRetry:      true, // a failed read is the caller's to handle; the client would retry until the context ends
-	})
-	if err != nil {
-		return nil, fmt.Errorf("valkey %s: %w", addr, err)
-	}
-	return &Valkey{c: c, prefix: "h:"}, nil
-}
-
-// Close closes the connections to the server.
-func (v *Valkey) Close() { v.c.Close() }
+// NewValkey returns the store on the server c is connected to.
+func NewValkey(c *valkeyclient.Client) *Valkey { return &Valkey{c: c, prefix: "h:"} }
 
 func member(e Event) string {
 	var id [8]byte
@@ -66,30 +53,40 @@ func (v *Valkey) Append(ctx context.Context, events []Event) error {
 		}
 		byUser[e.User] = append(byUser[e.User], e)
 	}
-	var cmds valkey.Commands
-	flush := func() error {
-		for _, r := range v.c.DoMulti(ctx, cmds...) {
-			if err := r.Error(); err != nil {
-				return fmt.Errorf("valkey zadd: %w", err)
-			}
-		}
-		cmds = cmds[:0]
-		return nil
+	// One ZADD per user and chunk, pipelined; the commands are built for
+	// each attempt, since a command is sent once.
+	type zadd struct {
+		key    string
+		events []Event
 	}
+	var zadds []zadd
 	for user, evs := range byUser {
 		for chunk := range slices.Chunk(evs, maxMembers) {
-			zadd := v.c.B().Zadd().Key(v.prefix + user).Nx().ScoreMember()
-			for _, e := range chunk {
-				zadd = zadd.ScoreMember(float64(e.TS), member(e))
+			zadds = append(zadds, zadd{v.prefix + user, chunk})
+		}
+	}
+	for batch := range slices.Chunk(zadds, maxPipeline) {
+		err := v.c.Do(ctx, func(c valkey.Client) error {
+			cmds := make(valkey.Commands, len(batch))
+			for i, z := range batch {
+				cmd := c.B().Zadd().Key(z.key).Nx().ScoreMember()
+				for _, e := range z.events {
+					cmd = cmd.ScoreMember(float64(e.TS), member(e))
+				}
+				cmds[i] = cmd.Build()
 			}
-			if cmds = append(cmds, zadd.Build()); len(cmds) == maxPipeline {
-				if err := flush(); err != nil {
+			for _, r := range c.DoMulti(ctx, cmds...) {
+				if err := r.Error(); err != nil {
 					return err
 				}
 			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("valkey zadd: %w", err)
 		}
 	}
-	return flush()
+	return nil
 }
 
 // Before implements Store.
@@ -100,14 +97,18 @@ func (v *Valkey) Before(ctx context.Context, user string, ts int64, n int) ([]st
 	if ts > MaxTS {
 		below = "+inf"
 	}
-	z := v.c.B().Zrange().Key(v.prefix + user)
-	var cmd valkey.Completed
-	if n > 0 { // the last n: read downwards, then turn around
-		cmd = z.Min(below).Max("-inf").Byscore().Rev().Limit(0, int64(n)).Build()
-	} else {
-		cmd = z.Min("-inf").Max(below).Byscore().Build()
-	}
-	out, err := v.c.Do(ctx, cmd).AsStrSlice()
+	var out []string
+	err := v.c.Do(ctx, func(c valkey.Client) (err error) {
+		z := c.B().Zrange().Key(v.prefix + user)
+		var cmd valkey.Completed
+		if n > 0 { // the last n: read downwards, then turn around
+			cmd = z.Min(below).Max("-inf").Byscore().Rev().Limit(0, int64(n)).Build()
+		} else {
+			cmd = z.Min("-inf").Max(below).Byscore().Build()
+		}
+		out, err = c.Do(ctx, cmd).AsStrSlice()
+		return err
+	})
 	if err != nil {
 		return nil, fmt.Errorf("valkey zrange: %w", err)
 	}

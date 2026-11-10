@@ -5,11 +5,12 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Proxy is a TCP proxy in front of a server, for tests that take the
 // server away: it passes connections on, refuses them, or accepts them and
-// never answers.
+// never answers. It can also hold every new connection back for a while.
 type Proxy struct {
 	t      testing.TB
 	target string
@@ -18,6 +19,7 @@ type Proxy struct {
 	mu     sync.Mutex
 	ln     net.Listener // nil while refusing
 	silent bool
+	setup  time.Duration
 	conns  map[net.Conn]bool // true for a client's side
 }
 
@@ -35,8 +37,16 @@ func NewProxy(t testing.TB, target string) *Proxy {
 // Addr returns the address clients connect to.
 func (p *Proxy) Addr() string { return p.addr }
 
-// Pass passes connections on to the server. Connections left without an
-// answer are closed, so their clients connect again.
+// Slow makes every new connection wait d before it reaches the server: the
+// client is connected at once and gets its first answer d later.
+func (p *Proxy) Slow(d time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.setup = d
+}
+
+// Pass passes connections on to the server. The connections open so far
+// are closed, so their clients connect again.
 func (p *Proxy) Pass() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -107,11 +117,12 @@ func (p *Proxy) serve(ln net.Listener, c net.Conn) {
 		return
 	}
 	p.conns[c] = true
-	silent := p.silent
+	silent, setup := p.silent, p.setup
 	p.mu.Unlock()
 	if silent {
 		return
 	}
+	time.Sleep(setup)
 	up, err := net.Dial("tcp", p.target)
 	if err != nil {
 		p.t.Error(err)

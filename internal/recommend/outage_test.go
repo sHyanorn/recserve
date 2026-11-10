@@ -40,16 +40,11 @@ func checkProperty10(t *testing.T, blackhole, broken bool) error {
 	if blackhole {
 		take = proxy.Blackhole
 	}
-	store, err := history.NewValkey(proxy.Addr())
+	store := history.NewValkey(infratest.ValkeyClient(t, proxy.Addr()))
+	vc, err := cache.NewValkey[Response](infratest.ValkeyClient(t, proxy.Addr()), time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(store.Close)
-	vc, err := cache.NewValkey[Response](proxy.Addr(), time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(vc.Close)
 	p, err := randomPipeline(rand.New(rand.NewPCG(10, 10)), 40, 0)
 	if err != nil {
 		t.Fatal(err)

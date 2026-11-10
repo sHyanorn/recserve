@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/valkey-io/valkey-go"
+
+	"github.com/sHyanorn/recserve/internal/valkeyclient"
 )
 
 // Valkey is a cache on one Valkey server, shared by every process that
@@ -17,38 +19,30 @@ import (
 // changed by up to Jitter either way. The cache has no size of its own: the
 // server evicts entries when its memory is full.
 type Valkey[V any] struct {
-	c      valkey.Client
+	c      *valkeyclient.Client
 	ttl    time.Duration
 	prefix string
 }
 
-// NewValkey connects to the Valkey server at addr; it fails if the server
-// does not answer. Entries live for ttl, at least a millisecond.
-func NewValkey[V any](addr string, ttl time.Duration) (*Valkey[V], error) {
+// NewValkey returns the cache on the server c is connected to. Entries live
+// for ttl, at least a millisecond.
+func NewValkey[V any](c *valkeyclient.Client, ttl time.Duration) (*Valkey[V], error) {
 	if ttl < time.Millisecond {
 		return nil, fmt.Errorf("cache time to live %v: Valkey takes none below 1ms", ttl)
 	}
-	c, err := valkey.NewClient(valkey.ClientOption{ // the options of the history store (D038)
-		InitAddress:       []string{addr},
-		ForceSingleClient: true,
-		DisableCache:      true,
-		DisableRetry:      true,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("valkey %s: %w", addr, err)
-	}
 	return &Valkey[V]{c: c, ttl: ttl, prefix: "c:"}, nil
 }
-
-// Close closes the connections to the server.
-func (v *Valkey[V]) Close() { v.c.Close() }
 
 func (v *Valkey[V]) key(k Key) string { return v.prefix + hex.EncodeToString(k[:]) }
 
 // Get returns the value under k, if the server holds one.
 func (v *Valkey[V]) Get(ctx context.Context, k Key) (V, bool, error) {
 	var zero V
-	b, err := v.c.Do(ctx, v.c.B().Get().Key(v.key(k)).Build()).AsBytes()
+	var b []byte
+	err := v.c.Do(ctx, func(c valkey.Client) (err error) {
+		b, err = c.Do(ctx, c.B().Get().Key(v.key(k)).Build()).AsBytes()
+		return err
+	})
 	if valkey.IsValkeyNil(err) {
 		return zero, false, nil
 	}
@@ -69,7 +63,10 @@ func (v *Valkey[V]) Put(ctx context.Context, k Key, val V) error {
 		return fmt.Errorf("cache entry: %w", err)
 	}
 	ttl := max(time.Duration(float64(v.ttl)*(1+Jitter*(2*rand.Float64()-1))), time.Millisecond)
-	if err := v.c.Do(ctx, v.c.B().Set().Key(v.key(k)).Value(valkey.BinaryString(b)).Px(ttl).Build()).Error(); err != nil {
+	err = v.c.Do(ctx, func(c valkey.Client) error {
+		return c.Do(ctx, c.B().Set().Key(v.key(k)).Value(valkey.BinaryString(b)).Px(ttl).Build()).Error()
+	})
+	if err != nil {
 		return fmt.Errorf("valkey set: %w", err)
 	}
 	return nil

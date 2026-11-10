@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/valkey-io/valkey-go"
+
 	"github.com/sHyanorn/recserve/internal/infratest"
 )
 
@@ -18,11 +20,11 @@ type value struct {
 // testValkey returns a cache on the test server under a prefix of its own.
 func testValkey(t *testing.T, ttl time.Duration) *Valkey[value] {
 	t.Helper()
-	v, err := NewValkey[value](infratest.ValkeyAddr(t), ttl)
+	addr := infratest.ValkeyAddr(t)
+	v, err := NewValkey[value](infratest.ValkeyClient(t, addr), ttl)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(v.Close)
 	v.prefix = fmt.Sprintf("test-%016x:", rand.Uint64())
 	return v
 }
@@ -64,7 +66,11 @@ func TestValkeyExpiresWithJitter(t *testing.T) {
 	lo, hi := time.Duration(1<<62), time.Duration(0)
 	for i := range 200 {
 		put(v, key(i), value{})
-		ms, err := v.c.Do(context.Background(), v.c.B().Pttl().Key(v.key(key(i))).Build()).AsInt64()
+		var ms int64
+		err := v.c.Do(context.Background(), func(c valkey.Client) (err error) {
+			ms, err = c.Do(context.Background(), c.B().Pttl().Key(v.key(key(i))).Build()).AsInt64()
+			return err
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -92,7 +98,10 @@ func TestValkeyExpiresWithJitter(t *testing.T) {
 func TestValkeyErrors(t *testing.T) {
 	v := testValkey(t, time.Minute)
 	ctx := context.Background()
-	if err := v.c.Do(ctx, v.c.B().Set().Key(v.key(key(1))).Value("not JSON").Px(time.Minute).Build()).Error(); err != nil {
+	err := v.c.Do(ctx, func(c valkey.Client) error {
+		return c.Do(ctx, c.B().Set().Key(v.key(key(1))).Value("not JSON").Px(time.Minute).Build()).Error()
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := v.Get(ctx, key(1)); err == nil || ok {
@@ -106,7 +115,7 @@ func TestValkeyErrors(t *testing.T) {
 	if err := v.Put(ended, key(2), value{}); err == nil {
 		t.Fatal("a put under an ended context gave no error")
 	}
-	if _, err := NewValkey[value](infratest.ValkeyAddr(t), 0); err == nil {
+	if _, err := NewValkey[value](v.c, 0); err == nil {
 		t.Fatal("a time to live of 0 was accepted")
 	}
 }

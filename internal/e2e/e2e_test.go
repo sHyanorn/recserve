@@ -182,12 +182,8 @@ func id(prefix string) string { return fmt.Sprintf("%s-%016x", prefix, rand.Uint
 
 func valkeyStore(t *testing.T) *history.Valkey {
 	t.Helper()
-	store, err := history.NewValkey(infratest.ValkeyAddr(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(store.Close)
-	return store
+	addr := infratest.ValkeyAddr(t)
+	return history.NewValkey(infratest.ValkeyClient(t, addr))
 }
 
 // An event sent to /v1/events goes through Kafka and ingest into Valkey,
