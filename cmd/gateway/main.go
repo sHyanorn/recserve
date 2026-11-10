@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/sHyanorn/recserve/internal/annshard"
 	"github.com/sHyanorn/recserve/internal/api"
 	"github.com/sHyanorn/recserve/internal/breaker"
@@ -47,6 +49,7 @@ func main() {
 	shards := shard.DefaultConfig
 	flag.IntVar(&shards.Shards, "shards", shards.Shards, "in-process shards of the item vectors; with -shard-addrs the number of shards is the number of address groups")
 	shardAddrs := flag.String("shard-addrs", "", "annshard replicas that hold the shards, as \"a:9090,b:9090;c:9090,d:9090\": shards separated by ';', a shard's replicas by ','; empty keeps the shards in this process")
+	hedgeDelay := flag.Duration("hedge-delay", 5*time.Millisecond, "with -shard-addrs: time a shard search waits for one replica before it also asks another; 0 never does")
 	prepareTimeout := flag.Duration("prepare-timeout", 2*time.Minute, "time the replicas of -shard-addrs get to load and index a bundle version, at start and in a swap")
 	flag.StringVar((*string)(&shards.Mode), "shard-mode", string(shards.Mode), "vector search in each shard: exact or hnsw")
 	flag.IntVar(&shards.Ef, "hnsw-ef", shards.Ef, "HNSW search list size, with -shard-mode hnsw")
@@ -60,13 +63,13 @@ func main() {
 	cacheTTL := flag.Duration("cache-ttl", 5*time.Minute, "result cache time to live, changed by up to 10% either way")
 	flag.Parse()
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if err := run(log, *addr, *adminAddr, *dir, *testSplit, *preload, *ortLib, *valkeyAddr, *kafkaBrokers, *eventsTimeout, shards, *shardAddrs, *prepareTimeout, budgets, *cacheSize, *cacheTTL, *drain); err != nil {
+	if err := run(log, *addr, *adminAddr, *dir, *testSplit, *preload, *ortLib, *valkeyAddr, *kafkaBrokers, *eventsTimeout, shards, *shardAddrs, *hedgeDelay, *prepareTimeout, budgets, *cacheSize, *cacheTTL, *drain); err != nil {
 		log.Error("gateway stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, valkeyAddr, kafkaBrokers string, eventsTimeout time.Duration, shards shard.Config, shardAddrs string, prepareTimeout time.Duration, budgets recommend.Budgets, cacheSize int, cacheTTL time.Duration, drain time.Duration) (err error) {
+func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, valkeyAddr, kafkaBrokers string, eventsTimeout time.Duration, shards shard.Config, shardAddrs string, hedgeDelay, prepareTimeout time.Duration, budgets recommend.Budgets, cacheSize int, cacheTTL time.Duration, drain time.Duration) (err error) {
 	if dir == "" {
 		return errors.New("-bundle is required")
 	}
@@ -108,7 +111,7 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 		}
 		shards.Shards = len(replicas)
 	}
-	index, closeShards, err := openShards(replicas, shards, prepareTimeout)
+	index, shardMetrics, closeShards, err := openShards(replicas, shards, hedgeDelay, prepareTimeout)
 	if err != nil {
 		return err
 	}
@@ -140,6 +143,7 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 	}
 	defer closeProducer() // after the servers have shut down
 	srv := api.New(live, store, log)
+	srv.Register(shardMetrics...)
 	srv.Prepare, srv.Events, srv.EventsTimeout = prepare, producer, eventsTimeout
 	servers := []*http.Server{{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second}}
 	if adminAddr != "" {
@@ -260,10 +264,11 @@ func openProducer(brokers string, store history.Store, timeout time.Duration) (e
 }
 
 // openShards returns the function that puts a bundle's vectors into shards
-// by cfg, and the function that releases what it holds: the shards are
-// built in this process or, given replicas, prepared on the annshard
-// replicas of every shard, each call within timeout.
-func openShards(replicas [][]string, cfg shard.Config, timeout time.Duration) (func(*bundle.Bundle) (recommend.Shards, error), func(), error) {
+// by cfg, the metrics of the shard tier and the function that releases what
+// it holds: the shards are built in this process or, given replicas,
+// prepared on the annshard replicas of every shard, each call within
+// timeout, and searched with hedgeDelay.
+func openShards(replicas [][]string, cfg shard.Config, hedgeDelay, timeout time.Duration) (func(*bundle.Bundle) (recommend.Shards, error), []prometheus.Collector, func(), error) {
 	if replicas == nil {
 		return func(b *bundle.Bundle) (recommend.Shards, error) {
 			s, err := shard.Build(b.Vectors, cfg)
@@ -271,11 +276,11 @@ func openShards(replicas [][]string, cfg shard.Config, timeout time.Duration) (f
 				return nil, err
 			}
 			return s, nil
-		}, func() {}, nil
+		}, nil, func() {}, nil
 	}
-	client, err := annshard.Dial(replicas)
+	client, err := annshard.Dial(replicas, annshard.Options{HedgeDelay: hedgeDelay})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	return func(b *bundle.Bundle) (recommend.Shards, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -285,7 +290,7 @@ func openShards(replicas [][]string, cfg shard.Config, timeout time.Duration) (f
 			return nil, err
 		}
 		return s, nil
-	}, func() { client.Close() }, nil //nolint:errcheck // the process is stopping
+	}, client.Collectors(), func() { client.Close() }, nil //nolint:errcheck // the process is stopping
 }
 
 // preparer returns the function that loads, verifies and indexes the

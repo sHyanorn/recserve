@@ -80,9 +80,9 @@ func StartAll(t testing.TB, root string, shards, replicas int) [][]string {
 }
 
 // Dial returns a client of the replicas at addrs, closed when the test ends.
-func Dial(t testing.TB, addrs [][]string) *annshard.Client {
+func Dial(t testing.TB, addrs [][]string, opt annshard.Options) *annshard.Client {
 	t.Helper()
-	c, err := annshard.Dial(addrs)
+	c, err := annshard.Dial(addrs, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func Remote(t testing.TB, maxShards int) func(m vec.Matrix, cfg shard.Config) (*
 		version := fmt.Sprint("v", versions)
 		WriteVectors(t, root, version, m)
 		if clients[cfg.Shards] == nil {
-			clients[cfg.Shards] = Dial(t, addrs[:cfg.Shards])
+			clients[cfg.Shards] = Dial(t, addrs[:cfg.Shards], annshard.Options{})
 		}
 		return clients[cfg.Shards].Prepare(context.Background(), version, cfg)
 	}

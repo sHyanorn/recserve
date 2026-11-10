@@ -95,6 +95,9 @@ func New(l *recommend.Live, h history.Store, log *slog.Logger) *Server {
 	return s
 }
 
+// Register adds metrics of other parts of the gateway to /metrics.
+func (s *Server) Register(cs ...prometheus.Collector) { s.reg.MustRegister(cs...) }
+
 // SetReady sets the readiness reported by /readyz.
 func (s *Server) SetReady(v bool) { s.ready.Store(v) }
 

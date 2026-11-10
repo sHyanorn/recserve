@@ -51,7 +51,7 @@ func post(t *testing.T, url, body string) (int, map[string]any) {
 // localShards returns the gateway's function for shards in this process.
 func localShards(t *testing.T) func(*bundle.Bundle) (recommend.Shards, error) {
 	t.Helper()
-	index, _, err := openShards(nil, shard.DefaultConfig, 0)
+	index, _, _, err := openShards(nil, shard.DefaultConfig, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestPreparerOnReplicas(t *testing.T) {
 	if err := os.Symlink(dir, filepath.Join(root, "test")); err != nil {
 		t.Fatal(err)
 	}
-	index, closeShards, err := openShards(annshardtest.StartAll(t, root, 2, 1), shard.DefaultConfig, 10*time.Second)
+	index, _, closeShards, err := openShards(annshardtest.StartAll(t, root, 2, 1), shard.DefaultConfig, 0, 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
