@@ -55,7 +55,17 @@ func WriteVectors(t testing.TB, root, version string, m vec.Matrix) {
 // added to the gRPC server's.
 func Start(t testing.TB, root string, opts ...grpc.ServerOption) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	addr, _ := StartOn(t, "127.0.0.1:0", root, opts...)
+	return addr
+}
+
+// StartOn is Start on the given address, and also returns the function
+// that stops the replica, cutting its connections, before the test ends.
+// A replica started on a stopped one's address is that replica restarted:
+// it holds no index.
+func StartOn(t testing.TB, addr, root string, opts ...grpc.ServerOption) (string, func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +73,7 @@ func Start(t testing.TB, root string, opts ...grpc.ServerOption) string {
 	annshardpb.RegisterAnnShardServer(gs, annshard.NewServer(root, slog.New(slog.NewTextHandler(io.Discard, nil))))
 	go gs.Serve(ln) //nolint:errcheck // ends with the Stop below
 	t.Cleanup(gs.Stop)
-	return ln.Addr().String()
+	return ln.Addr().String(), gs.Stop
 }
 
 // StartAll serves replicas replicas for each of shards shards, all over

@@ -228,3 +228,64 @@ func TestInvalidRequests(t *testing.T) {
 		t.Fatalf("k = 2^30: %d items, %v", len(got.GetIds()), err)
 	}
 }
+
+// A replica holds the indexes of the two versions named last: preparing a
+// third drops the one that neither a search nor a Prepare named since.
+func TestKeepsTwoVersions(t *testing.T) {
+	r := rand.New(rand.NewPCG(5, 5))
+	root := t.TempDir()
+	for _, v := range []string{"v1", "v2", "v3", "v4"} {
+		annshardtest.WriteVectors(t, root, v, shardtest.RandomMatrix(r, 50, 2))
+	}
+	c := replica(t, root)
+	ctx := context.Background()
+	prepare := func(v string, shard int) {
+		t.Helper()
+		if _, err := c.Prepare(ctx, &annshardpb.PrepareRequest{Index: exactIndex(v, shard, 2)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	search := func(v string, shard int) error {
+		_, err := c.Search(ctx, &annshardpb.SearchRequest{Index: exactIndex(v, shard, 2), Query: []float32{1, 1}, K: 5})
+		return err
+	}
+	// Two shards of a version are one version.
+	prepare("v1", 0)
+	prepare("v1", 1)
+	prepare("v2", 0)
+	prepare("v2", 1)
+	for _, v := range []string{"v1", "v2"} {
+		for shard := range 2 {
+			if err := search(v, shard); err != nil {
+				t.Fatalf("%s shard %d: %v", v, shard, err)
+			}
+		}
+	}
+	// v2 was named last, then v1 again: v3 replaces v2.
+	if err := search("v1", 0); err != nil {
+		t.Fatal(err)
+	}
+	prepare("v3", 0)
+	wantCode(t, search("v2", 0), codes.FailedPrecondition)
+	wantCode(t, search("v2", 1), codes.FailedPrecondition)
+	for _, held := range []struct {
+		v     string
+		shard int
+	}{{"v1", 0}, {"v1", 1}, {"v3", 0}} {
+		if err := search(held.v, held.shard); err != nil {
+			t.Fatalf("%s shard %d: %v", held.v, held.shard, err)
+		}
+	}
+	// A Prepare names a version as a search does: v1, named again, outlives v3.
+	prepare("v1", 0)
+	prepare("v4", 0)
+	wantCode(t, search("v3", 0), codes.FailedPrecondition)
+	if err := search("v1", 1); err != nil {
+		t.Fatal(err)
+	}
+	// A dropped version is prepared again on request.
+	prepare("v2", 0)
+	if err := search("v2", 0); err != nil {
+		t.Fatal(err)
+	}
+}

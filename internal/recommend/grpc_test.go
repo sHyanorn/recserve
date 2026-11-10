@@ -16,6 +16,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/annshard"
 	"github.com/sHyanorn/recserve/internal/annshard/annshardpb"
 	"github.com/sHyanorn/recserve/internal/annshard/annshardtest"
+	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/infratest"
 	"github.com/sHyanorn/recserve/internal/shard"
 	"github.com/sHyanorn/recserve/internal/vec"
@@ -288,4 +289,148 @@ func TestSlowShardOverGRPC(t *testing.T) {
 	if partial == 0 {
 		t.Fatal("no request had a user vector")
 	}
+}
+
+// swapReplicas is two shards of two replicas each for the swap tests.
+type swapReplicas struct {
+	roots [][]string // the bundle root of each replica, by shard
+	addrs [][]string
+}
+
+// startSwapReplicas starts the replicas, each over a bundle root of its
+// own and with the server options opts returns for it.
+func startSwapReplicas(t *testing.T, opts func() []grpc.ServerOption) *swapReplicas {
+	t.Helper()
+	c := &swapReplicas{roots: make([][]string, 2), addrs: make([][]string, 2)}
+	for i := range c.roots {
+		for range 2 {
+			root := t.TempDir()
+			c.roots[i] = append(c.roots[i], root)
+			c.addrs[i] = append(c.addrs[i], annshardtest.Start(t, root, opts()...))
+		}
+	}
+	return c
+}
+
+// give writes the vectors of version v, of items items, to the root of
+// replica j of shard i.
+func (c *swapReplicas) give(t *testing.T, i, j int, v string, items int) {
+	t.Helper()
+	annshardtest.WriteVectors(t, c.roots[i][j], v, swapBundleOf(t, v, nil, items).Vectors)
+}
+
+// prepare returns the function that prepares a bundle's version on the
+// replicas.
+func (c *swapReplicas) prepare(t *testing.T) func(*bundle.Bundle) (Shards, error) {
+	client := annshardtest.Dial(t, c.addrs, annshard.Options{HedgeDelay: 5 * time.Millisecond})
+	return func(b *bundle.Bundle) (Shards, error) {
+		s, err := client.Prepare(context.Background(), b.ModelVersion, shard.DefaultConfig)
+		if err != nil {
+			return nil, err
+		}
+		return s, nil
+	}
+}
+
+// property4Items is the catalog size of property 4 over gRPC: well above
+// VectorTop, so that a shard's candidates depend on the vectors it searched
+// and a replica that searched another version's changes the response.
+const property4Items = 2000
+
+func checkProperty4OverGRPC(t *testing.T, opts func() []grpc.ServerOption) (map[string]int, error) {
+	c := startSwapReplicas(t, opts)
+	for i := range c.roots {
+		for j := range c.roots[i] {
+			c.give(t, i, j, "a", property4Items)
+			c.give(t, i, j, "b", property4Items)
+		}
+	}
+	st := newSwapTestOn(t, nil, "", property4Items, c.prepare(t))
+	defer st.live.Close() //nolint:errcheck // the bundles have nothing to close
+	return checkProperty4(st, 8, 60)
+}
+
+// Property 4 over gRPC: with the vectors on two shards of two replicas
+// each, every response during concurrent requests and repeated swaps
+// recomputes from the vectors of the version it names.
+func TestProperty4SwapUnderLoadOverGRPC(t *testing.T) {
+	served, err := checkProperty4OverGRPC(t, func() []grpc.ServerOption { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if served["a"] == 0 || served["b"] == 0 {
+		t.Fatalf("responses per version: %v", served)
+	}
+	t.Logf("responses per version: %v", served)
+}
+
+// The broken variant is a replica that ignores the version a search names
+// and answers from the version it prepared last: the request held across
+// the first swap then merges one shard of each version.
+func TestProperty4OverGRPCCatchesBrokenVariant(t *testing.T) {
+	_, err := checkProperty4OverGRPC(t, func() []grpc.ServerOption {
+		var latest atomic.Pointer[string]
+		return []grpc.ServerOption{grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+			switch r := req.(type) {
+			case *annshardpb.PrepareRequest:
+				resp, err := handler(ctx, req)
+				if err == nil {
+					v := r.GetIndex().GetVersion()
+					latest.Store(&v)
+				}
+				return resp, err
+			case *annshardpb.SearchRequest:
+				if v := latest.Load(); v != nil {
+					r.Index.Version = *v
+				}
+			}
+			return handler(ctx, req)
+		})}
+	})
+	if err == nil {
+		t.Fatal("the check passed replicas that answer from the version they prepared last")
+	}
+	t.Logf("broken variant caught: %.300v", err)
+}
+
+// A swap is rejected while a shard has no replica that can prepare the new
+// version, and the active version goes on serving. Once every shard has
+// one, the swap goes through, also with a replica of the other shard still
+// lacking the version, and that replica costs no response.
+func TestSwapNeedsAReplicaPerShard(t *testing.T) {
+	c := startSwapReplicas(t, func() []grpc.ServerOption { return nil })
+	for i := range c.roots {
+		for j := range c.roots[i] {
+			c.give(t, i, j, "a", swapItems)
+		}
+	}
+	c.give(t, 0, 0, "b", swapItems) // shard 0: one replica of two; shard 1: none
+	st := newSwapTestOn(t, nil, "", swapItems, c.prepare(t))
+	defer st.live.Close() //nolint:errcheck // the bundles have nothing to close
+	serve := func(version string) {
+		t.Helper()
+		r := rand.New(rand.NewPCG(31, 31))
+		for range 30 {
+			req := Request{User: fmt.Sprint("u", r.IntN(swapUsers)), K: 1 + r.IntN(10), TS: int64(r.IntN(110))}
+			resp, err := st.live.Recommend(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.ModelVersion != version {
+				t.Fatalf("served by version %s, want %s", resp.ModelVersion, version)
+			}
+			if err := st.check(req, resp); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := st.live.Swap(st.prepare("b")); err == nil {
+		t.Fatal("swapped to a version no replica of shard 1 holds")
+	}
+	serve("a")
+	c.give(t, 1, 1, "b", swapItems)
+	if _, err := st.live.Swap(st.prepare("b")); err != nil {
+		t.Fatal(err)
+	}
+	serve("b")
 }

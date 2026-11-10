@@ -375,3 +375,116 @@ func TestReplicaDiesDuringSearches(t *testing.T) {
 		}
 	}
 }
+
+// holds reports whether the replica at addr answers a search of shard 0 of
+// one, for version, in exact mode.
+func holds(t *testing.T, addr, version string) bool {
+	t.Helper()
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close() //nolint:errcheck // a probe
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err = annshardpb.NewAnnShardClient(conn).Search(ctx, &annshardpb.SearchRequest{Index: exactIndex(version, 0, 1), Query: []float32{1, 1}, K: 1})
+	return err == nil
+}
+
+// searchUntil searches through s, requiring every answer to equal the
+// in-process one, until done returns true; it fails after 30 s.
+func searchUntil(t *testing.T, s *annshard.Shards, m vec.Matrix, done func() bool) {
+	t.Helper()
+	local, err := shard.Build(m, s.Config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		q := []float32{1, float32(time.Now().UnixNano() % 7)}
+		got, err := s.Search(ctx, 0, q, 10, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := local.Search(ctx, 0, q, 10, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("got %v\nwant %v", got, want)
+		}
+		if done() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("still waiting after 30 s")
+		}
+	}
+}
+
+// A version is prepared once every shard has a replica that holds it. A
+// replica that could not prepare it costs no search, and holds it soon
+// after it can: the first search that finds it lacking has it prepare.
+func TestReplicaCatchesUp(t *testing.T) {
+	r := rand.New(rand.NewPCG(6, 6))
+	m := shardtest.RandomMatrix(r, 100, 2)
+	full, late := t.TempDir(), t.TempDir()
+	annshardtest.WriteVectors(t, full, "v1", m)
+	behind := annshardtest.Start(t, late)
+	c := annshardtest.Dial(t, [][]string{{behind, annshardtest.Start(t, full)}}, annshard.Options{})
+	s, err := c.Prepare(context.Background(), "v1", shard.Config{Shards: 1, Mode: shard.Exact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if holds(t, behind, "v1") {
+		t.Fatal("the replica without the bundle holds its index")
+	}
+	annshardtest.WriteVectors(t, late, "v1", m)
+	searchUntil(t, s, m, func() bool { return holds(t, behind, "v1") })
+}
+
+// A replica that restarts has no index. The searches go on, answered by
+// the other replica, and the restarted one is prepared again by the first
+// search that reaches it.
+func TestReplicaRestartsEmpty(t *testing.T) {
+	r := rand.New(rand.NewPCG(7, 7))
+	m := shardtest.RandomMatrix(r, 100, 2)
+	root := t.TempDir()
+	annshardtest.WriteVectors(t, root, "v1", m)
+	addr, stop := annshardtest.StartOn(t, "127.0.0.1:0", root)
+	c := annshardtest.Dial(t, [][]string{{addr, annshardtest.Start(t, root)}}, annshard.Options{})
+	s, err := c.Prepare(context.Background(), "v1", shard.Config{Shards: 1, Mode: shard.Exact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !holds(t, addr, "v1") {
+		t.Fatal("the replica does not hold the index it prepared")
+	}
+	stop()
+	down := true
+	searchUntil(t, s, m, func() bool {
+		if down { // a few searches with the replica gone, then it is back, empty
+			annshardtest.StartOn(t, addr, root)
+			down = false
+			return false
+		}
+		return holds(t, addr, "v1")
+	})
+}
+
+// No shard may be left without a replica that holds the version.
+func TestPrepareNeedsAReplicaPerShard(t *testing.T) {
+	r := rand.New(rand.NewPCG(8, 8))
+	m := shardtest.RandomMatrix(r, 100, 2)
+	full, empty := t.TempDir(), t.TempDir()
+	annshardtest.WriteVectors(t, full, "v1", m)
+	has, lacks := func() string { return annshardtest.Start(t, full) }, func() string { return annshardtest.Start(t, empty) }
+	cfg := shard.Config{Shards: 2, Mode: shard.Exact}
+	ctx := context.Background()
+	if _, err := annshardtest.Dial(t, [][]string{{has(), lacks()}, {lacks(), has()}}, annshard.Options{}).Prepare(ctx, "v1", cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := annshardtest.Dial(t, [][]string{{has(), has()}, {lacks(), lacks()}}, annshard.Options{}).Prepare(ctx, "v1", cfg); err == nil {
+		t.Fatal("prepared with a shard none of whose replicas holds the version")
+	}
+}

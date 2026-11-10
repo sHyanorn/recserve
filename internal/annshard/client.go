@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,7 +45,15 @@ type Options struct {
 	// HedgeDelay is how long a search waits for the replica it asked first
 	// before it also asks another; 0 never does.
 	HedgeDelay time.Duration
+	// PrepareTimeout bounds the Prepare a replica is sent when a search
+	// finds that it lacks the index; 0 for no bound.
+	PrepareTimeout time.Duration
+	Log            *slog.Logger // nil logs nothing
 }
+
+// catchUpWait is how long a replica that failed to prepare an index it
+// lacks is left alone before it is asked again.
+const catchUpWait = 5 * time.Second
 
 // The hedge budget of a shard, in tenths of a hedge: every search earns
 // hedgeEarn, a hedge costs hedgeCost, and at most hedgeMax are kept. Over
@@ -67,10 +76,24 @@ const (
 // and kept by gRPC, without TLS (D040). A search asks one replica, another
 // at once if that one fails, and a second one if the first is slow (D041).
 type Client struct {
-	hedgeDelay time.Duration
-	shards     []*group
-	hedges     *prometheus.CounterVec
-	failovers  *prometheus.CounterVec
+	opt       Options
+	shards    []*group
+	hedges    *prometheus.CounterVec
+	failovers *prometheus.CounterVec
+
+	// Replicas that are preparing an index a search found them to lack.
+	ctx      context.Context // ends at Close
+	cancel   context.CancelFunc
+	mu       sync.Mutex
+	closed   bool
+	catching map[lacking]bool
+	wg       sync.WaitGroup
+}
+
+// lacking is an index that a replica was found not to hold.
+type lacking struct {
+	r  *replica
+	ix index
 }
 
 // group is the replicas of one shard.
@@ -93,8 +116,12 @@ type replica struct {
 // Dial returns a client of the replicas at addrs[shard][replica]. It does
 // not wait for a connection: the first call to a replica opens it.
 func Dial(addrs [][]string, opt Options) (*Client, error) {
+	if opt.Log == nil {
+		opt.Log = slog.New(slog.DiscardHandler)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
-		hedgeDelay: opt.HedgeDelay,
+		opt: opt, ctx: ctx, cancel: cancel, catching: map[lacking]bool{},
 		hedges: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "recserve_shard_hedges_total",
 			Help: "Shard searches that were slow enough for a second replica to be asked, by shard and result: won (the second replica answered first), lost, or denied (not asked: the shard's hedge budget was spent).",
@@ -136,6 +163,11 @@ func (c *Client) Collectors() []prometheus.Collector {
 
 // Close closes the connections; calls in flight fail.
 func (c *Client) Close() error {
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+	c.cancel()
+	c.wg.Wait()
 	var errs []error
 	for _, g := range c.shards {
 		for _, r := range g.replicas {
@@ -156,7 +188,10 @@ type Shards struct {
 
 // Prepare has every replica load version and build its shard by cfg, whose
 // Shards must be the client's number of shards, and returns the version's
-// shards once all have.
+// shards once every shard has a replica that holds it. A replica that
+// failed is logged; it is sent the request again when a search finds that
+// it lacks the index (catchUp). If a shard has no replica that holds the
+// version, Prepare fails.
 func (c *Client) Prepare(ctx context.Context, version string, cfg shard.Config) (*Shards, error) {
 	if cfg.Shards != len(c.shards) {
 		return nil, fmt.Errorf("%d shards configured, replicas of %d", cfg.Shards, len(c.shards))
@@ -166,30 +201,81 @@ func (c *Client) Prepare(ctx context.Context, version string, cfg shard.Config) 
 		return nil, fmt.Errorf("shard mode %q", cfg.Mode)
 	}
 	s := &Shards{c: c, cfg: cfg, indexes: make([]*annshardpb.Index, cfg.Shards)}
+	errs := make([][]error, cfg.Shards) // by shard, then replica
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var errs []error
 	for i, g := range c.shards {
 		ix := &annshardpb.Index{Version: version, Shard: int32(i), Shards: int32(cfg.Shards), Mode: mode}
 		if cfg.Mode == shard.HNSW {
 			ix.HnswM, ix.HnswEfConstruction, ix.HnswSeed = int32(cfg.HNSW.M), int32(cfg.HNSW.EfConstruction), cfg.HNSW.Seed
 		}
 		s.indexes[i] = ix
-		for _, r := range g.replicas {
-			wg.Go(func() {
-				if _, err := r.rpc.Prepare(ctx, &annshardpb.PrepareRequest{Index: ix}); err != nil {
-					mu.Lock()
-					errs = append(errs, fmt.Errorf("shard %d, replica %s: %w", i, r.addr, err))
-					mu.Unlock()
-				}
-			})
+		errs[i] = make([]error, len(g.replicas))
+		for j, r := range g.replicas {
+			wg.Go(func() { _, errs[i][j] = r.rpc.Prepare(ctx, &annshardpb.PrepareRequest{Index: ix}) })
 		}
 	}
 	wg.Wait()
-	if len(errs) > 0 {
-		return nil, fmt.Errorf("prepare %s: %w", version, errors.Join(errs...))
+	var failed []error
+	for i, g := range c.shards {
+		var lacks []error
+		for j, err := range errs[i] {
+			if err != nil {
+				lacks = append(lacks, fmt.Errorf("shard %d, replica %s: %w", i, g.replicas[j].addr, err))
+			}
+		}
+		if len(lacks) == len(g.replicas) {
+			failed = append(failed, lacks...)
+			continue
+		}
+		for _, err := range lacks {
+			c.opt.Log.Warn("a replica did not prepare the version; the shard's other replicas serve it", "version", version, "err", err)
+		}
+	}
+	if len(failed) > 0 {
+		return nil, fmt.Errorf("prepare %s: no replica of a shard holds it: %w", version, errors.Join(failed...))
 	}
 	return s, nil
+}
+
+// catchUp has replica r prepare the index x, which a search found it to
+// lack, as a replica that was down during a swap or has restarted does. It
+// runs in the background, for no request in particular, once at a time per
+// replica and index, and after a failure not again for catchUpWait.
+func (c *Client) catchUp(r *replica, x *annshardpb.Index) {
+	ix, err := parseIndex(x)
+	if err != nil {
+		return
+	}
+	key := lacking{r, ix}
+	c.mu.Lock()
+	if c.closed || c.catching[key] {
+		c.mu.Unlock()
+		return
+	}
+	c.catching[key] = true
+	c.wg.Add(1)
+	c.mu.Unlock()
+	go func() {
+		defer c.wg.Done()
+		ctx, cancel := c.ctx, context.CancelFunc(func() {})
+		if c.opt.PrepareTimeout > 0 {
+			ctx, cancel = context.WithTimeout(ctx, c.opt.PrepareTimeout)
+		}
+		_, err := r.rpc.Prepare(ctx, &annshardpb.PrepareRequest{Index: x})
+		cancel()
+		if err == nil {
+			c.opt.Log.Info("a replica prepared an index it lacked", "replica", r.addr, "version", ix.version, "shard", ix.shard)
+		} else if c.ctx.Err() == nil {
+			c.opt.Log.Warn("a replica could not prepare an index it lacks", "replica", r.addr, "version", ix.version, "shard", ix.shard, "err", err)
+			select {
+			case <-time.After(catchUpWait):
+			case <-c.ctx.Done():
+			}
+		}
+		c.mu.Lock()
+		delete(c.catching, key)
+		c.mu.Unlock()
+	}()
 }
 
 // Config returns the settings the shards are built and searched with.
@@ -247,7 +333,8 @@ type answer struct {
 // Search returns shard i's k items with the highest inner product with q,
 // best first, ties to the lower ID, without the IDs in seen; only those of
 // shard i are sent. It asks one replica. If that one fails, it asks the
-// next at once, each replica at most once. If the first has not answered
+// next at once, each replica at most once, and one that failed for lack of
+// the index is told to prepare it (catchUp). If the first has not answered
 // after the hedge delay, it asks one more replica, one that is connected,
 // as long as the shard's hedge budget allows. The first answer wins and the
 // calls still out are cancelled; Search returns once all of them have. A
@@ -272,14 +359,17 @@ func (s *Shards) Search(ctx context.Context, i int, q []float32, k int, seen map
 		asked++
 		go func() {
 			hits, err := r.search(ctx, req)
+			if status.Code(err) == codes.FailedPrecondition {
+				s.c.catchUp(r, req.GetIndex())
+			}
 			answers <- answer{hits, err, hedge}
 		}()
 	}
 	g.earn()
 	ask(false)
 	var hedgeDue <-chan time.Time
-	if s.c.hedgeDelay > 0 && len(order) > 1 {
-		t := time.NewTimer(s.c.hedgeDelay)
+	if s.c.opt.HedgeDelay > 0 && len(order) > 1 {
+		t := time.NewTimer(s.c.opt.HedgeDelay)
 		defer t.Stop()
 		hedgeDue = t.C
 	}

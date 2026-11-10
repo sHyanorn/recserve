@@ -50,7 +50,7 @@ func main() {
 	flag.IntVar(&shards.Shards, "shards", shards.Shards, "in-process shards of the item vectors; with -shard-addrs the number of shards is the number of address groups")
 	shardAddrs := flag.String("shard-addrs", "", "annshard replicas that hold the shards, as \"a:9090,b:9090;c:9090,d:9090\": shards separated by ';', a shard's replicas by ','; empty keeps the shards in this process")
 	hedgeDelay := flag.Duration("hedge-delay", 5*time.Millisecond, "with -shard-addrs: time a shard search waits for one replica before it also asks another; 0 never does")
-	prepareTimeout := flag.Duration("prepare-timeout", 2*time.Minute, "time the replicas of -shard-addrs get to load and index a bundle version, at start and in a swap")
+	prepareTimeout := flag.Duration("prepare-timeout", 2*time.Minute, "time the replicas of -shard-addrs get to load and index a bundle version, at start, in a swap and when one is found to lack it")
 	flag.StringVar((*string)(&shards.Mode), "shard-mode", string(shards.Mode), "vector search in each shard: exact or hnsw")
 	flag.IntVar(&shards.Ef, "hnsw-ef", shards.Ef, "HNSW search list size, with -shard-mode hnsw")
 	budgets := recommend.DefaultBudgets
@@ -111,7 +111,7 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 		}
 		shards.Shards = len(replicas)
 	}
-	index, shardMetrics, closeShards, err := openShards(replicas, shards, hedgeDelay, prepareTimeout)
+	index, shardMetrics, closeShards, err := openShards(replicas, shards, hedgeDelay, prepareTimeout, log)
 	if err != nil {
 		return err
 	}
@@ -268,7 +268,7 @@ func openProducer(brokers string, store history.Store, timeout time.Duration) (e
 // it holds: the shards are built in this process or, given replicas,
 // prepared on the annshard replicas of every shard, each call within
 // timeout, and searched with hedgeDelay.
-func openShards(replicas [][]string, cfg shard.Config, hedgeDelay, timeout time.Duration) (func(*bundle.Bundle) (recommend.Shards, error), []prometheus.Collector, func(), error) {
+func openShards(replicas [][]string, cfg shard.Config, hedgeDelay, timeout time.Duration, log *slog.Logger) (func(*bundle.Bundle) (recommend.Shards, error), []prometheus.Collector, func(), error) {
 	if replicas == nil {
 		return func(b *bundle.Bundle) (recommend.Shards, error) {
 			s, err := shard.Build(b.Vectors, cfg)
@@ -278,7 +278,7 @@ func openShards(replicas [][]string, cfg shard.Config, hedgeDelay, timeout time.
 			return s, nil
 		}, nil, func() {}, nil
 	}
-	client, err := annshard.Dial(replicas, annshard.Options{HedgeDelay: hedgeDelay})
+	client, err := annshard.Dial(replicas, annshard.Options{HedgeDelay: hedgeDelay, PrepareTimeout: timeout, Log: log})
 	if err != nil {
 		return nil, nil, nil, err
 	}

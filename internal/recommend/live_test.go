@@ -38,32 +38,32 @@ func swapOffset(version string) int { return 5 * int(version[0]-'a') }
 // swapRaw is the number of raw item IDs over versions a and b.
 const swapRaw = swapItems + 5
 
-// swapBundle returns a new bundle of the given version: its own item IDs
-// (swapOffset), and vectors (none zero), co-occurrence rows and a
-// popularity list drawn from the version's own seed, so two versions score
-// every candidate differently. ranker, if not nil, is loaded as the
-// bundle's ranker.
-func swapBundle(t testing.TB, version string, ranker []byte) *bundle.Bundle {
+// swapBundleOf returns a new bundle of the given version and number of
+// items: its own item IDs (swapOffset), and vectors (none zero),
+// co-occurrence rows and a popularity list drawn from the version's own
+// seed, so two versions score every candidate differently. ranker, if not
+// nil, is loaded as the bundle's ranker.
+func swapBundleOf(t testing.TB, version string, ranker []byte, items int) *bundle.Bundle {
 	t.Helper()
 	r := rand.New(rand.NewPCG(uint64(len(version)), uint64(version[0])))
 	const dim = 4
-	data := make([]float32, (swapItems+1)*dim)
+	data := make([]float32, (items+1)*dim)
 	for i := dim; i < len(data); i++ {
 		data[i] = float32(r.IntN(9)-4) + 0.5
 	}
-	ids := make([]string, swapItems+1)
-	cooc := make([]int32, (swapItems+1)*bundle.CoocWidth)
-	for i := 1; i <= swapItems; i++ {
+	ids := make([]string, items+1)
+	cooc := make([]int32, (items+1)*bundle.CoocWidth)
+	for i := 1; i <= items; i++ {
 		ids[i] = fmt.Sprint("i", i+swapOffset(version))
 		for j := range r.IntN(6) {
-			cooc[i*bundle.CoocWidth+j] = int32(1 + r.IntN(swapItems))
+			cooc[i*bundle.CoocWidth+j] = int32(1 + r.IntN(items))
 		}
 	}
 	popular := make([]int32, 10)
 	for i := range popular {
-		popular[i] = int32(1 + r.IntN(swapItems))
+		popular[i] = int32(1 + r.IntN(items))
 	}
-	man := bundle.Manifest{ModelVersion: version, ItemCount: swapItems, Dim: dim, MaxSeqLen: 5}
+	man := bundle.Manifest{ModelVersion: version, ItemCount: items, Dim: dim, MaxSeqLen: 5}
 	b := bundle.New(man, ids, matrix(t, dim, data), cooc, popular)
 	if ranker != nil {
 		rk, err := onnx.NewRanker(ranker, len(bundle.RankerFeatures), bundle.RankerRows)
@@ -91,6 +91,8 @@ func swapStore(t testing.TB) history.Store {
 type swapTest struct {
 	t      testing.TB
 	ranker []byte
+	items  int                                  // per bundle
+	shards func(*bundle.Bundle) (Shards, error) // where a prepared bundle's vectors go
 	store  history.Store
 	cache  *cache.Cache[Response]
 	refs   map[string]*Pipeline
@@ -112,11 +114,19 @@ type swapTest struct {
 }
 
 func newSwapTest(t testing.TB, ranker []byte, broken string) *swapTest {
-	st := &swapTest{t: t, ranker: ranker, store: swapStore(t), cache: cache.New[Response](1000, time.Hour),
+	return newSwapTestOn(t, ranker, broken, swapItems, func(b *bundle.Bundle) (Shards, error) {
+		return localShards(b.Vectors, shard.DefaultConfig)
+	})
+}
+
+// newSwapTestOn is newSwapTest with bundles of items items whose vectors
+// shards puts into shards. The references search in-process shards.
+func newSwapTestOn(t testing.TB, ranker []byte, broken string, items int, shards func(*bundle.Bundle) (Shards, error)) *swapTest {
+	st := &swapTest{t: t, ranker: ranker, items: items, shards: shards, store: swapStore(t), cache: cache.New[Response](1000, time.Hour),
 		refs: map[string]*Pipeline{}, broken: broken,
 		hooked: make(chan struct{}), draining: make(chan struct{}), swapped: make(chan struct{})}
 	for _, v := range []string{"a", "b"} {
-		b := swapBundle(t, v, ranker)
+		b := swapBundleOf(t, v, ranker, items)
 		t.Cleanup(func() {
 			if err := b.Close(); err != nil {
 				t.Error(err)
@@ -139,14 +149,15 @@ func newSwapTest(t testing.TB, ranker []byte, broken string) *swapTest {
 // of version v.
 func (st *swapTest) prepare(v string) func() (*Pipeline, error) {
 	return func() (*Pipeline, error) {
-		b := swapBundle(st.t, v, st.ranker)
+		b := swapBundleOf(st.t, v, st.ranker, st.items)
 		st.mu.Lock()
 		st.bundles = append(st.bundles, b)
 		st.mu.Unlock()
-		p, err := newLocal(b, st.store, shard.DefaultConfig)
+		s, err := st.shards(b)
 		if err != nil {
 			return nil, err
 		}
+		p := New(b, st.store, s)
 		p.Cache, p.stall = st.cache, st.hook
 		if st.broken == "rescore" {
 			p.scoreBundle = func() *bundle.Bundle {

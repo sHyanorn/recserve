@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -54,28 +55,72 @@ func parseIndex(x *annshardpb.Index) (index, error) {
 	return ix, nil
 }
 
+// KeepVersions is the number of bundle versions a replica holds indexes of:
+// the active one and, during a swap, the one before or after it.
+const KeepVersions = 2
+
 // Server is one annshard replica. It holds the indexes it was asked to
-// prepare and answers a search only from the index the request names.
+// prepare, of the KeepVersions bundle versions that requests named last,
+// and answers a search only from the index the request names.
 type Server struct {
 	annshardpb.UnimplementedAnnShardServer
 	root string // holds one bundle directory per version
 	log  *slog.Logger
 
-	loading singleflight.Group // one build per index at a time
-	mu      sync.RWMutex
-	parts   map[index]*shard.Part
+	loading  singleflight.Group // one build per index at a time
+	mu       sync.RWMutex
+	versions map[string]*version
+	clock    atomic.Int64 // counts the requests that named a held version
+}
+
+// version is the indexes held of one bundle version.
+type version struct {
+	parts map[index]*shard.Part // guarded by Server.mu
+	named atomic.Int64          // the clock at the last request that named the version
 }
 
 // NewServer returns a replica that loads bundle versions from the
 // directories under root.
 func NewServer(root string, log *slog.Logger) *Server {
-	return &Server{root: root, log: log, parts: map[index]*shard.Part{}}
+	return &Server{root: root, log: log, versions: map[string]*version{}}
 }
 
+// part returns the index ix, nil if the replica does not hold it, and
+// notes that a request named its version.
 func (s *Server) part(ix index) *shard.Part {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.parts[ix]
+	v := s.versions[ix.version]
+	if v == nil {
+		return nil
+	}
+	v.named.Store(s.clock.Add(1))
+	return v.parts[ix]
+}
+
+// hold adds the index p under ix. If the replica then holds more than
+// KeepVersions versions, it drops every index of the version named longest
+// ago; a search already running on one of them finishes on it.
+func (s *Server) hold(ix index, p *shard.Part) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := s.versions[ix.version]
+	if v == nil {
+		v = &version{parts: map[index]*shard.Part{}}
+		s.versions[ix.version] = v
+	}
+	v.parts[ix] = p
+	v.named.Store(s.clock.Add(1))
+	for len(s.versions) > KeepVersions {
+		oldest := ""
+		for name, o := range s.versions {
+			if oldest == "" || o.named.Load() < s.versions[oldest].named.Load() {
+				oldest = name
+			}
+		}
+		delete(s.versions, oldest)
+		s.log.Info("version dropped", "version", oldest)
+	}
 }
 
 // Prepare loads the vectors of the index's bundle version, verifies them
@@ -118,9 +163,7 @@ func (s *Server) prepare(ix index) error {
 	if err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
-	s.mu.Lock()
-	s.parts[ix] = p
-	s.mu.Unlock()
+	s.hold(ix, p)
 	s.log.Info("index prepared", "version", ix.version, "shard", ix.shard, "shards", ix.cfg.Shards, "mode", ix.cfg.Mode,
 		"items", p.Len(), "took", time.Since(start))
 	return nil
