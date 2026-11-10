@@ -1,0 +1,9 @@
+# Plugins are the versions go.mod pins as tools; no protoc is needed.
+version: v2
+plugins:
+  - local: [go, tool, protoc-gen-go]
+    out: .
+    opt: module=github.com/sHyanorn/recserve
+  - local: [go, tool, protoc-gen-go-grpc]
+    out: .
+    opt: module=github.com/sHyanorn/recserve

@@ -49,6 +49,22 @@ jobs:
         if: failure()
         run: docker compose -f deploy/compose.yaml logs --no-color --tail 200
 
+  proto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1.7.0
+        with:
+          version: 1.75.0
+          checksum: fad1e38d6909bbb583a4da81d8c02a01046e2cd663bde7e337dd24277393764b
+          setup_only: true
+      # The committed *.pb.go must be what the proto files generate.
+      - run: make proto
+      - run: git add --intent-to-add . && git diff --exit-code
+
   lint:
     runs-on: ubuntu-latest
     steps:

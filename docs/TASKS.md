@@ -54,6 +54,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] OpenTelemetry tracing
 - [ ] Dockerfiles and docker compose with Prometheus, Grafana and Jaeger
 - [ ] kind manifests: probes, resource limits, HPA with metrics-server (D022)
+- [ ] NetworkPolicy that lets only the gateways reach the annshard port: the shard API has no TLS or authentication (D040)
 - [ ] Graceful shutdown: readiness flip, preStop wait, drain, offset commit
 - [ ] Zero-error check under load through a rollout restart and a bundle swap
 - [ ] Logistic-regression ranker over the six features of SPEC §8, trained in `tools/bundle` and exported as `ranker.onnx` (D027), before M6. Its bundle carries a feature consistency golden: Python and Go compute the features of the same fixed requests, and the largest difference must be at most 1e-6

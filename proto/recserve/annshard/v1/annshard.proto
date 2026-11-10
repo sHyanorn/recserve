@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package recserve.annshard.v1;
+
+option go_package = "github.com/sHyanorn/recserve/internal/annshard/annshardpb";
+
+// AnnShard searches shards of a bundle's item vectors. A replica has no
+// shard settings of its own: every request names the index it is for, and
+// the replica answers from that index or not at all.
+service AnnShard {
+  // Search returns the k items of the index with the highest inner product
+  // with the query, best first, ties to the lower ID. It fails with
+  // FAILED_PRECONDITION if the replica does not hold the index.
+  rpc Search(SearchRequest) returns (SearchResponse);
+  // Prepare loads the index's bundle version and builds the index. It
+  // returns once the replica holds the index, also if it already did.
+  rpc Prepare(PrepareRequest) returns (PrepareResponse);
+}
+
+// Mode is how a shard searches its vectors.
+enum Mode {
+  MODE_UNSPECIFIED = 0;
+  // Every vector, by inner product.
+  MODE_EXACT = 1;
+  // An HNSW index over the shard's vectors.
+  MODE_HNSW = 2;
+}
+
+// Index names one shard of one bundle version, split and built one way.
+// Two replicas given the same Index hold the same items and, in HNSW mode,
+// the same graph.
+message Index {
+  // The bundle's model_version, also the name of its directory.
+  string version = 1;
+  // The shard, in [0, shards); item i belongs to shard.Of(i, shards).
+  int32 shard = 2;
+  int32 shards = 3;
+  Mode mode = 4;
+  // HNSW build parameters; MODE_HNSW only.
+  int32 hnsw_m = 5;
+  int32 hnsw_ef_construction = 6;
+  uint64 hnsw_seed = 7;
+}
+
+message SearchRequest {
+  Index index = 1;
+  // The query vector, of the bundle's dimension.
+  repeated float query = 2;
+  int32 k = 3;
+  // Internal IDs to leave out. IDs of other shards are ignored.
+  repeated int32 exclude = 4;
+  // HNSW search list size; MODE_HNSW only.
+  int32 ef = 5;
+}
+
+message SearchResponse {
+  // Internal IDs, best first.
+  repeated int32 ids = 1;
+  // scores[i] is the inner product of the query and item ids[i], computed
+  // in float64.
+  repeated double scores = 2;
+}
+
+message PrepareRequest {
+  Index index = 1;
+}
+
+message PrepareResponse {}

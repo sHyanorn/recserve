@@ -4,7 +4,7 @@ ENCODER ?= mean
 BUNDLE  ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help build test test-real e2e lint fmt data bundle infra-up infra-down
+.PHONY: help build test test-real e2e lint fmt proto data bundle infra-up infra-down
 
 help: ## Show available targets
 	@awk -F':.*## ' '/^[a-z0-9-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -26,6 +26,10 @@ lint: ## Run golangci-lint
 
 fmt: ## Format code
 	golangci-lint fmt ./...
+
+proto: ## Lint the proto files and regenerate their Go code (needs buf v1.75.0)
+	buf lint
+	buf generate
 
 data: ## Download the Amazon 2023 Video_Games split and metadata into DATA
 	scripts/data.sh $(DATA)
