@@ -60,7 +60,7 @@ func TestRankerFeatures(t *testing.T) {
 	cooc[2*bundle.CoocWidth], cooc[2*bundle.CoocWidth+1] = 3, 4
 	cooc[1*bundle.CoocWidth] = 3
 	b := bundle.New(bundle.Manifest{ModelVersion: "t", ItemCount: 4, Dim: 2, MaxSeqLen: 5}, []string{"", "a", "b", "c", "d"}, m, cooc, []int32{4, 3})
-	store := storeWith(t, history.Event{ID: 1, User: "u", Item: 1, TS: 1}, history.Event{ID: 2, User: "u", Item: 2, TS: 2})
+	store := storeWith(t, history.Event{ID: 1, User: "u", Item: "a", TS: 1}, history.Event{ID: 2, User: "u", Item: "b", TS: 2})
 	var got []float32
 	p := newPipeline(t, b, store)
 	p.rankWith = rankFunc(func(_ context.Context, x []float32) ([]float32, error) {
@@ -222,7 +222,7 @@ func TestRankerTruncates(t *testing.T) {
 	b := bundle.New(bundle.Manifest{ModelVersion: "t", ItemCount: n, Dim: dim, MaxSeqLen: 50}, ids, matrix(t, dim, data), cooc, popular)
 	var events []history.Event
 	for i := range CoocSeeds {
-		events = append(events, history.Event{ID: uint64(i), User: "u", Item: int32(1 + 97*i), TS: int64(i)})
+		events = append(events, history.Event{ID: uint64(i), User: "u", Item: fmt.Sprint("i", 1+97*i), TS: int64(i)})
 	}
 	store := storeWith(t, events...)
 	var got []float32
@@ -239,10 +239,11 @@ func TestRankerTruncates(t *testing.T) {
 
 	// The candidates as the pipeline sees them, best retrieval score first.
 	ctx := context.Background()
-	hist, err := store.Before(ctx, "u", req.TS, 0)
+	raw, err := store.Before(ctx, "u", req.TS, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	hist := internalIDs(b, raw)
 	seen := map[int32]bool{}
 	for _, id := range hist {
 		seen[id] = true
@@ -311,7 +312,7 @@ func TestONNXRankerMatchesGo(t *testing.T) {
 	var events []history.Event
 	for u := range 20 {
 		for e := range r.IntN(12) {
-			events = append(events, history.Event{ID: uint64(u<<20 | e), User: fmt.Sprint("u", u), Item: int32(1 + r.IntN(n)), TS: int64(r.IntN(100))})
+			events = append(events, history.Event{ID: uint64(u<<20 | e), User: fmt.Sprint("u", u), Item: fmt.Sprint("i", 1+r.IntN(n)), TS: int64(r.IntN(100))})
 		}
 	}
 	store := storeWith(t, events...)

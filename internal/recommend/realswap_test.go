@@ -16,8 +16,8 @@ import (
 )
 
 // TestRealDataSwap swaps between the real bundle (see TestRealDataSmoke)
-// and the one at RECSERVE_SWAP_BUNDLE, which must have the same items,
-// while four workers send the requests of realQueries. Every response must
+// and the one at RECSERVE_SWAP_BUNDLE while four workers send the requests
+// of realQueries. Every response must
 // equal, item for item, the one the version it names returns; budgets and
 // the cache are off, so none degrades or comes from the cache. It reports
 // the time to prepare and to drain each swap, and request latency with and

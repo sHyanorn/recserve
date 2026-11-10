@@ -15,11 +15,12 @@ import (
 )
 
 // Event is one user event. ID identifies the event: storing the same ID
-// twice stores it once.
+// twice stores it once. Item is the raw item ID, so a stored history does
+// not depend on any bundle's internal IDs.
 type Event struct {
 	ID   uint64
 	User string
-	Item int32
+	Item string
 	TS   int64 // milliseconds since the Unix epoch
 }
 
@@ -39,9 +40,9 @@ func EventID(user, item string, ts int64, kind string) uint64 {
 type Store interface {
 	// Append stores events; events already stored are ignored.
 	Append(ctx context.Context, events []Event) error
-	// Before returns the items of the user's last n stored events with
-	// TS < ts, oldest first; all of them if n <= 0.
-	Before(ctx context.Context, user string, ts int64, n int) ([]int32, error)
+	// Before returns the raw item IDs of the user's last n stored events
+	// with TS < ts, oldest first; all of them if n <= 0.
+	Before(ctx context.Context, user string, ts int64, n int) ([]string, error)
 }
 
 // order sorts events by time, then by ID.
@@ -91,7 +92,7 @@ func (m *Memory) Append(_ context.Context, events []Event) error {
 }
 
 // Before implements Store.
-func (m *Memory) Before(_ context.Context, user string, ts int64, n int) ([]int32, error) {
+func (m *Memory) Before(_ context.Context, user string, ts int64, n int) ([]string, error) {
 	s := &m.shards[m.shard(user)]
 	s.RLock()
 	defer s.RUnlock()
@@ -106,7 +107,7 @@ func (m *Memory) Before(_ context.Context, user string, ts int64, n int) ([]int3
 	if n > 0 {
 		start = max(0, end-n)
 	}
-	out := make([]int32, 0, end-start)
+	out := make([]string, 0, end-start)
 	for _, e := range evs[start:end] {
 		out = append(out, e.Item)
 	}

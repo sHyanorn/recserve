@@ -11,7 +11,7 @@ import (
 
 // naiveBefore is the reference for property 1: the last n distinct events
 // with TS < ts (all of them if n <= 0).
-func naiveBefore(events []Event, ts int64, n int) []int32 {
+func naiveBefore(events []Event, ts int64, n int) []string {
 	var all []Event
 	seen := map[uint64]bool{}
 	for _, e := range events {
@@ -21,7 +21,7 @@ func naiveBefore(events []Event, ts int64, n int) []int32 {
 		}
 	}
 	slices.SortFunc(all, order)
-	var out []int32
+	var out []string
 	for _, e := range all {
 		if e.TS < ts {
 			out = append(out, e.Item)
@@ -48,8 +48,8 @@ func checkProperty1(newStore func() *Memory, seed uint64, cases int) error {
 				e = sent[r.IntN(len(sent))] // redelivery
 			} else {
 				ts := int64(r.IntN(50)) // few distinct times, so ties are common
-				item := int32(1 + r.IntN(30))
-				e = Event{ID: EventID("u", fmt.Sprint(item), ts, "view"), User: "u", Item: item, TS: ts}
+				item := fmt.Sprint("i", 1+r.IntN(30))
+				e = Event{ID: EventID("u", item, ts, "view"), User: "u", Item: item, TS: ts}
 			}
 			sent = append(sent, e)
 			if err := s.Append(ctx, []Event{e}); err != nil {
@@ -85,10 +85,10 @@ func TestProperty1CatchesBrokenVariant(t *testing.T) {
 
 func TestUsersAreSeparate(t *testing.T) {
 	s, ctx := NewMemory(), context.Background()
-	if err := s.Append(ctx, []Event{{ID: 1, User: "a", Item: 1, TS: 1}, {ID: 2, User: "b", Item: 2, TS: 1}}); err != nil {
+	if err := s.Append(ctx, []Event{{ID: 1, User: "a", Item: "x", TS: 1}, {ID: 2, User: "b", Item: "y", TS: 1}}); err != nil {
 		t.Fatal(err)
 	}
-	for user, want := range map[string][]int32{"a": {1}, "c": nil} {
+	for user, want := range map[string][]string{"a": {"x"}, "c": nil} {
 		got, err := s.Before(ctx, user, 2, 10)
 		if err != nil || !slices.Equal(got, want) {
 			t.Fatalf("%s: %v, %v", user, got, err)
@@ -103,7 +103,7 @@ func TestConcurrentAppendAndRead(t *testing.T) {
 		wg.Go(func() {
 			for i := range 500 {
 				u := fmt.Sprint("u", i%10)
-				if err := s.Append(ctx, []Event{{ID: uint64(w*1000 + i), User: u, Item: int32(i), TS: int64(i)}}); err != nil {
+				if err := s.Append(ctx, []Event{{ID: uint64(w*1000 + i), User: u, Item: fmt.Sprint(i), TS: int64(i)}}); err != nil {
 					t.Error(err)
 					return
 				}

@@ -156,11 +156,10 @@ func loadRealData(t *testing.T) realData {
 		if r.TS >= rd.first {
 			t.Fatalf("event at %d is not before the first test event %d", r.TS, rd.first)
 		}
-		id, ok := rd.bundle.Lookup(r.Item)
-		if !ok {
+		if _, ok := rd.bundle.Lookup(r.Item); !ok {
 			t.Fatalf("item %s not in the bundle", r.Item)
 		}
-		evs = append(evs, history.Event{ID: history.EventID(r.User, r.Item, r.TS, dataset.Kind), User: r.User, Item: id, TS: r.TS})
+		evs = append(evs, history.Event{ID: history.EventID(r.User, r.Item, r.TS, dataset.Kind), User: r.User, Item: r.Item, TS: r.TS})
 	}
 	if err := rd.store.Append(context.Background(), evs); err != nil {
 		t.Fatal(err)

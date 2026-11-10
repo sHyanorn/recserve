@@ -93,18 +93,19 @@ func want(t *testing.T, p *Pipeline, f *fault, req Request) Response {
 	q.stall, q.Budgets = nil, Budgets{}
 	b := p.Bundle
 	var d degradation
-	var hist []int32
+	raws := req.Recent
 	if f.fails(stageHistory, -1) {
 		d.add(f.reason, nil)
-		for _, raw := range req.Recent {
-			if id, ok := b.Lookup(raw); ok {
-				hist = append(hist, id)
-			}
-		}
 	} else {
 		var err error
-		if hist, err = p.History.Before(ctx, req.User, req.TS, 0); err != nil {
+		if raws, err = p.History.Before(ctx, req.User, req.TS, 0); err != nil {
 			t.Fatal(err)
+		}
+	}
+	var hist []int32
+	for _, raw := range raws {
+		if id, ok := b.Lookup(raw); ok {
+			hist = append(hist, id)
 		}
 	}
 	seen := map[int32]bool{}
@@ -258,9 +259,7 @@ func TestProperty10RecentReplacesHistory(t *testing.T) {
 			}
 			var evs []history.Event
 			for i, raw := range req.Recent {
-				if id, ok := p.Bundle.Lookup(raw); ok {
-					evs = append(evs, history.Event{ID: uint64(i), User: req.User, Item: id, TS: int64(i)})
-				}
+				evs = append(evs, history.Event{ID: uint64(i), User: req.User, Item: raw, TS: int64(i)})
 			}
 			q := *p
 			q.History, q.stall, q.Budgets = storeWith(t, evs...), nil, Budgets{}

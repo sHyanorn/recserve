@@ -98,7 +98,7 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib stri
 	}()
 	if preload != "" {
 		for _, path := range strings.Split(preload, ",") {
-			n, err := preloadHistory(store, p.Bundle, path)
+			n, err := preloadHistory(store, path)
 			if err != nil {
 				return err
 			}
@@ -187,16 +187,14 @@ func loopback(a net.Addr) bool {
 	return ok && t.IP.IsLoopback()
 }
 
-func preloadHistory(store history.Store, b *bundle.Bundle, path string) (int, error) {
+func preloadHistory(store history.Store, path string) (int, error) {
 	rows, err := dataset.Read(path)
 	if err != nil {
 		return 0, err
 	}
-	evs := make([]history.Event, 0, len(rows))
-	for _, r := range rows {
-		if id, ok := b.Lookup(r.Item); ok {
-			evs = append(evs, history.Event{ID: history.EventID(r.User, r.Item, r.TS, dataset.Kind), User: r.User, Item: id, TS: r.TS})
-		}
+	evs := make([]history.Event, len(rows))
+	for i, r := range rows {
+		evs[i] = history.Event{ID: history.EventID(r.User, r.Item, r.TS, dataset.Kind), User: r.User, Item: r.Item, TS: r.TS}
 	}
 	return len(evs), store.Append(context.Background(), evs)
 }

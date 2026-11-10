@@ -28,10 +28,11 @@ func realQueries(t *testing.T, rd realData) []realQuery {
 	for i := 0; i < len(rd.test) && len(out) < 2000; i += 20 {
 		r := rd.test[i]
 		req := Request{User: r.User, K: 50, TS: r.TS}
-		hist, err := rd.store.Before(ctx, r.User, r.TS, 0)
+		raw, err := rd.store.Before(ctx, r.User, r.TS, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
+		hist := internalIDs(rd.bundle, raw)
 		uv, err := rd.bundle.UserVector(ctx, hist)
 		if err != nil {
 			t.Fatal(err)

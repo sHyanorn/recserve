@@ -94,7 +94,7 @@ func TestProperty5CatchesBrokenVariant(t *testing.T) {
 func TestCacheLateEvent(t *testing.T) {
 	m := matrix(t, 2, []float32{0, 0, 1, 0, 0, 1, 1, 1})
 	b := bundle.New(bundle.Manifest{ModelVersion: "t", ItemCount: 3, Dim: 2, MaxSeqLen: 5}, []string{"", "a", "b", "c"}, m, nil, []int32{1, 2, 3})
-	store := storeWith(t, history.Event{ID: 1, User: "u", Item: 2, TS: 5})
+	store := storeWith(t, history.Event{ID: 1, User: "u", Item: "b", TS: 5})
 	p := newPipeline(t, b, store)
 	p.Cache = cache.New[Response](10, time.Hour)
 	req := Request{User: "u", K: 3, TS: 10}
@@ -115,7 +115,7 @@ func TestCacheLateEvent(t *testing.T) {
 	if _, cached := ids(); !cached {
 		t.Fatal("the repeated request missed the cache")
 	}
-	if err := store.Append(context.Background(), []history.Event{{ID: 2, User: "u", Item: 1, TS: 3}}); err != nil {
+	if err := store.Append(context.Background(), []history.Event{{ID: 2, User: "u", Item: "a", TS: 3}}); err != nil {
 		t.Fatal(err)
 	}
 	if got, cached := ids(); slices.Contains(got, "a") || cached {

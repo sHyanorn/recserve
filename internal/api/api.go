@@ -271,12 +271,13 @@ type EventsRequest struct {
 	Events []Event `json:"events"`
 }
 
-// EventsResponse reports how many events were stored and how many named unknown items.
+// EventsResponse reports how many events were stored.
 type EventsResponse struct {
-	Accepted     int `json:"accepted"`
-	UnknownItems int `json:"unknown_items"`
+	Accepted int `json:"accepted"`
 }
 
+// events stores the events under their raw item IDs, whatever bundle is
+// active: an item no bundle knows yet is kept for one that will.
 func (s *Server) events(w http.ResponseWriter, r *http.Request) error {
 	var in EventsRequest
 	if err := decode(r.Body, &in); err != nil {
@@ -285,42 +286,17 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) error {
 	if len(in.Events) == 0 || len(in.Events) > MaxEvents {
 		return badRequest{fmt.Errorf("events must hold 1..%d events", MaxEvents)}
 	}
+	evs := make([]history.Event, len(in.Events))
 	for i, e := range in.Events {
 		if e.UserID == "" || e.ItemID == "" || e.TS <= 0 {
 			return badRequest{fmt.Errorf("event %d: user_id, item_id and a positive ts are required", i)}
 		}
-	}
-	evs, out, err := s.lookupEvents(in.Events)
-	if err != nil {
-		return err
+		evs[i] = history.Event{ID: history.EventID(e.UserID, e.ItemID, e.TS, e.Kind), User: e.UserID, Item: e.ItemID, TS: e.TS}
 	}
 	if err := s.History.Append(r.Context(), evs); err != nil {
 		return err
 	}
-	out.Accepted = len(evs)
-	return writeJSON(w, http.StatusAccepted, out)
-}
-
-// lookupEvents maps the events' items to internal IDs with the active
-// bundle, which it holds only while it looks them up; every bundle a swap
-// accepts has the same IDs.
-func (s *Server) lookupEvents(in []Event) ([]history.Event, EventsResponse, error) {
-	p, release, err := s.Live.Acquire()
-	if err != nil {
-		return nil, EventsResponse{}, err
-	}
-	defer release()
-	var out EventsResponse
-	evs := make([]history.Event, 0, len(in))
-	for _, e := range in {
-		item, ok := p.Bundle.Lookup(e.ItemID)
-		if !ok {
-			out.UnknownItems++
-			continue
-		}
-		evs = append(evs, history.Event{ID: history.EventID(e.UserID, e.ItemID, e.TS, e.Kind), User: e.UserID, Item: item, TS: e.TS})
-	}
-	return evs, out, nil
+	return writeJSON(w, http.StatusAccepted, EventsResponse{Accepted: len(evs)})
 }
 
 // Results of a swap, as recserve_swaps_total counts them.

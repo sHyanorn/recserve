@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -19,9 +20,9 @@ import (
 )
 
 // swapServer returns testServer's server with an admin API whose Prepare
-// serves directories by name: "v2" a bundle of version v2 with the same
-// items, "v1" one of the active version, "other" one with other items, and
-// anything else an error.
+// serves directories by name: "v1" a bundle of the active version, "v2"
+// one of version v2 that holds item e in place of d, and anything else an
+// error.
 func swapServer(t *testing.T) (s *Server, api, admin *httptest.Server, logs *bytes.Buffer) {
 	t.Helper()
 	s, api = testServer(t)
@@ -30,8 +31,8 @@ func swapServer(t *testing.T) (s *Server, api, admin *httptest.Server, logs *byt
 	s.Prepare = func(dir string) (*recommend.Pipeline, error) {
 		ids := []string{"", "a", "b", "c", "d"}
 		switch dir {
-		case "v1", "v2":
-		case "other":
+		case "v1":
+		case "v2":
 			ids[4] = "e"
 		default:
 			return nil, errors.New("checksum mismatch in " + dir)
@@ -57,7 +58,6 @@ func TestAdminSwap(t *testing.T) {
 	}{
 		{`{"bundle":"broken"}`, http.StatusUnprocessableEntity, "checksum mismatch in broken"},
 		{`{"bundle":"v1"}`, http.StatusConflict, recommend.ErrActive.Error()},
-		{`{"bundle":"other"}`, http.StatusUnprocessableEntity, recommend.ErrIDsDiffer.Error()},
 		{`{"bundle":""}`, http.StatusBadRequest, "bundle is required"},
 		{`{"dir":"v2"}`, http.StatusBadRequest, "unknown field"},
 	} {
@@ -73,14 +73,26 @@ func TestAdminSwap(t *testing.T) {
 		t.Fatalf("rejections not logged: %s", logs)
 	}
 
+	// w's history holds d, which only v1 knows, and e, which only v2 knows.
+	if code, out := post(t, api.URL+"/v1/events", `{"events":[{"user_id":"w","item_id":"d","ts":400,"kind":"view"},{"user_id":"w","item_id":"e","ts":401,"kind":"view"}]}`); code != http.StatusAccepted || out["accepted"] != 2.0 {
+		t.Fatalf("events before the swap: %d %v", code, out)
+	}
+	if _, out := post(t, api.URL+"/v1/recommend", `{"user_id":"w","k":4}`); !slices.Equal(ids(out), []string{"c", "b", "a"}) {
+		t.Fatalf("w on v1: %v; want c, b, a: the history is d", out)
+	}
+
 	code, out := post(t, admin.URL+"/v1/admin/swap", `{"bundle":"v2"}`)
 	if code != http.StatusOK || out["model_version"] != "v2" || out["previous"] != "v1" {
-		t.Fatalf("swap: %d %v", code, out)
+		t.Fatalf("swap to a bundle with other items: %d %v", code, out)
+	}
+	// On v2 the stored history reads as e: e is seen and decides the order.
+	if _, out := post(t, api.URL+"/v1/recommend", `{"user_id":"w","k":4}`); out["model_version"] != "v2" || !slices.Equal(ids(out), []string{"a", "c", "b"}) {
+		t.Fatalf("w on v2: %v; want a, c, b: the history is e", out)
 	}
 	if _, ok := out["drain_ms"].(float64); !ok {
 		t.Fatalf("swap: no drain_ms in %v", out)
 	}
-	// Events are mapped with the new bundle, and requests served by it.
+	// Requests are served by the new bundle.
 	if code, out := post(t, api.URL+"/v1/events", `{"events":[{"user_id":"u","item_id":"b","ts":500,"kind":"view"}]}`); code != http.StatusAccepted || out["accepted"] != 1.0 {
 		t.Fatalf("events after the swap: %d %v", code, out)
 	}
@@ -88,7 +100,7 @@ func TestAdminSwap(t *testing.T) {
 	if got := ids(out); code != http.StatusOK || out["model_version"] != "v2" || len(got) != 1 || got[0] != "c" {
 		t.Fatalf("recommend after the swap: %d %v; want c, closest to b in v2", code, out)
 	}
-	for result, want := range map[string]float64{swapOK: 1, swapRejected: 3, swapBusy: 0} {
+	for result, want := range map[string]float64{swapOK: 1, swapRejected: 2, swapBusy: 0} {
 		if got := testutil.ToFloat64(s.swaps.WithLabelValues(result)); got != want {
 			t.Fatalf("swaps %s: %v, want %v", result, got, want)
 		}
@@ -167,12 +179,15 @@ func TestClosedLiveIs503(t *testing.T) {
 	}
 	for _, c := range []struct{ url, body string }{
 		{api.URL + "/v1/recommend", `{"user_id":"u","k":3}`},
-		{api.URL + "/v1/events", `{"events":[{"user_id":"u","item_id":"a","ts":5,"kind":"view"}]}`},
 		{admin.URL + "/v1/admin/swap", `{"bundle":"v2"}`},
 	} {
 		if code, out := post(t, c.url, c.body); code != http.StatusServiceUnavailable {
 			t.Fatalf("%s: %d %v", c.url, code, out)
 		}
+	}
+	// Events need no bundle and are still stored.
+	if code, out := post(t, api.URL+"/v1/events", `{"events":[{"user_id":"u","item_id":"a","ts":5,"kind":"view"}]}`); code != http.StatusAccepted {
+		t.Fatalf("events: %d %v", code, out)
 	}
 	if logs.Len() != 0 {
 		t.Fatalf("logged: %s", logs)

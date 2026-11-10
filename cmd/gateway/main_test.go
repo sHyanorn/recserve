@@ -83,12 +83,12 @@ func TestSwapThroughPreparer(t *testing.T) {
 		{"cutoff", bundletest.Write(t, bundletest.Version("v5"), func(_ map[string][]byte, m map[string]any) {
 			m["train_cutoff_ts"] = 150
 		}), http.StatusUnprocessableEntity, bundle.ErrCutoff.Error()},
-		{"other items", bundletest.Write(t, bundletest.Version("v6"), func(f map[string][]byte, _ map[string]any) {
-			f["items.ids"] = []byte(strings.Replace(string(f["items.ids"]), "item12\n", "itemX\n", 1))
-		}), http.StatusUnprocessableEntity, recommend.ErrIDsDiffer.Error()},
 		{"no directory", filepath.Join(t.TempDir(), "none"), http.StatusUnprocessableEntity, "no such file"},
 		{"same version", bundletest.Write(t), http.StatusConflict, recommend.ErrActive.Error()},
 		{"good", bundletest.Write(t, bundletest.Version("v2")), http.StatusOK, "v2"},
+		{"other items", bundletest.Write(t, bundletest.Version("v6"), func(f map[string][]byte, _ map[string]any) {
+			f["items.ids"] = []byte(strings.Replace(string(f["items.ids"]), "item12\n", "itemX\n", 1))
+		}), http.StatusOK, "v6"},
 		{"back", bundletest.Write(t), http.StatusOK, "test"},
 	}
 	active := "test"

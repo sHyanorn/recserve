@@ -30,8 +30,16 @@ const (
 
 var discard = slog.New(slog.NewTextHandler(io.Discard, nil))
 
-// swapBundle returns a new bundle of the given version: the same item IDs
-// for every version, and vectors (none zero), co-occurrence rows and a
+// swapOffset shifts a version's raw item IDs: a holds i1 to i40 and b i6 to
+// i45, so the two share most items under different internal IDs and each
+// has five the other lacks.
+func swapOffset(version string) int { return 5 * int(version[0]-'a') }
+
+// swapRaw is the number of raw item IDs over versions a and b.
+const swapRaw = swapItems + 5
+
+// swapBundle returns a new bundle of the given version: its own item IDs
+// (swapOffset), and vectors (none zero), co-occurrence rows and a
 // popularity list drawn from the version's own seed, so two versions score
 // every candidate differently. ranker, if not nil, is loaded as the
 // bundle's ranker.
@@ -46,7 +54,7 @@ func swapBundle(t testing.TB, version string, ranker []byte) *bundle.Bundle {
 	ids := make([]string, swapItems+1)
 	cooc := make([]int32, (swapItems+1)*bundle.CoocWidth)
 	for i := 1; i <= swapItems; i++ {
-		ids[i] = fmt.Sprint("i", i)
+		ids[i] = fmt.Sprint("i", i+swapOffset(version))
 		for j := range r.IntN(6) {
 			cooc[i*bundle.CoocWidth+j] = int32(1 + r.IntN(swapItems))
 		}
@@ -72,7 +80,7 @@ func swapStore(t testing.TB) history.Store {
 	var events []history.Event
 	for u := range swapUsers {
 		for e := range r.IntN(15) {
-			events = append(events, history.Event{ID: uint64(u<<20 | e), User: fmt.Sprint("u", u), Item: int32(1 + r.IntN(swapItems)), TS: int64(r.IntN(100))})
+			events = append(events, history.Event{ID: uint64(u<<20 | e), User: fmt.Sprint("u", u), Item: fmt.Sprint("i", 1+r.IntN(swapRaw)), TS: int64(r.IntN(100))})
 		}
 	}
 	return storeWith(t, events...)
@@ -214,7 +222,7 @@ func checkProperty4(st *swapTest, workers, swaps int) (map[string]int, error) {
 			for !stop.Load() {
 				req := Request{User: fmt.Sprint("u", r.IntN(swapUsers)), K: 1 + r.IntN(10), TS: int64(r.IntN(110))}
 				if r.IntN(3) == 0 {
-					req.Exclude = []string{fmt.Sprint("i", 1+r.IntN(swapItems))}
+					req.Exclude = []string{fmt.Sprint("i", 1+r.IntN(swapRaw))}
 				}
 				resp, err := st.live.Recommend(context.Background(), req)
 				if err == nil {
@@ -252,8 +260,9 @@ func checkProperty4(st *swapTest, workers, swaps int) (map[string]int, error) {
 	return served, firstErr
 }
 
-// Property 4: during concurrent requests and repeated swaps, every response
-// recomputes exactly from the vectors of the version it names. The broken
+// Property 4: during concurrent requests and repeated swaps between two
+// bundles with different items, every response recomputes exactly from the
+// vectors of the version it names. The broken
 // variant scores candidates with the bundle active when scoring starts; the
 // held request makes sure one request scores after a swap.
 func TestProperty4SwapUnderLoad(t *testing.T) {
@@ -273,6 +282,67 @@ func TestProperty4SwapUnderLoad(t *testing.T) {
 	broken := newSwapTest(t, nil, "rescore")
 	if _, err := checkProperty4(broken, 8, 200); err == nil {
 		t.Fatal("broken variant (rescoring with the active bundle) passed")
+	} else {
+		t.Logf("broken variant caught: %v", err)
+	}
+}
+
+// checkProperty2AcrossSwap serves version a, then b, then a again, and
+// returns the first response that holds an item of the user's stored
+// history before the request. With broken set, version b's pipeline skips
+// the seen filter.
+func checkProperty2AcrossSwap(t *testing.T, broken bool) error {
+	st := newSwapTest(t, nil, "")
+	t.Cleanup(func() {
+		if err := st.live.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	ctx := context.Background()
+	r := rand.New(rand.NewPCG(9, 9))
+	for i, v := range []string{"a", "b", "a"} {
+		if i > 0 {
+			if _, err := st.live.Swap(func() (*Pipeline, error) {
+				p, err := st.prepare(v)()
+				if err == nil {
+					p.skipSeenFilter = broken && v == "b"
+				}
+				return p, err
+			}); err != nil {
+				return err
+			}
+		}
+		for range 300 {
+			req := Request{User: fmt.Sprint("u", r.IntN(swapUsers)), K: swapItems, TS: int64(r.IntN(110))}
+			resp, err := st.live.Recommend(ctx, req)
+			if err != nil {
+				return err
+			}
+			seen, err := st.store.Before(ctx, req.User, req.TS, 0)
+			if err != nil {
+				return err
+			}
+			if resp.ModelVersion != v {
+				return fmt.Errorf("served by %s, want %s", resp.ModelVersion, v)
+			}
+			for _, it := range resp.Items {
+				if slices.Contains(seen, it.ID) {
+					return fmt.Errorf("swap %d, version %s: %s at ts %d got seen item %s", i, v, req.User, req.TS, it.ID)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// Property 2 holds across swaps between bundles with different items: the
+// store holds raw item IDs, and each version maps them with its own IDs.
+func TestProperty2AcrossSwap(t *testing.T) {
+	if err := checkProperty2AcrossSwap(t, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkProperty2AcrossSwap(t, true); err == nil {
+		t.Fatal("broken variant (no seen filter after the swap) passed")
 	} else {
 		t.Logf("broken variant caught: %v", err)
 	}
@@ -338,14 +408,6 @@ func TestSwapRejects(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	otherIDs := func() (*Pipeline, error) {
-		p, err := st.prepare("b")()
-		if err == nil {
-			p.Bundle.IDs = slices.Clone(p.Bundle.IDs)
-			p.Bundle.IDs[3] = "x"
-		}
-		return p, err
-	}
 	errLoad := errors.New("checksum mismatch")
 	cases := map[string]struct {
 		prepare func() (*Pipeline, error)
@@ -353,7 +415,6 @@ func TestSwapRejects(t *testing.T) {
 	}{
 		"prepare fails":  {func() (*Pipeline, error) { return nil, errLoad }, errLoad},
 		"same version":   {st.prepare("a"), ErrActive},
-		"IDs differ":     {otherIDs, ErrIDsDiffer},
 		"swap in flight": {nil, ErrSwapInProgress},
 	}
 	req := Request{User: "u1", K: 5, TS: 100}

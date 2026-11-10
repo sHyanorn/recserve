@@ -49,7 +49,7 @@ func randomPipeline(r *rand.Rand, n, users int) (*Pipeline, error) {
 	var events []history.Event
 	for u := range users {
 		for e := range r.IntN(300) {
-			item := int32(1 + r.IntN(n))
+			item := fmt.Sprint("i", 1+r.IntN(n+2)) // the last two are unknown to the bundle
 			ts := int64(r.IntN(100))
 			events = append(events, history.Event{ID: uint64(u<<20 | e), User: fmt.Sprint("u", u), Item: item, TS: ts})
 		}
@@ -97,8 +97,8 @@ func checkProperty2(seed uint64, cases int, broken bool, rk Ranker, f *fault) er
 				if err != nil {
 					return err
 				}
-				for _, id := range kept {
-					banned[p.Bundle.IDs[id]] = true
+				for _, raw := range kept {
+					banned[raw] = true
 				}
 			}
 			got := map[string]bool{}
@@ -263,7 +263,7 @@ func TestRejectsBadK(t *testing.T) {
 func TestZeroVectorHistoryFallsBackToPopularity(t *testing.T) {
 	m := matrix(t, 2, []float32{0, 0, 0, 0, 1, 0, 0, 1})
 	b := bundle.New(bundle.Manifest{ModelVersion: "t", ItemCount: 3, Dim: 2, MaxSeqLen: 5}, []string{"", "a", "b", "c"}, m, nil, []int32{3, 2})
-	store := storeWith(t, history.Event{ID: 1, User: "u", Item: 1, TS: 1})
+	store := storeWith(t, history.Event{ID: 1, User: "u", Item: "a", TS: 1})
 	resp, err := newPipeline(t, b, store).Recommend(context.Background(), Request{User: "u", K: 2, TS: 2})
 	if err != nil {
 		t.Fatal(err)
@@ -278,7 +278,7 @@ func TestZeroVectorHistoryFallsBackToPopularity(t *testing.T) {
 func TestEventAtRequestTimeIsNotHistory(t *testing.T) {
 	m := matrix(t, 2, []float32{0, 0, 1, 0, 0, 1})
 	b := bundle.New(bundle.Manifest{ModelVersion: "t", ItemCount: 2, Dim: 2, MaxSeqLen: 5}, []string{"", "a", "b"}, m, nil, []int32{1, 2})
-	store := storeWith(t, history.Event{ID: 1, User: "u", Item: 1, TS: 5})
+	store := storeWith(t, history.Event{ID: 1, User: "u", Item: "a", TS: 5})
 	resp, err := newPipeline(t, b, store).Recommend(context.Background(), Request{User: "u", K: 1, TS: 5})
 	if err != nil {
 		t.Fatal(err)
@@ -352,7 +352,7 @@ func TestONNXEncoderMatchesMean(t *testing.T) {
 	var events []history.Event
 	for u := range 20 {
 		for e := range r.IntN(12) {
-			events = append(events, history.Event{ID: uint64(u<<20 | e), User: fmt.Sprint("u", u), Item: int32(1 + r.IntN(n)), TS: int64(r.IntN(100))})
+			events = append(events, history.Event{ID: uint64(u<<20 | e), User: fmt.Sprint("u", u), Item: fmt.Sprint("i", 1+r.IntN(n)), TS: int64(r.IntN(100))})
 		}
 	}
 	store := storeWith(t, events...)

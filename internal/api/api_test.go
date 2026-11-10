@@ -94,7 +94,8 @@ func ids(out map[string]any) []string {
 func TestEventsThenRecommend(t *testing.T) {
 	_, ts := testServer(t)
 	code, out := post(t, ts.URL+"/v1/events", `{"events":[{"user_id":"u","item_id":"a","ts":500,"kind":"view"},{"user_id":"u","item_id":"zz","ts":500,"kind":"view"}]}`)
-	if code != http.StatusAccepted || out["accepted"] != 1.0 || out["unknown_items"] != 1.0 {
+	// zz is stored too, though no bundle knows it; requests ignore it.
+	if code != http.StatusAccepted || out["accepted"] != 2.0 || len(out) != 1 {
 		t.Fatalf("events: %d %v", code, out)
 	}
 	code, out = post(t, ts.URL+"/v1/recommend", `{"user_id":"u","k":2}`)
@@ -229,7 +230,7 @@ func TestRankerTruncationIsCounted(t *testing.T) {
 	store := history.NewMemory()
 	var evs []history.Event
 	for i := range recommend.CoocSeeds {
-		evs = append(evs, history.Event{ID: uint64(i), User: "u", Item: int32(1 + 97*i), TS: int64(i)})
+		evs = append(evs, history.Event{ID: uint64(i), User: "u", Item: fmt.Sprint("i", 1+97*i), TS: int64(i)})
 	}
 	if err := store.Append(context.Background(), evs); err != nil {
 		t.Fatal(err)
@@ -276,7 +277,7 @@ func TestCoverage(t *testing.T) {
 // failingStore stores events but cannot read them.
 type failingStore struct{ history.Store }
 
-func (failingStore) Before(context.Context, string, int64, int) ([]int32, error) {
+func (failingStore) Before(context.Context, string, int64, int) ([]string, error) {
 	return nil, errors.New("store down")
 }
 
@@ -286,7 +287,7 @@ type blockingStore struct {
 	entered chan struct{}
 }
 
-func (s blockingStore) Before(ctx context.Context, _ string, _ int64, _ int) ([]int32, error) {
+func (s blockingStore) Before(ctx context.Context, _ string, _ int64, _ int) ([]string, error) {
 	close(s.entered)
 	<-ctx.Done()
 	return nil, ctx.Err()
@@ -388,7 +389,7 @@ func TestEncoderErrorDegrades(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := history.NewMemory()
-	if err := store.Append(context.Background(), []history.Event{{ID: 1, User: "u", Item: 1, TS: 1}}); err != nil {
+	if err := store.Append(context.Background(), []history.Event{{ID: 1, User: "u", Item: "i1", TS: 1}}); err != nil {
 		t.Fatal(err)
 	}
 	var log bytes.Buffer
@@ -444,7 +445,7 @@ func TestCacheLookupOfFailedRequestIsCounted(t *testing.T) {
 	}
 	release()
 	p.Cache = cache.New[recommend.Response](10, time.Hour)
-	if err := s.History.Append(context.Background(), []history.Event{{ID: 1, User: "u", Item: 1, TS: 1}}); err != nil {
+	if err := s.History.Append(context.Background(), []history.Event{{ID: 1, User: "u", Item: "a", TS: 1}}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

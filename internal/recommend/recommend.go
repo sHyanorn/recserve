@@ -370,29 +370,36 @@ func (p *Pipeline) cacheKey(req Request, hist []int32) cache.Key {
 }
 
 // history returns the user's stored history before req.TS or, if it cannot
-// be read in time, the known items of req.Recent.
+// be read in time, req.Recent, as the bundle's internal IDs: the store
+// holds raw item IDs, and those the bundle does not know are left out.
 func (p *Pipeline) history(ctx context.Context, req Request, d *degradation) ([]int32, error) {
 	hctx, cancel := within(ctx, p.Budgets.History)
 	defer cancel()
 	err := p.stalled(hctx, stageHistory, -1)
-	var hist []int32
+	var raw []string
 	if err == nil {
-		hist, err = p.History.Before(hctx, req.User, req.TS, 0)
+		raw, err = p.History.Before(hctx, req.User, req.TS, 0)
 	}
-	if err == nil {
-		return hist, nil
+	if err != nil {
+		if err := ended(ctx, stageHistory); err != nil {
+			return nil, err
+		}
+		d.add(HistoryUnavailable, err)
+		raw = req.Recent
 	}
-	if err := ended(ctx, stageHistory); err != nil {
-		return nil, err
-	}
-	d.add(HistoryUnavailable, err)
-	hist = make([]int32, 0, len(req.Recent))
-	for _, raw := range req.Recent {
-		if id, ok := p.Bundle.Lookup(raw); ok {
-			hist = append(hist, id)
+	return internalIDs(p.Bundle, raw), nil
+}
+
+// internalIDs maps raw item IDs to b's internal IDs, in order, leaving out
+// those b does not know.
+func internalIDs(b *bundle.Bundle, raw []string) []int32 {
+	out := make([]int32, 0, len(raw))
+	for _, r := range raw {
+		if id, ok := b.Lookup(r); ok {
+			out = append(out, id)
 		}
 	}
-	return hist, nil
+	return out
 }
 
 // userVector returns the user vector of hist, or nil if there is none or

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,9 +16,6 @@ var (
 	ErrSwapInProgress = errors.New("a swap is in progress")
 	// ErrActive is returned for a bundle whose version is already active.
 	ErrActive = errors.New("bundle version is already active")
-	// ErrIDsDiffer is returned for a bundle whose item IDs differ from the
-	// active one's: the history store holds internal IDs (D031).
-	ErrIDsDiffer = errors.New("bundle item IDs differ from the active bundle's")
 	// ErrLiveClosed is returned after Close.
 	ErrLiveClosed = errors.New("no active bundle: closed")
 )
@@ -123,8 +119,8 @@ type SwapResult struct {
 // Swap replaces the active pipeline with the one prepare returns. prepare
 // loads and verifies a bundle and builds its index while the active
 // pipeline serves; if it fails, or its bundle's version is already active,
-// or its item IDs differ from the active bundle's, the new bundle is closed
-// and the active pipeline stays. Otherwise the new pipeline is activated,
+// the new bundle is closed and the active pipeline stays. The new bundle
+// may hold other items: histories are stored by raw item ID. Otherwise the new pipeline is activated,
 // and Swap waits for the requests that hold the previous one, then closes
 // its bundle. The wait has no limit, since a bundle in use must not be
 // closed; it is logged every DrainWarnEvery. One swap runs at a time;
@@ -144,14 +140,8 @@ func (l *Live) Swap(prepare func() (*Pipeline, error)) (SwapResult, error) {
 		return SwapResult{}, fmt.Errorf("prepare: %w", err)
 	}
 	ob, nb := old.p.Bundle, p.Bundle
-	switch {
-	case nb.ModelVersion == ob.ModelVersion:
-		err = fmt.Errorf("%w: %s", ErrActive, nb.ModelVersion)
-	case !slices.Equal(nb.IDs, ob.IDs):
-		err = fmt.Errorf("%w: %s has %d items, %s has %d", ErrIDsDiffer, nb.ModelVersion, nb.ItemCount, ob.ModelVersion, ob.ItemCount)
-	}
-	if err != nil {
-		return SwapResult{}, errors.Join(err, nb.Close())
+	if nb.ModelVersion == ob.ModelVersion {
+		return SwapResult{}, errors.Join(fmt.Errorf("%w: %s", ErrActive, nb.ModelVersion), nb.Close())
 	}
 	res := SwapResult{Version: nb.ModelVersion, Previous: ob.ModelVersion, Prepare: time.Since(start)}
 	activated := time.Now()
