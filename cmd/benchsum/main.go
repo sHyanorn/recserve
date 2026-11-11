@@ -9,6 +9,8 @@
 //	benchsum compare -dir D                      before and after an optimization (scripts/bench-compare.sh)
 //	benchsum quantile -after M [-before M0] -name N [-label k=v] -q Q
 //	                                             a quantile of a histogram in a /metrics scrape, or between two
+//	benchsum histories -valkey A -preload P1,P2 -split S -samples S
+//	                                             property 9 after a run with writes: "ok" or what differs
 package main
 
 import (
@@ -30,7 +32,7 @@ func main() {
 
 func run(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("a subcommand is required: run, rate, sweep, fault, faults or quantile")
+		return fmt.Errorf("a subcommand is required: run, rate, sweep, fault, faults, quantile or histories")
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	prefix := fs.String("prefix", "", "path of the run's files without their suffixes")
@@ -43,6 +45,9 @@ func run(args []string, out io.Writer) error {
 	name := fs.String("name", "", "histogram name")
 	lbl := fs.String("label", "", "k=v: only the series with that label")
 	q := fs.Float64("q", 0.95, "quantile")
+	preload := fs.String("preload", "", "histories: comma-separated splits the gateway preloaded")
+	split := fs.String("split", "", "histories: the split loadgen replayed")
+	valkeyAddr := fs.String("valkey", "", "histories: the Valkey server that holds the histories")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -121,6 +126,12 @@ func run(args []string, out io.Writer) error {
 			want[k] = v
 		}
 		return printf(out, "%g\n", histogramQuantile(a, b, *name, want, *q))
+	case "histories":
+		got, err := histories(*valkeyAddr, *preload, *split, *samples)
+		if err != nil {
+			return err
+		}
+		return printf(out, "%s\n", got)
 	default:
 		return fmt.Errorf("unknown subcommand %q", args[0])
 	}

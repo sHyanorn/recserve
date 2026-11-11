@@ -5,7 +5,8 @@
 // Latency counts from the time each request was due, so a stall of the
 // gateway is charged to every request it delayed. A run is valid only if
 // the target rate was met and every request succeeded; loadgen exits with
-// an error otherwise.
+// an error otherwise. Its first line, "start <unix ms>", gives the due time
+// of request 0 as soon as it is fixed, for scripts that act during a run.
 package main
 
 import (
@@ -74,6 +75,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	slices.SortStableFunc(ordered, func(a, b row) int { return cmp.Compare(a.ts, b.ts) })
 	cfg.work = newDatasetWorkload(ordered, *k, *writeShare, *repeat, *seed, int(requests))
+	cfg.started = stdout
 	r, err := measure(ctx, cfg)
 	if err != nil {
 		return err

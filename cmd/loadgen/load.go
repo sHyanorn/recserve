@@ -23,7 +23,8 @@ type config struct {
 	duration time.Duration
 	conns    int
 	work     workload
-	samples  string // file for one sample per measured request; empty for none
+	samples  string    // file for one sample per measured request; empty for none
+	started  io.Writer // if set, told "start <unix ms>" once request 0's due time is fixed
 }
 
 // workload produces the body of request i.
@@ -190,6 +191,11 @@ func measure(ctx context.Context, cfg config) (report, error) {
 		}
 	}
 	t0 = time.Now()
+	if cfg.started != nil {
+		if _, err := fmt.Fprintf(cfg.started, "start %d\n", t0.UnixMilli()); err != nil {
+			return report{}, err
+		}
+	}
 	due := func(i int) time.Time { return t0.Add(time.Duration(float64(i) * period)) }
 	start := t0.Add(cfg.warmup)
 	end := start.Add(cfg.duration)

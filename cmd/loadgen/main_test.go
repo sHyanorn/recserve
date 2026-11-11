@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -53,6 +54,19 @@ func TestMeasure(t *testing.T) {
 	// 500 measured requests, a tenth of them writes.
 	if n := r.Outcomes["recommend_ok"] + r.Outcomes["events_ok"]; n < 495 || n > 500 || r.Outcomes["events_ok"] < 47 || r.Outcomes["events_ok"] > 53 {
 		t.Fatalf("outcomes %v", r.Outcomes)
+	}
+}
+
+func TestStartLineGivesTheFirstDueTime(t *testing.T) {
+	cfg := testConfig(fakeGateway(t, nil, http.StatusOK))
+	var started strings.Builder
+	cfg.started = &started
+	r, err := measure(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("start %d\n", r.Start.UnixMilli()); started.String() != want {
+		t.Fatalf("got %q, want %q", started.String(), want)
 	}
 }
 

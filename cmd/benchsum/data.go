@@ -20,6 +20,7 @@ import (
 
 // sample is one request as loadgen's -samples wrote it, times in ms.
 type sample struct {
+	i                int  // the request's index in loadgen's workload
 	events           bool // /v1/events, else /v1/recommend
 	due, latency     float64
 	status           int // 0 for a transport error
@@ -57,7 +58,8 @@ func readSamples(path string) ([]sample, error) {
 			return nil, err
 		}
 		s := sample{events: rec[1] == "/v1/events"}
-		var errs [5]error
+		var errs [6]error
+		s.i, errs[5] = strconv.Atoi(rec[0])
 		s.due, errs[0] = strconv.ParseFloat(rec[2], 64)
 		s.latency, errs[1] = strconv.ParseFloat(rec[3], 64)
 		s.status, errs[2] = strconv.Atoi(rec[4])
