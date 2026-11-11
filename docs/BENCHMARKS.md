@@ -519,3 +519,27 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 #### annbench's profile on glove: `vec.Dot32` first
 
 `make bench-ann STEP=profile PY=...` (`ann/`, `profile-annbench.txt`), on the fourth VM: a glove graph with M = 16 and efConstruction 200, built with 4 goroutines in 434 s, then annbench's query at ef 400, k 100 under a CPU profile. Recall@100 is 0.8423 (M2: 0.8422) and p99 4.33 ms. `vec.Dot32` holds 75.7% of the samples flat, `hnsw.searchLayer` 12.5% and `hnsw.neighbors` 5.5%. `vec.Dot32` is first, so it gets the SIMD that TASKS made conditional on this (D055).
+
+#### vec.Dot32 in AVX: lower after in BenchmarkDot32 and on glove; in the service only p99 at 400/s
+
+`make bench-compare BEFORE=9a75fd5 MICRO=Dot32 ANN_GRAPH=<ANN_DATA>/graphs/profile-glove-M16.bin OUT=bench-results/m6/optimization-dot32` (`optimization-dot32/`, the table in `compare.md`), on the fourth VM: before 9a75fd5, after 20a8363; BenchmarkDot32 on CPU 1, annbench's query on the graph of the profile above, built by the code before, and the service, replay, cache off; before and after alternating, three runs each. All 18 service and micro runs are first attempts, valid, with no noise baseline flagged, and no annbench point is flagged.
+
+| Quantity | Before | After | Verdict |
+|---|---|---|---|
+| BenchmarkDot32, 64 dims, ns | 20.2 to 20.5 | 7.10 to 7.43 | lower after |
+| BenchmarkDot32, 100 dims, ns | 30.3 to 34.2 | 10.5 to 11.0 | lower after |
+| annbench on glove, M = 16, ef 120: p99, ms | 1.59 to 1.68 | 0.84 to 0.97 | lower after |
+| ef 200: p99, ms | 2.25 to 2.37 | 1.24 to 1.34 | lower after |
+| ef 400: p99, ms | 3.99 to 4.12 | 2.30 to 2.40 | lower after |
+| ef 800: p99, ms | 7.53 to 7.96 | 4.21 to 4.51 | lower after |
+| recall@100 at ef 120, 200, 400, 800 | 0.7121, 0.7738, 0.8423, 0.8979 | the same | within 0.001 |
+| 200/s: p99, ms | 5.47 to 5.94 | 5.21 to 6.14 | not resolved on this machine |
+| 200/s: the replicas' CPU per request, ms | 1.76 to 1.83 | 1.71 to 1.88 | not resolved on this machine |
+| 200/s: the gateway's CPU per request, ms | 1.84 to 1.86 | 1.75 to 1.87 | not resolved on this machine |
+| 400/s: p99, ms | 5.99 to 6.50 | 5.40 to 5.98 | lower after |
+| 400/s: the replicas' CPU per request, ms | 1.43 to 1.52 | 1.39 to 1.47 | not resolved on this machine |
+| 400/s: the gateway's CPU per request, ms | 1.48 to 1.53 | 1.44 to 1.50 | not resolved on this machine |
+
+- The inner product takes 2.7 to 3.3 times less time, and annbench's p99 on glove after is 0.50 to 0.61 times the p99 before at every ef. Recall@100 is equal to the last digit at every ef: on this graph the search returns the same neighbors.
+- In the service `Dot32` runs only in MMR: 3.1% of the gateway's samples in the profile at 400 requests/s, taken on the first VM before `vec.Dot`'s change. Exact search, the default, uses `vec.Dot`. The gateway's CPU per request is not resolved at either rate. p99 at 400/s meets the rule for lower after by 0.01 ms, the after runs' largest against the before runs' smallest; with no difference resolved in CPU, this record does not attribute it to `Dot32`.
+- Results: the tests and the 32-lane definition hold (D055); golden cases use `vec.Dot`, and no committed file changed.

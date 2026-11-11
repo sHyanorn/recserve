@@ -82,7 +82,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] Latency during bundle swaps under load, and the cause of its largest values, GC or CPU contention with prepare (D031): the seconds with a swap have a higher p99 and no higher maximum, with GC on or off; no cause named
 - [x] Latency through rolling restarts and swaps with SPEC §5's budgets: in kind the first requests of a new gateway took longer than 15 ms, so the zero-error check runs the gateways at 100 ms (D047); with SPEC §5's budgets, three runs had no error and at most 0.133% of a phase degraded (BENCHMARKS, M6)
 - [x] Profiles and at least one optimization backed by before/after data: `vec.Dot`, 54% of a replica's CPU, in AVX2 (D053, BENCHMARKS M6)
-- [ ] `vec.Dot32` in SIMD, for the HNSW mode, only if annbench's profile on glove puts it first; on glove the p99 is 1.3 to 2.4 times faiss's at equal recall (BENCHMARKS, M2)
+- [x] `vec.Dot32` in SIMD, for the HNSW mode, only if annbench's profile on glove puts it first: first at 76%; in AVX, annbench's p99 on glove 0.50 to 0.61 times before at the same recall (D055, BENCHMARKS M6)
 - [ ] Report with charts
 
 ## M7 Integration and evaluation
