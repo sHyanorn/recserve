@@ -22,7 +22,7 @@ services:
     command: [-bundles=/data/bundle, -debug-addr=:6060]
   annshard-1:
     <<: *annshard
-    image: ${ANNSHARD1_IMAGE:-recserve/annshard:dev}
+    image: ${ANNSHARD1_IMAGE:-recserve/annshard:${TAG:-dev}}
   annshard-2: *annshard
   annshard-3: *annshard
   gateway:

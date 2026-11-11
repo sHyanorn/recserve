@@ -28,23 +28,9 @@ env_record
 
 # run_rate RATE: three runs; sets MEETS and STOP from benchsum's verdict.
 run_rate() {
-	local rate=$1 n attempt p
+	local rate=$1 n
 	for n in 1 2 3; do
-		p=$OUT/$rate-run$n
-		for attempt in 1 2 3; do
-			log "rate $rate run $n attempt $attempt"
-			fresh
-			noise "$p" before
-			loadgen "$p" "$rate" 10s 60s "${ARGS[@]}"
-			sleep 10
-			snapshot "$p" at0
-			wait "$LOADGEN" || true
-			snapshot "$p" at1
-			noise "$p" after
-			echo "$attempt" >"$p.attempt"
-			noisy "$p" || break
-		done
-		bin/benchsum run -prefix "$p" -samples "$OUT/raw/$(basename "$p").csv.gz"
+		one_run "$OUT/$rate-run$n" "$rate" "${ARGS[@]}"
 	done
 	local v
 	v=$(bin/benchsum rate -dir "$OUT" -rate "$rate")

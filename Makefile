@@ -8,7 +8,7 @@ COMPOSE := docker compose -f deploy/compose.yaml
 
 .DEFAULT_GOAL := help
 BENCH   := DATA=$(abspath $(DATA)) VERSION=$(VERSION)
-.PHONY: bench-ref bench-sweep bench-profile
+.PHONY: bench-ref bench-sweep bench-profile bench-compare
 .PHONY: help build test test-real e2e lint fmt proto data bundle images infra-up infra-down up down test-alerts kind-up kind-swap kind-check kind-netpol kind-down
 
 help: ## Show available targets
@@ -83,3 +83,6 @@ bench-sweep: build ## Load sweep in compose (docs/BENCHMARKS.md): SCENARIO repla
 
 bench-profile: build ## CPU profiles of the gateway and a replica under load in compose (docs/BENCHMARKS.md); DATA, VERSION
 	$(BENCH) scripts/bench-profile.sh
+
+bench-compare: build ## Before and after an optimization: BEFORE, a commit; vec's benchmark and the service at RATES (200 400); DATA, VERSION, DOCKER_BUILD_FLAGS
+	$(BENCH) DOCKER_BUILD_FLAGS="$(DOCKER_BUILD_FLAGS)" scripts/bench-compare.sh $(BEFORE)

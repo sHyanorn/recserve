@@ -6,6 +6,7 @@
 //	benchsum sweep -dir D                        a sweep's table, from its run summaries
 //	benchsum fault -prefix P -samples S -fault F a fault run judged: P.fault.json
 //	benchsum faults -dir D                       the fault runs' table
+//	benchsum compare -dir D                      before and after an optimization (scripts/bench-compare.sh)
 //	benchsum quantile -after M [-before M0] -name N [-label k=v] -q Q
 //	                                             a quantile of a histogram in a /metrics scrape, or between two
 package main
@@ -92,6 +93,12 @@ func run(args []string, out io.Writer) error {
 			return err
 		}
 		return printf(out, "%s %s: valid %v %v, pass %v %v\n", f.Name, f.Fault, f.Valid, f.Invalid, f.Pass, f.Failures)
+	case "compare":
+		var b strings.Builder
+		if err := compareTable(&b, *dir); err != nil {
+			return err
+		}
+		return printf(out, "%s", b.String())
 	case "faults":
 		var b strings.Builder
 		if err := faultTable(&b, *dir); err != nil {

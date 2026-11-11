@@ -70,6 +70,28 @@ loadgen() {
 	LOADGEN=$!
 }
 
+# one_run PREFIX RATE [LOADGEN ARGS...]: a sweep run on fresh services, 10 s
+# warmup and 60 s measured, bracketed by noise baselines and rerun at most
+# twice while one is flagged; then its summary.
+one_run() {
+	local p=$1 rate=$2 attempt
+	shift 2
+	for attempt in 1 2 3; do
+		log "$(basename "$p") attempt $attempt"
+		fresh
+		noise "$p" before
+		loadgen "$p" "$rate" 10s 60s "$@"
+		sleep 10
+		snapshot "$p" at0
+		wait "$LOADGEN" || true
+		snapshot "$p" at1
+		noise "$p" after
+		echo "$attempt" >"$p.attempt"
+		noisy "$p" || break
+	done
+	bin/benchsum run -prefix "$p" -samples "$OUT/raw/$(basename "$p").csv.gz"
+}
+
 # env_record: the environment of docs/BENCHMARKS.md, once per result directory.
 env_record() {
 	[[ -s $OUT/env.txt ]] && return
@@ -86,6 +108,6 @@ env_record() {
 		echo "cpus: loadgen 0, noise baseline 1, containers 1-3"
 		echo "noise reference ns: $REF"
 		echo "noisebase sha256: $(sha256sum bin/noisebase | cut -d' ' -f1)"
-		for i in gateway annshard ingest faultshard; do echo "image recserve/$i:dev: $(docker image inspect -f '{{.Id}}' recserve/$i:dev 2>/dev/null)"; done
+		for i in gateway annshard ingest faultshard; do echo "image recserve/$i:${TAG:-dev}: $(docker image inspect -f '{{.Id}}' "recserve/$i:${TAG:-dev}" 2>/dev/null)"; done
 	} >"$OUT/env.txt"
 }

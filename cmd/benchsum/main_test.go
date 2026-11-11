@@ -185,3 +185,22 @@ func writeGz(path, body string) error {
 	}
 	return errors.Join(z.Close(), f.Close())
 }
+
+func TestLower(t *testing.T) {
+	for _, c := range []struct {
+		before, after []float64
+		want          string
+	}{
+		{[]float64{3, 4, 5}, []float64{1, 2, 2.9}, "lower after"},
+		{[]float64{3, 4, 5}, []float64{1, 2, 3}, "not resolved on this machine"},
+		{[]float64{1, 1, 1}, []float64{2, 3, 4}, "lower before"},
+	} {
+		if got := lower(c.before, c.after); got != c.want {
+			t.Errorf("%v %v: %s, want %s", c.before, c.after, got, c.want)
+		}
+	}
+	m := benchLine.FindStringSubmatch("BenchmarkDot/64-4   \t 51234567\t        23.45 ns/op")
+	if m == nil || m[1] != "BenchmarkDot/64" || m[2] != "23.45" {
+		t.Fatalf("parsed %q", m)
+	}
+}
