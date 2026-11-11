@@ -25,9 +25,10 @@ env_record
 toxi() { curl -sf -X "$1" "http://$(ip_of toxiproxy):8474$2" ${3:+-H 'Content-Type: application/json' -d "$3"} >/dev/null; }
 
 inject() {
+	local r
 	case $FAULT in
 	F1) docker kill recserve-annshard-1-1 ;;
-	F2) for p in annshard-2 annshard-3; do toxi POST "/proxies/$p/toxics" '{"name":"latency","type":"latency","stream":"downstream","attributes":{"latency":50}}'; done ;;
+	F2) for r in annshard-2 annshard-3; do toxi POST "/proxies/$r/toxics" '{"name":"latency","type":"latency","stream":"downstream","attributes":{"latency":50}}'; done ;;
 	F3) toxi POST /proxies/valkey '{"enabled":false}' ;;
 	F4) docker pause recserve-ingest-1 ;;
 	F5) docker pause recserve-annshard-1-1 ;;
@@ -36,9 +37,10 @@ inject() {
 }
 
 remove() {
+	local r
 	case $FAULT in
 	F1) docker start recserve-annshard-1-1 ;;
-	F2) for p in annshard-2 annshard-3; do toxi DELETE "/proxies/$p/toxics/latency"; done ;;
+	F2) for r in annshard-2 annshard-3; do toxi DELETE "/proxies/$r/toxics/latency"; done ;;
 	F3) toxi POST /proxies/valkey '{"enabled":true}' ;;
 	F4) docker unpause recserve-ingest-1 ;;
 	F5) docker unpause recserve-annshard-1-1 ;;
