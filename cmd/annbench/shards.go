@@ -41,6 +41,8 @@ type shardInfo struct {
 	Nodes             int     `json:"nodes"`
 	UnreachableLayer0 int     `json:"unreachable_layer0"`
 	BuildSeconds      float64 `json:"build_seconds"` // 0 when the graph was read from disk
+	M                 int     `json:"M"`             // the graph's own, also when read from disk
+	EfC               int     `json:"ef_construction"`
 }
 
 type shardRecord struct {
@@ -86,8 +88,9 @@ func serve(s *bench.ANNSet, o options, r io.Reader, w io.Writer) error {
 		}
 	}
 	info.UnreachableLayer0 = unreachable(ix)
+	info.M, info.EfC = ix.Params()
 	bw := bufio.NewWriter(w)
-	if err := binary.Write(bw, binary.LittleEndian, []float64{float64(info.Nodes), float64(info.UnreachableLayer0), info.BuildSeconds}); err != nil {
+	if err := binary.Write(bw, binary.LittleEndian, []float64{float64(info.Nodes), float64(info.UnreachableLayer0), info.BuildSeconds, float64(info.M), float64(info.EfC)}); err != nil {
 		return err
 	}
 	if err := bw.Flush(); err != nil {
@@ -184,7 +187,7 @@ func shards(s *bench.ANNSet, o options, measure func() float64, logf func(string
 			}
 		}
 	}()
-	r := shardRecord{Env: env(o), Set: o.set, Queries: nq, M: o.m, EfC: o.efc}
+	r := shardRecord{Env: env(o), Set: o.set, Queries: nq}
 	for i := range o.shards {
 		c, err := spawn(i, o.shards)
 		if err != nil {
@@ -193,12 +196,16 @@ func shards(s *bench.ANNSet, o options, measure func() float64, logf func(string
 		conns = append(conns, c)
 	}
 	for i, c := range conns {
-		head := make([]float64, 3)
+		head := make([]float64, 5)
 		if err := binary.Read(c.r, binary.LittleEndian, head); err != nil {
 			return nil, fmt.Errorf("shard %d: %w", i, err)
 		}
-		info := shardInfo{Nodes: int(head[0]), UnreachableLayer0: int(head[1]), BuildSeconds: head[2]}
-		logf("shard %d: %d nodes, %d unreachable on layer 0, build %.0f s", i, info.Nodes, info.UnreachableLayer0, info.BuildSeconds)
+		info := shardInfo{Nodes: int(head[0]), UnreachableLayer0: int(head[1]), BuildSeconds: head[2], M: int(head[3]), EfC: int(head[4])}
+		logf("shard %d: %d nodes, %d unreachable on layer 0, build %.0f s, M %d, efConstruction %d", i, info.Nodes, info.UnreachableLayer0, info.BuildSeconds, info.M, info.EfC)
+		if i > 0 && (info.M != r.M || info.EfC != r.EfC) {
+			return nil, fmt.Errorf("shard %d: graph of M %d and efConstruction %d, shard 0's of %d and %d", i, info.M, info.EfC, r.M, r.EfC)
+		}
+		r.M, r.EfC = info.M, info.EfC
 		r.Shards = append(r.Shards, info)
 	}
 	for _, k := range o.ks {
@@ -211,7 +218,7 @@ func shards(s *bench.ANNSet, o options, measure func() float64, logf func(string
 			if got.err != nil {
 				return nil, got.err
 			}
-			p := point{Index: fmt.Sprintf("recserve/hnsw, %d shards", o.shards), M: o.m, EfC: o.efc, Ef: ef, K: k,
+			p := point{Index: fmt.Sprintf("recserve/hnsw, %d shards", o.shards), M: r.M, EfC: r.EfC, Ef: ef, K: k,
 				Recall: got.recall, Latency: got.latency, QPS: got.qps, GC: got.gc, Noise: noise}
 			logPoint(logf, p)
 			r.Points = append(r.Points, p)

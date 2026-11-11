@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,7 +38,7 @@ import (
 
 type options struct {
 	mode, dataDir, set, graph, out string
-	noise                          string
+	noise, cpuprofile              string
 	m, efc, workers                int
 	seed                           uint64
 	efs, ks                        []int
@@ -54,6 +55,7 @@ func main() {
 	flag.StringVar(&o.set, "set", "synth", "dataset: glove or synth")
 	flag.StringVar(&o.graph, "graph", "", "graph file: written by build, read by query")
 	flag.StringVar(&o.out, "out", "", "JSON result file")
+	flag.StringVar(&o.cpuprofile, "cpuprofile", "", "query: file for a CPU profile of the searches")
 	flag.IntVar(&o.m, "M", 16, "build: M")
 	flag.IntVar(&o.efc, "efc", 200, "build: efConstruction")
 	flag.IntVar(&o.workers, "workers", 4, "build: inserting goroutines; 1 builds reproducibly")
@@ -272,7 +274,7 @@ type queryRecord struct {
 	Points            []point           `json:"points"`
 }
 
-func query(s *bench.ANNSet, o options, measure func() float64, logf func(string, ...any)) (any, error) {
+func query(s *bench.ANNSet, o options, measure func() float64, logf func(string, ...any)) (_ any, err error) {
 	nq, err := queryCount(s, o)
 	if err != nil {
 		return nil, err
@@ -292,6 +294,19 @@ func query(s *bench.ANNSet, o options, measure func() float64, logf func(string,
 	r := queryRecord{Env: env(o), Set: o.set, Nodes: ix.Len(), Queries: nq, M: m, EfC: efc,
 		HeapObjectsMiB: bench.HeapObjectsMiB(), UnreachableLayer0: unreachable(ix)}
 	logf("graph M=%d efc=%d: heap %.0f MiB, %d unreachable on layer 0", m, efc, r.HeapObjectsMiB, r.UnreachableLayer0)
+	if o.cpuprofile != "" {
+		pf, err := os.Create(o.cpuprofile)
+		if err != nil {
+			return nil, err
+		}
+		if err := pprof.StartCPUProfile(pf); err != nil {
+			return nil, errors.Join(err, pf.Close())
+		}
+		defer func() {
+			pprof.StopCPUProfile()
+			err = errors.Join(err, pf.Close())
+		}()
+	}
 	for _, k := range o.ks {
 		for _, ef := range o.efs {
 			if ef < k {

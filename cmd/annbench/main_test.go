@@ -113,9 +113,12 @@ func TestBuildAndQuery(t *testing.T) {
 		t.Fatalf("build record %+v", b)
 	}
 
-	o.mode, o.out = "query", filepath.Join(dir, "query.json")
+	o.mode, o.out, o.cpuprofile = "query", filepath.Join(dir, "query.json"), filepath.Join(dir, "cpu.pprof")
 	if err := run(o, measure, t.Logf); err != nil {
 		t.Fatal(err)
+	}
+	if p, err := os.ReadFile(o.cpuprofile); err != nil || len(p) < 2 || p[0] != 0x1f || p[1] != 0x8b {
+		t.Fatalf("CPU profile: %v, %d bytes; want a gzipped profile", err, len(p))
 	}
 	r := readJSON[queryRecord](t, o.out)
 	if r.M != 8 || r.EfC != 64 || r.Queries != testQ || r.UnreachableLayer0 != b.UnreachableLayer0 {
@@ -225,7 +228,10 @@ func TestShards(t *testing.T) {
 		}}, nil
 	}
 	var first []point
-	for run := range 2 { // the second run reads the graphs the first one saved
+	for run := range 2 { // the second run reads the graphs the first one saved, given other build flags
+		if run == 1 {
+			o.m, o.efc = 16, 200
+		}
 		res, err := shards(s, o, func() float64 { return 1 }, t.Logf, spawn)
 		if err != nil {
 			t.Fatal(err)
@@ -237,9 +243,15 @@ func TestShards(t *testing.T) {
 		if built := r.Shards[0].BuildSeconds > 0; built != (run == 0) {
 			t.Fatalf("run %d: build seconds %v", run, r.Shards[0].BuildSeconds)
 		}
+		if r.M != 8 || r.EfC != 64 {
+			t.Fatalf("run %d: M %d and efConstruction %d recorded, the graphs' are 8 and 64", run, r.M, r.EfC)
+		}
 		var got [][2]int
 		for i, p := range r.Points {
 			got = append(got, [2]int{p.K, p.Ef})
+			if p.M != 8 || p.EfC != 64 {
+				t.Errorf("run %d: point labelled M %d and efConstruction %d", run, p.M, p.EfC)
+			}
 			if p.Ef == 200 && p.Recall < 0.99 {
 				t.Errorf("k=%d ef=200: recall %.4f", p.K, p.Recall)
 			}
