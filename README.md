@@ -35,6 +35,15 @@ A replica has no settings of its own: the gateway tells it which shard of which 
 
 Start order with Kafka: `make infra-up`, then `bin/ingest -kafka-brokers localhost:9094 -valkey-addr localhost:6379`, which creates the topic, then the gateways. A gateway started earlier answers 503 on `/v1/events` until the topic exists.
 
+To run it in containers, `make images` builds the gateway, annshard and ingest images. `make up DATA=data VERSION=<version>` starts them in compose on Kafka and Valkey, with four replicas, Prometheus (localhost:9090, with an alert on replica failovers) and Grafana (localhost:3000); `make down` stops them. In kind (v0.33, with kubectl):
+
+```bash
+make kind-up DATA=data                        # the cluster, the images, deploy/kind; prints how long it took to be ready
+make kind-check DATA=data VERSION=<version>   # load through rolling restarts and a swap to VERSION: no error, nothing degraded
+make kind-swap VERSION=<version>              # a swap is a rollout of the gateways, one at a time
+make kind-down
+```
+
 ## In place
 
 - Retrieval from co-occurrence, popularity and vectors, searched exactly or with a hand-written HNSW in two shards, in the gateway or on replicas (D016, D024, D028)
@@ -53,6 +62,8 @@ Start order with Kafka: `make infra-up`, then `bin/ingest -kafka-brokers localho
 - Circuit breaker on the gateway's Valkey calls; connections to Valkey opened and replaced outside the request path (D037)
 - Tests on the built binaries with ingest killed, Valkey paused, Kafka stopped, and, on four `annshard` processes, a replica killed, a swap, an empty restart, a rejected swap, swaps in a row over three bundles and a rolling restart of the replicas under requests (`make e2e`)
 - Prometheus metrics; load generator corrected for coordinated omission
+- Images run as a non-root user on distroless; compose with Prometheus, an alert on replica failovers, and Grafana (D047)
+- kind manifests: replicas as a StatefulSet ready by `grpc.health.v1`, gateways with an HPA, Pod Security `restricted`, and a NetworkPolicy that only the gateways pass, whose enforcement CI checks; a swap is a rollout of the gateways that keeps the replicas to two versions; under load through rolling restarts of both and a swap, no response fails or is degraded (D047, D048)
 
 ## Scale
 
@@ -65,9 +76,11 @@ The catalog served has 25.6k items (Amazon Reviews 2023 Video_Games, 5-core). At
 - Once every connection to Valkey is lost, and while the server accepts new ones without answering, each request waits out its history budget (3 ms) for up to a second before the circuit breaker opens (D037).
 - With four workers saturating the four CPUs that Valkey shares, the history read and cache lookup took 4.3 ms at p99 against a budget of 3 ms; at 200 requests/s, 0.2 to 0.3% of the responses fell back for that reason (docs/BENCHMARKS.md, M3).
 
-- The gateway and the `annshard` replicas talk without TLS or authentication (D040). A deployment must make the replicas' port reachable from the gateways only; the kind manifests of M5 do it with a NetworkPolicy.
+- The kind manifests deploy the gateways and the replicas; the gateways keep histories in the process. A production deployment also needs Valkey, Kafka and ingest, with manifests of their own. In kind the gateways' stage budgets are 100 ms, since one node shares its CPUs with the control plane and the load generator (D047).
+- A gateway that cannot prepare its first bundle exits; if the replicas come long after the gateways, the kubelet's restart back-off, up to 5 minutes, delays the first deployment (D047).
+- The gateway and the `annshard` replicas talk without TLS or authentication (D040). A deployment must make the replicas' port reachable from the gateways only; the kind manifests do it with a NetworkPolicy, which kind enforces only on a kernel with nftables' queue expression (D047).
 - A replica that goes silent with its connection up still counts as ready for 13 s, until the keepalive closes the connection. Until then every second search of its shard depends on a hedge; beyond the hedge budget (10 in reserve, then one search in ten) the shard is left out and the response reports `shards_partial`. A replica that answers pings while its searches hang is not taken out at all (D041).
-- A replica holds two bundle versions. With three in use at once, as when several gateways swap in no agreed order, a replica drops one that another gateway still serves, and that gateway's responses report `shards_partial` until the replica has prepared it again (D042, D043).
+- A replica holds two bundle versions. With three in use at once, as when several gateways swap in no agreed order, a replica drops one that another gateway still serves, and that gateway's responses report `shards_partial` until the replica has prepared it again (D042, D043). In kind, `make kind-swap` keeps the gateways to two (D048); with compose or processes the order of swaps is the operator's.
 - A replica that restarts is empty and not ready until the gateway has it prepare the version served again, which it does as soon as its connection is back (D044); for up to a second after a swap, a replica reports ready on the previous version.
 
 ## License

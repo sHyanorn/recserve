@@ -168,6 +168,7 @@ Data is downloaded by `make data` and never committed. Development and benchmark
 - Fault injection: slow and dead shards, lost, silent and restarted replicas (ready again with no request), slow ranker, failed swaps, Valkey down, consumer killed; under load per docs/BENCHMARKS.md
 - Integration tests against real Kafka and Valkey containers; `internal/e2e` runs the gateway and ingest binaries on them, kills ingest, pauses Valkey and stops Kafka, and runs the gateway on four `annshard` processes through a killed replica, a swap, an empty restart, a rejected swap, swaps in a row over three bundles and a rolling restart of the replicas (`make e2e`, on its own, since it takes the services away from other tests)
 - The replicas of the shard tests are real gRPC servers on loopback ports, in the test's process, with faults put in the network by a TCP proxy of the test or in the replica by a server interceptor
+- `make kind-check` deploys the images in kind and offers load through rolling restarts of the gateways and of the replicas and a bundle swap: no response may fail or be degraded (D047). In CI, the deploy job builds the images, unit-tests the alert rule with promtool and checks in kind that the NetworkPolicy is enforced
 - `make test-real` runs the pipeline on the real data and bundle, also with the shards on replicas, where every response must equal the in-process one
 - All tests run under `-race`
 - Benchmarks and evaluation follow docs/BENCHMARKS.md, fixed before results are looked at

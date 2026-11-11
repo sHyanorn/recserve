@@ -53,16 +53,15 @@ Check off each item when it is done. All tests must pass at the end of every mil
 ## M5 Operations and deployment
 - [ ] Rate limiting and bounded concurrency with 503
 - [ ] A/B assignment; property test 3 with its broken variant; the arm joins the result cache key (D030)
-- [ ] OpenTelemetry tracing
-- [ ] Dockerfiles and docker compose with Prometheus, Grafana and Jaeger. An alert rule on the growth of `recserve_shard_failovers_total`: a failure that another replica makes up for is counted there, under the replica that failed, and not logged (D041)
-- [ ] kind manifests: probes, resource limits, HPA with metrics-server (D022). The gateway's `-shutdown-delay` longer than the endpoint removal, and `terminationGracePeriodSeconds` above it plus the drains (D045). The replicas' readiness probe on `grpc.health.v1`, their addresses resolvable while not ready, and `minReadySeconds` above the 5 s reconnect wait with several gateways; check that the gateway finds a restarted Pod's new address in time (D044)
-- [ ] NetworkPolicy that lets only the gateways reach the annshard port: the shard API has no TLS or authentication (D040)
-- [ ] Swaps across several gateways in an order that keeps at most two versions in use: the replicas hold two (D042)
+- [ ] OpenTelemetry tracing, with Jaeger in the compose profile `app`
+- [x] Images of the gateway, annshard and ingest; docker compose with Prometheus and Grafana, and an alert rule on the growth of `recserve_shard_failovers_total`, which counts the failures that another replica makes up for (D041, D047)
+- [x] kind manifests: probes, resource limits, HPA with metrics-server (D022). The gateway's `-shutdown-delay` longer than the endpoint removal, and `terminationGracePeriodSeconds` above it plus the drains (D045). The replicas' readiness probe on `grpc.health.v1`, their addresses resolvable while not ready, and `minReadySeconds` above the 5 s reconnect wait with several gateways; check that the gateway finds a restarted Pod's new address in time (D044)
+- [x] NetworkPolicy that lets only the gateways reach the annshard port, its enforcement checked in kind in CI: the shard API has no TLS or authentication (D040, D047)
+- [x] Swaps across several gateways in an order that keeps at most two versions in use: the replicas hold two (D042, D048)
 - [x] annshard readiness on `grpc.health.v1`: ready while it holds the version served, which the gateway has a replica prepare as soon as its connection is up and again whenever that version changes (D044)
-- [ ] annshard Dockerfile
 - [x] Graceful shutdown: on SIGTERM annshard reports NOT_SERVING and drains its calls within `-drain`; the gateway answers `/readyz` with 503, closes connections after their response for `-shutdown-delay`, then drains; ingest commits its offsets as before (D045)
 - [x] A rolling restart of the replicas through the gateway binary, one process at a time with SIGTERM, each waited for until ready: every response complete (D044, D045)
-- [ ] Zero-error check under load through a rollout restart of the gateways and of the replicas and through a bundle swap, in kind. Also how long a fresh deployment takes to settle when the gateways start before the replicas' names resolve: a gateway that cannot prepare its first bundle exits and is restarted
+- [x] Zero-error check under load through a rollout restart of the gateways and of the replicas and through a bundle swap, in kind. Also how long a fresh deployment takes to settle when the gateways start before the replicas' names resolve: a gateway that cannot prepare its first bundle exits and is restarted
 - [x] Through the gateway binary on annshard replicas: swaps in a row over three bundles, with a search of the previous version arriving after each prepare, and no shard skipped for `FAILED_PRECONDITION` (D043)
 - [x] A bundle's version must be the digest of its files, so a replica given other vectors under a version's name fails to prepare it; no proto change (D046)
 - [ ] Logistic-regression ranker over the six features of SPEC §8, trained in `tools/bundle` and exported as `ranker.onnx` (D027), before M6. Its bundle carries a feature consistency golden: Python and Go compute the features of the same fixed requests, and the largest difference must be at most 1e-6
@@ -80,6 +79,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] ANN and sharded recall and latency on glove-100 and synthetic vectors
 - [ ] `annbench` in shards mode labels results with the `-m` and `-efc` flags even when it reuses graph files built with other values; record the graphs' own parameters
 - [ ] Latency during bundle swaps under load, and the cause of its largest values, GC or CPU contention with prepare (D031)
+- [ ] Latency through rolling restarts and swaps with SPEC §5's budgets: in kind the first requests of a new gateway took longer than 15 ms, so the zero-error check runs the gateways at 100 ms (D047)
 - [ ] Profiles and at least one optimization backed by before/after data
   - Candidate: SIMD inner product in the HNSW search; on glove the p99 is 1.3 to 2.4 times faiss's at equal recall on the same machine (BENCHMARKS, M2), and `vec.Dot32` is scalar Go
 - [ ] Report with charts
