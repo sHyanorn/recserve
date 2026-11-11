@@ -1,0 +1,37 @@
+{
+  "name": "2000-run3",
+  "rate": 2000,
+  "valid": true,
+  "noisy": false,
+  "achieved_rate": 2000,
+  "answers": 120000,
+  "p50_ms": 0.823,
+  "p90_ms": 3.941,
+  "p99_ms": 16.945,
+  "p99_9_ms": 28.263,
+  "max_ms": 51.588,
+  "errors": 0,
+  "busy": 0,
+  "degraded_share": 0.840525,
+  "degraded_by_reason": {
+    "history_unavailable": 0.8378583333333334,
+    "ranker_timeout": 0.000008333333333333334,
+    "shards_partial": 0.002475,
+    "vector_timeout": 0.00018333333333333334
+  },
+  "mean_coverage": 0.9855422708386331,
+  "events": 0,
+  "events_p99_ms": 0,
+  "past_budget_share": 0.8370631233661355,
+  "cache_hit_rate": 0,
+  "cpu_ms_per_request": {
+    "annshard-0": 0.0310067823,
+    "annshard-1": 0.03151852635833333,
+    "annshard-2": 0.03143932164166667,
+    "annshard-3": 0.032072289591666664,
+    "gateway": 0.33357545763333335,
+    "ingest": 0.0003236242916666667,
+    "kafka": 0.007498950708333334,
+    "valkey": 0.017716020925000003
+  }
+}
