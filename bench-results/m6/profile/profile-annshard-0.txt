@@ -1,0 +1,34 @@
+File: annshard
+Build ID: 902b2693f2716b935c293de58fe3809c591e6499
+Type: cpu
+Time: 2026-11-11 03:40:53 UTC
+Duration: 30s, Total samples = 4.67s (15.57%)
+Showing nodes accounting for 4.15s, 88.87% of 4.67s total
+Dropped 131 nodes (cum <= 0.02s)
+Showing top 25 nodes out of 115
+      flat  flat%   sum%        cum   cum%
+     2.53s 54.18% 54.18%      2.53s 54.18%  github.com/sHyanorn/recserve/internal/vec.Dot (inline)
+     0.45s  9.64% 63.81%      0.45s  9.64%  internal/runtime/syscall/linux.Syscall6
+     0.22s  4.71% 68.52%      0.22s  4.71%  runtime.futex
+     0.19s  4.07% 72.59%      0.43s  9.21%  container/heap.down
+     0.14s  3.00% 75.59%      0.14s  3.00%  github.com/sHyanorn/recserve/internal/vec.Better (inline)
+     0.09s  1.93% 77.52%      0.46s  9.85%  github.com/sHyanorn/recserve/internal/vec.(*Top).Push
+     0.08s  1.71% 79.23%      0.08s  1.71%  github.com/sHyanorn/recserve/internal/vec.Matrix.Row (inline)
+     0.08s  1.71% 80.94%      0.13s  2.78%  runtime.mapaccess2_fast32
+     0.07s  1.50% 82.44%      3.42s 73.23%  github.com/sHyanorn/recserve/internal/shard.(*Part).Search
+     0.07s  1.50% 83.94%      0.07s  1.50%  github.com/sHyanorn/recserve/internal/vec.worstFirst.Swap
+     0.05s  1.07% 85.01%      0.18s  3.85%  github.com/sHyanorn/recserve/internal/vec.worstFirst.Less
+     0.04s  0.86% 85.87%      0.04s  0.86%  internal/runtime/maps.ctrlGroup.matchFull (inline)
+     0.02s  0.43% 86.30%      0.07s  1.50%  runtime.selectgo
+     0.01s  0.21% 86.51%      0.34s  7.28%  container/heap.Fix
+     0.01s  0.21% 86.72%      0.11s  2.36%  container/heap.Pop
+     0.01s  0.21% 86.94%      0.07s  1.50%  golang.org/x/net/http2.readFrameHeader
+     0.01s  0.21% 87.15%      0.05s  1.07%  google.golang.org/grpc/internal/transport.(*controlBuffer).get
+     0.01s  0.21% 87.37%      0.11s  2.36%  google.golang.org/grpc/internal/transport.(*framer).readFrame
+     0.01s  0.21% 87.58%      0.05s  1.07%  google.golang.org/grpc/internal/transport.(*http2Server).operateHeaders
+     0.01s  0.21% 87.79%      0.03s  0.64%  google.golang.org/grpc/internal/transport.(*http2Server).operateHeaders.func5
+     0.01s  0.21% 88.01%      0.05s  1.07%  google.golang.org/grpc/internal/transport.(*loopyWriter).handle
+     0.01s  0.21% 88.22%      0.12s  2.57%  runtime.futexsleep
+     0.01s  0.21% 88.44%      0.04s  0.86%  runtime.makeslice
+     0.01s  0.21% 88.65%      0.04s  0.86%  runtime.mallocgc
+     0.01s  0.21% 88.87%      0.14s  3.00%  runtime.mapaccess1_fast32
