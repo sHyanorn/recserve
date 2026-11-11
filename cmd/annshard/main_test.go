@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -190,8 +191,26 @@ func (l *lockedBuffer) String() string {
 func TestRunRejects(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for _, bundles := range []string{"", t.TempDir() + "/missing"} {
-		if err := run(log, "127.0.0.1:0", bundles, time.Second); err == nil {
+		if err := run(log, "127.0.0.1:0", "", bundles, time.Second); err == nil {
 			t.Errorf("-bundles %q accepted", bundles)
 		}
+	}
+}
+
+// With -debug-addr the replica serves the runtime's profiles there.
+func TestServeProfiles(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveProfiles(slog.New(slog.NewTextHandler(io.Discard, nil)), ln)
+	t.Cleanup(func() { _ = ln.Close() }) //nolint:errcheck // the test is over
+	resp, err := http.Get("http://" + ln.Addr().String() + "/debug/pprof/cmdline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // read only
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
 	}
 }

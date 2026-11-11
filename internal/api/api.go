@@ -22,6 +22,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/events"
 	"github.com/sHyanorn/recserve/internal/experiment"
 	"github.com/sHyanorn/recserve/internal/history"
+	"github.com/sHyanorn/recserve/internal/profiling"
 	"github.com/sHyanorn/recserve/internal/recommend"
 )
 
@@ -149,11 +150,12 @@ func (s *Server) Handler() http.Handler {
 	})
 }
 
-// AdminHandler returns the handler of the admin API, for a listener of its
-// own: it has no authentication.
+// AdminHandler returns the handler of the admin API and the runtime's
+// profiles, for a listener of its own: it has no authentication.
 func (s *Server) AdminHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("POST /v1/admin/swap", s.instrument("admin_swap", s.swap))
+	profiling.Handle(mux)
 	return mux
 }
 

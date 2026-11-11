@@ -193,3 +193,25 @@ func TestClosedLiveIs503(t *testing.T) {
 		t.Fatalf("logged: %s", logs)
 	}
 }
+
+// The admin listener serves the runtime's profiles; the public one does not.
+func TestAdminServesProfiles(t *testing.T) {
+	s, _ := testServer(t)
+	admin := httptest.NewServer(s.AdminHandler())
+	t.Cleanup(admin.Close)
+	public := httptest.NewServer(s.Handler())
+	t.Cleanup(public.Close)
+	for _, c := range []struct {
+		url  string
+		want int
+	}{{admin.URL + "/debug/pprof/cmdline", http.StatusOK}, {admin.URL + "/debug/pprof/heap", http.StatusOK}, {public.URL + "/debug/pprof/cmdline", http.StatusNotFound}} {
+		resp, err := http.Get(c.url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		readBody(t, resp)
+		if resp.StatusCode != c.want {
+			t.Errorf("GET %s: %d, want %d", c.url, resp.StatusCode, c.want)
+		}
+	}
+}
