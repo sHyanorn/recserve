@@ -26,7 +26,7 @@ Replay with the cache off, three runs per rate, on the second VM. The headline i
 
 `vec.Dot32`, the float32 inner product of the HNSW index, had 76% of annbench's CPU on glove on the fourth VM. In AVX (D055) it takes 2.7 to 3.3 times less time, and annbench's p99 on glove after is 0.50 to 0.61 times the p99 before at every ef, with the same recall@100. In the service it runs only in MMR, and the gateway's CPU per request is not resolved.
 
-## Faults: F1, F2, F3 and F6 pass; F4 and F5 fail
+## Faults: F1, F2, F3 and F6 pass by the criteria as written; F4 and F5 fail
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="figures/faults-dark.png">
@@ -37,18 +37,18 @@ At 275 requests/s on the third VM, cache on, three valid runs per fault, each ju
 
 | Fault | Result | Fault phase p99, ms | Degraded in the fault phase |
 |---|---|---|---|
-| F1 replica killed | pass (see below) | 8.7 to 10.1 | 0.0% |
-| F2 50 ms on shard 1's replicas | pass | 21.1 to 21.2 | 34.5 to 35.0%, all `shards_partial` |
+| F1 replica killed | pass as written; two criteria cannot show what they state | 8.7 to 10.1 | 0.0% |
+| F2 50 ms on shard 1's replicas | pass as written; recovery not shown | 21.1 to 21.2 | 34.5 to 35.0%, all `shards_partial` |
 | F3 Valkey unavailable | pass | 2.6 to 3.1 | 99.9%, `history_unavailable` |
 | F4 ingest's consumer paused | fail | 9.1 to 10.6 | 0.0 to 1.7% |
 | F5 replica paused | fail | 18.8 to 19.1 | 2.6 to 4.4% |
-| F6 searches hang, pings answered | pass | 19.6 to 20.5 | 11.2 to 11.5% `shards_partial` |
+| F6 searches hang, pings answered | pass as written; recovery not shown | 19.6 to 20.5 | 11.2 to 11.5% `shards_partial` |
 
 - **Why F4 and F5 fail.** Each fails on one second of one run in which the gateway's circuit breaker on Valkey was open: `history_unavailable` rose 1.67 points above the healthy phase in F4's run 3 and 2.22 points in F5's run 3 (from 15 s after the pause on), past the 1-point limit. The breaker opens after five failed Valkey calls in a row and tries again a second later (D037); what made those five calls fail is not established.
 - **Degraded responses in whole seconds** come from the breaker being open for a second: in the fault runs, every second outside F3's fault with more than 20% `history_unavailable` starts with the breaker opening in the gateway's log. The sweep at 1,200/s shows the same pattern, with no log taken to confirm it. What triggers the openings is not established, and the gateway exports no metric of the breaker's state.
-- **Recovery times rest on little search traffic.** The cache answers 86 to 99% of the lookups in the recovery phases, so shard 0 gets 2 to 25 calls per second there, against 73 to 79 while healthy. The recovery times of the replica faults (0 s for F1, F2, F5 and F6) are measured on that much traffic.
+- **Two criteria cannot show what they state** (dated defects in BENCHMARKS, left to M7). That the restarted replica serves searches again (F1, F5) is judged by its CPU being above zero in the last 60 s, which a replica without searches may also use; with the cache answering most requests every replica was nearly idle then in F1 (4 to 28 ms of CPU in 60 s). And in the recovery phases the cache answers 86 to 99% of the lookups, so shard 0 gets 2 to 25 calls per second there, against 73 to 79 while healthy: the recovery criterion of the replica faults (F1, F2, F5, F6) has no power at this load, and how fast searches recover is not a result of these runs.
 - F5 holds 11.8 to 12.1% of the responses partial in the 13 s before the keepalive takes the paused replica out (2.6 to 4.4% over its whole fault phase), and F6 11.2 to 11.5% for as long as the searches hang; by the rule committed beforehand, outlier detection on the replicas is adopted (D041) and left to M7.
-- **F1's pass is by its criteria as written.** Its check that the restarted replica serves again is CPU above zero in the last 60 s, and with the cache answering most requests every replica was nearly idle then (4 to 28 ms of CPU in 60 s), so it does not show that searches reach the replica; this and two smaller defects of the judging are dated in BENCHMARKS. The fault runs used the hedge delay of the time, 5 ms.
+- The fault runs used the hedge delay of the time, 5 ms.
 
 ## Hedge delay: 2.5 ms
 

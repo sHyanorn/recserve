@@ -85,7 +85,7 @@ Measured in M6 on 4-vCPU cloud VMs, with every service on the same three CPUs ([
 |---|---|
 | Headline: the highest rate with p99 ≤ 50 ms and at most 1% of the responses degraded; replay, cache off | 550 requests/s, p99 4.6 to 5.1 ms (with the earlier 3 ms history budget) |
 | One gateway on 2 CPUs | about 1,800 requests/s, an estimate from its CPU per request |
-| Faults at half the headline, three runs each | replica killed, 50 ms on a shard, Valkey down, searches hanging: pass; ingest paused, replica paused: fail, each on one second with Valkey's circuit breaker open |
+| Faults at half the headline, three runs each | replica killed, 50 ms on a shard, Valkey down, searches hanging: pass by the criteria as written, though for the replica faults the criteria cannot show that a restarted replica serves again or how fast searches recover; ingest paused, replica paused: fail, each on one second with Valkey's circuit breaker open |
 | `vec.Dot` in AVX2 | the replicas' CPU per request 37% lower, p99 a quarter lower at 200 requests/s |
 | HNSW on glove-100, one thread | p99 1.0 to 1.3 times faiss's at the same ef; recall@100 reaches 0.95 only at a p99 of 7.66 ms |
 
