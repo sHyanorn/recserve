@@ -51,9 +51,9 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] The real bundle on replicas: every response equal to the in-process one, and a one-off latency measurement (D040, `make test-real`)
 
 ## M5 Operations and deployment
-- [ ] Rate limiting and bounded concurrency with 503
-- [ ] A/B assignment; property test 3 with its broken variant; the arm joins the result cache key (D030)
-- [ ] OpenTelemetry tracing, with Jaeger in the compose profile `app`
+- [x] Rate limiting and bounded concurrency with 503 (D050)
+- [x] A/B assignment; property test 3 with its broken variant; the arm joins the result cache key (D030, D049)
+- [x] OpenTelemetry tracing, with Jaeger in the compose profile `app` (D051)
 - [x] Images of the gateway, annshard and ingest; docker compose with Prometheus and Grafana, and an alert rule on the growth of `recserve_shard_failovers_total`, which counts the failures that another replica makes up for (D041, D047)
 - [x] kind manifests: probes, resource limits, HPA with metrics-server (D022). The gateway's `-shutdown-delay` longer than the endpoint removal, and `terminationGracePeriodSeconds` above it plus the drains (D045). The replicas' readiness probe on `grpc.health.v1`, their addresses resolvable while not ready, and `minReadySeconds` above the 5 s reconnect wait with several gateways; check that the gateway finds a restarted Pod's new address in time (D044)
 - [x] NetworkPolicy that lets only the gateways reach the annshard port, its enforcement checked in kind in CI: the shard API has no TLS or authentication (D040, D047)
@@ -64,13 +64,14 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] Zero-error check under load through a rollout restart of the gateways and of the replicas and through a bundle swap, in kind. Also how long a fresh deployment takes to settle when the gateways start before the replicas' names resolve: a gateway that cannot prepare its first bundle exits and is restarted
 - [x] Through the gateway binary on annshard replicas: swaps in a row over three bundles, with a search of the previous version arriving after each prepare, and no shard skipped for `FAILED_PRECONDITION` (D043)
 - [x] A bundle's version must be the digest of its files, so a replica given other vectors under a version's name fails to prepare it; no proto change (D046)
-- [ ] Logistic-regression ranker over the six features of SPEC §8, trained in `tools/bundle` and exported as `ranker.onnx` (D027), before M6. Its bundle carries a feature consistency golden: Python and Go compute the features of the same fixed requests, and the largest difference must be at most 1e-6
-- [ ] With that ranker, the load check changes more than row 0: several rows, and rows past the first, must leave the other rows' scores unchanged
-- [ ] An ONNX Runtime error that coincides with the end of the stage's context is reported as a timeout, since the call wraps the context's error; classify it by the error the run returned
+- [x] Logistic-regression ranker over the six features of SPEC §8, trained in `tools/bundle` and exported as `ranker.onnx` (D027), before M6. Its bundle carries a feature consistency golden: Python and Go compute the features of the same fixed requests, and the largest difference must be at most 1e-6
+- [x] With that ranker, the load check changes more than row 0: several rows, and rows past the first, must leave the other rows' scores unchanged
+- [x] An ONNX Runtime error that coincides with the end of the stage's context is reported as a timeout, since the call wraps the context's error; classify it by the error the run returned
 
 ## M6 Benchmarks and fault injection
 - [ ] Fault-injection pass criteria committed to docs/BENCHMARKS.md before any fault run
 - [ ] Load sweeps per docs/BENCHMARKS.md
+- [ ] From the sweeps, a gateway's capacity, and `-max-rate` and `-max-inflight` set from it in place of the one measurement of D050
 - [ ] Per rate of the sweep, the share of requests whose history read or cache call runs past `-budget-history`; decide on the budget or the per-user history version left open in D039
 - [ ] A cache-on workload with repeated requests: replaying the test split never hits (BENCHMARKS, M3)
 - [ ] Fault runs with toxiproxy and container control (D021)
