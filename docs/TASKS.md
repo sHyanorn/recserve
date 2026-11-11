@@ -83,7 +83,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] Latency through rolling restarts and swaps with SPEC §5's budgets: in kind the first requests of a new gateway took longer than 15 ms, so the zero-error check runs the gateways at 100 ms (D047); with SPEC §5's budgets, three runs had no error and at most 0.133% of a phase degraded (BENCHMARKS, M6)
 - [x] Profiles and at least one optimization backed by before/after data: `vec.Dot`, 54% of a replica's CPU, in AVX2 (D053, BENCHMARKS M6)
 - [x] `vec.Dot32` in SIMD, for the HNSW mode, only if annbench's profile on glove puts it first: first at 76%; in AVX, annbench's p99 on glove 0.50 to 0.61 times before at the same recall (D055, BENCHMARKS M6)
-- [ ] Report with charts
+- [x] Report with charts: bench-results/m6/report.md, drawn by `make report`
 
 ## M7 Integration and evaluation
 - [ ] Load seqrec-lab's exported bundle; reject one whose `train_cutoff_ts` is not before the first test event

@@ -411,6 +411,8 @@ One rate, cache on, no writes; not the headline, which M6 measures with the swee
 
 ### M6 (2026-11-11)
 
+The results below are summarized with charts in `bench-results/m6/report.md` (`make report` draws them from the result files).
+
 The VM of M3's description: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.3, Docker 29.9.2 with cgroup v1 (`bench-results/m6/*/env.txt`). Session reference 698,757 ns (`bench-results/m6/noise-reference-1.json`, ten runs from 676,015 to 748,753 ns). Bundle b7ff0634dd7b, services in compose by `deploy/bench.compose.yaml`. The profiles and the optimization below ran on this VM.
 
 The sweeps ran on another VM of the same kind: Intel Xeon @ 2.30GHz, 4 vCPU, 15.7 GiB, the same kernel, Go and Docker. Its reference is 657,992 ns (`bench-results/m6/noise-reference-2.json`, ten runs from 559,758 to 869,192 ns, on an idle machine).

@@ -1,0 +1,11 @@
+[project]
+name = "recserve-report"
+version = "0"
+description = "Charts of recserve's benchmark results"
+requires-python = ">=3.12"
+dependencies = [
+    "matplotlib>=3.10,<3.11",
+]
+
+[tool.uv]
+package = false
