@@ -414,7 +414,7 @@ The VM of M3's description: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, kernel 6.18.
 
 The sweeps ran on another VM of the same kind: Intel Xeon @ 2.30GHz, 4 vCPU, 15.7 GiB, the same kernel, Go and Docker. Its reference is 657,992 ns (`bench-results/m6/noise-reference-2.json`, ten runs from 559,758 to 869,192 ns, on an idle machine).
 
-The fault runs and those after them ran on a third: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, the same kernel, Go and Docker, with the images rebuilt from the code of the sweeps' last commit, whose history budget is 5 ms. Its reference is 887,645 ns (`bench-results/m6/noise-reference.json`, ten runs from 839,028 to 949,394 ns, on an idle machine).
+The fault runs and those after them ran on a third: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, the same kernel, Go and Docker, with the images rebuilt from the code of the sweeps' last commit, whose history budget is 5 ms. Its reference is 887,645 ns (`bench-results/m6/noise-reference-3.json`, ten runs from 839,028 to 949,394 ns, on an idle machine).
 
 #### Kafka's health check
 

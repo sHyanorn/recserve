@@ -1,12 +1,12 @@
 {
   "cpu": 1,
   "env": {
-    "commit": "6c853a4021600f0323237b3272a5bc3e764708b1",
+    "commit": "93e8df9afe638b6fa9b8903f29ce360faa35fb2b",
     "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
     "cpu_affinity": "1",
     "cpu_flags": "sse4_2 avx avx2 fma avx512f avx512_vnni avx512_bf16 amx_tile amx_bf16 amx_int8",
-    "date": "2026-11-11T12:08:02Z",
-    "executable_sha256": "f72c9258116f6a2eed31c14cb402eebdaf90dfca9888eb29e3c2323b3ca36d5c",
+    "date": "2026-11-11T20:06:14Z",
+    "executable_sha256": "c4c94255d2ce540b3a880a6559fb3df0ac2f8edb1713a59daf2e22c7ea879d4c",
     "go": "go1.27.3",
     "gomaxprocs": "1",
     "kernel": "6.18.44-fc-v378",
@@ -14,17 +14,17 @@
     "numcpu": "1",
     "uncommitted_changes": "true"
   },
-  "median_ns": 887644.9950000001,
+  "median_ns": 779904.8075,
   "runs_ns": [
-    949393.52,
-    844613.3625,
-    899502.935,
-    839028.27,
-    892102.06,
-    858572.1075,
-    883187.93,
-    906722.53,
-    898449.5025,
-    870975.605
+    784495.22,
+    745012.6,
+    784616.2,
+    775314.395,
+    756789.92,
+    770555.85,
+    787448.525,
+    845862.305,
+    784575.2275,
+    774569.2675
   ]
 }
