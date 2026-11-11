@@ -36,9 +36,13 @@ services:
       # A missing topic is an error, not a new topic with one partition.
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_HEAP_OPTS: -Xms1g -Xmx1g
+    # Each check starts a JVM: every 2 s an idle broker used about two thirds
+    # of a CPU, so checks are 2 s apart only until it is healthy.
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
-      interval: 2s
+      start_period: 5m
+      start_interval: 2s
+      interval: 10m
       timeout: 10s
       retries: 30
 

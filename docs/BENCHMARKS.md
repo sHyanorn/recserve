@@ -6,6 +6,8 @@ This file fixes how every figure in the project is measured. The protocol sectio
 
 Every result directory under `bench-results/` holds an `env.txt` with: CPU model, vCPU count, memory, kernel, Go version, ONNX Runtime version, GOMAXPROCS, CPU sets of each process, the commit, and the date. Unless a section says otherwise, results come from one cloud VM; such VMs share physical CPUs with other tenants, so their speed varies from run to run and the noise baseline below is part of every run.
 
+In compose, Kafka's health check starts a JVM. Every 2 s, as compose.yaml had it until M6, an idle broker used 639 to 686 ms of CPU per second on the M6 VM (five one-minute readings); with checks 2 s apart only until it is healthy and 10 minutes apart after, 24 ms. Figures taken in compose before M6 carry the first load (D039).
+
 ## Noise baseline
 
 `experiments/m0/cmd/noise` (later `cmd/noisebase`) runs a fixed single-core workload: a dot product of a 64-dimensional float32 query against 16,384 float32 vectors, repeated for 200 passes, timed 30 times; the result is the median time of one pass.

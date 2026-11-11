@@ -13,13 +13,6 @@ x-annshard: &annshard
 services:
   kafka:
     cpuset: "1-3"
-    # Each check starts a JVM: every 2 s, as in compose.yaml, that is about
-    # two thirds of a CPU on the benchmark VM. Here checks are 2 s apart
-    # only until Kafka is healthy.
-    healthcheck:
-      interval: 10m
-      start_period: 5m
-      start_interval: 2s
   valkey:
     cpuset: "1-3"
   ingest:
