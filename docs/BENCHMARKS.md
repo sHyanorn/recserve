@@ -131,7 +131,7 @@ The share of degraded responses is reported per run, and runs above 1% are marke
 **Reported.**
 
 - Per rate: p50, p90, p99, p99.9 and max; the p99 of each run; service CPU per request; degraded share; cache hit rate; worst hiccup; noise flags.
-- The headline (D005) is the highest rate at which all three runs are valid and unflagged with p99 ≤ 50 ms.
+- The headline (D005) is the highest rate at which all three runs are valid and unflagged with p99 ≤ 50 ms; amended in M6, also with at most 1% of each run's responses degraded (D054, Amendment below).
 
 **Cross-check.** One rate is also driven by vegeta at the same constant rate, and the two p99 values are reported side by side.
 
@@ -158,6 +158,14 @@ The headline sweep is replay with the cache off. The other five scenarios run th
 **History budget (D039).** In the replay sweep with the cache on, if the share past the budget is at most 1% at every rate up to the headline, the 3 ms budget stays, the per-user history version is not built and D039 is closed. Otherwise the headline rate runs three more times with `-budget-history` 5 ms, then 8 ms, and SPEC §5 takes the smallest that brings the share to at most 1% in all three runs; if neither does, the budget is recorded as not met at the headline and stays.
 
 **Cross-check.** vegeta drives half the headline rate, three runs.
+
+**Amendment, 2026-11-11 (D054).** Made after the grid of the headline sweep had run from 100 to 4,400 requests/s, and before its bisection.
+
+- The headline condition also requires that at most 1% of each run's responses are degraded. 1% is the share this section already marks and the history budget rule above uses; it is not chosen anew.
+- Reason: a degraded response skips work. A request whose history read runs past its budget has no user vector and no vector retrieval, so it costs little. In the grid the degraded share rose from at most 1.93% of a run at 800 requests/s to 12 to 19% at 1,200/s and 94% at 2,400/s, while p99 stayed between 11 and 17 ms: p99 ≤ 50 ms held where almost no response was complete, and the condition as written did not find the highest rate that meets the service target.
+- The grid ends at its first rate that misses the headline condition, or earlier by the stop rule, and the bisection runs between the grid rate before it and that rate. The grid rates already run above that are reported with their verdict under D005 as written; no grid rate is added and nothing is bisected for it.
+- Every rule that takes the headline takes the amended one, with its ratios unchanged: capacity and admission limits, the history budget, the cross-check, and the fault runs, hedge delay and swaps below.
+- The other five scenarios run the rates of the headline sweep's grid up to its first rate that misses the amended condition, stopping earlier by the stop rule.
 
 ## Valkey path (M3, D039)
 

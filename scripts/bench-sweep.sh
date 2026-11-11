@@ -5,9 +5,9 @@
 # three times on fresh services, each run bracketed by noise baselines and
 # rerun at most twice while one is flagged; the sweep stops at the first
 # rate with an invalid run or a median p99 over 100 ms. Without rates it
-# runs the grid 100, 200, 400, 800, then steps of 400, and for replay with
-# the cache off then bisects to 50 requests/s between the highest grid rate
-# that meets the headline condition and the next (benchsum next). Results
+# runs the grid 100, 200, 400, 800, then steps of 400, up to the first rate
+# that misses the headline condition (D054), and for replay with the cache
+# off then bisects to 50 requests/s below that rate (benchsum next). Results
 # in OUT (bench-results/m6/sweep-...).
 cd "$(dirname "$0")/.."
 SCENARIO=$1 CACHE=$2

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -117,10 +118,36 @@ func TestVerdict(t *testing.T) {
 		{[]runSummary{r(10, false, false), r(11, true, false), r(12, true, false)}, false, true},
 		{[]runSummary{r(90, true, false), r(101, true, false), r(120, true, false)}, false, true},
 	}
+	// Amended in M6 (D054): every run at most 1% degraded.
+	degraded := r(10, true, false)
+	degraded.Degraded = 0.0101
+	cases = append(cases, struct {
+		runs        []runSummary
+		meets, stop bool
+	}{[]runSummary{r(10, true, false), degraded, r(12, true, false)}, false, false})
 	for i, c := range cases {
 		if meets, stop, _ := verdict(c.runs); meets != c.meets || stop != c.stop {
 			t.Errorf("case %d: meets %v stop %v", i, meets, stop)
 		}
+	}
+	if !meetsAsWritten([]runSummary{r(10, true, false), degraded, r(12, true, false)}) {
+		t.Error("D005 as written ignores the degraded share")
+	}
+}
+
+func TestSweepTableRows(t *testing.T) {
+	run := func(p99, degraded float64) runSummary {
+		return runSummary{Valid: true, stats: stats{P99: p99, Degraded: degraded}, CPUPerRequest: map[string]float64{"gateway": 1}}
+	}
+	var b strings.Builder
+	sweepTable(&b, map[float64][]runSummary{100: {run(4, 0), run(5, 0.02), run(6, 0)}}, []string{"gateway"})
+	lines := strings.Split(strings.TrimSpace(b.String()), "\n")
+	cells := func(l string) int { return strings.Count(l, "|") - 1 }
+	if len(lines) != 3 || cells(lines[0]) != cells(lines[1]) || cells(lines[0]) != cells(lines[2]) {
+		t.Fatalf("header, delimiter and row differ in cells:\n%s", b.String())
+	}
+	if !strings.Contains(lines[2], "| 100 | misses | meets |") || !strings.Contains(lines[2], "0.00 / 2.00 / 0.00%") {
+		t.Errorf("row %s", lines[2])
 	}
 }
 
@@ -247,22 +274,24 @@ func TestNextRate(t *testing.T) {
 	step(true, 100, false, 0)
 	v[100], v[200], v[400], v[800] = m, m, m, m
 	step(true, 1200, false, 0)
-	// 1200 misses, 1600 meets: the bisection starts from 1600, the highest grid
-	// rate that meets, not below the first miss.
+	// The grid ends at the first rate that misses (D054); a higher rate run
+	// before the amendment does not move the bisection.
 	v[1200], v[1600] = miss, m
-	step(true, 2000, false, 0)
-	v[2000] = stop
 	step(false, 0, true, 0)
-	step(true, 1800, false, 0)
-	v[1800] = m
-	step(true, 1900, false, 0)
-	v[1900] = miss
-	step(true, 1850, false, 0)
-	v[1850] = m
-	step(true, 0, true, 1850)
+	step(true, 1000, false, 0)
+	v[1000] = m
+	step(true, 1100, false, 0)
+	v[1100] = miss
+	step(true, 1050, false, 0)
+	v[1050] = m
+	step(true, 0, true, 1050)
+
+	// A rate that stops the sweep ends the grid too.
+	v = map[float64]rateVerdict{100: m, 200: stop}
+	step(true, 150, false, 0)
 
 	// Nothing meets: 50 runs as well.
-	v = map[float64]rateVerdict{100: miss, 200: stop}
+	v = map[float64]rateVerdict{100: miss}
 	step(true, 50, false, 0)
 	v[50] = m
 	step(true, 0, true, 50)

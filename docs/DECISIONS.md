@@ -31,6 +31,7 @@ Format: ID, date, decision, rationale, alternatives. Append new decisions at the
 - Decision: The service target is a server-side end-to-end p99 of 50 ms, split by stage as in SPEC §5. The headline result is the highest offered rate at which all three runs are valid and have p99 ≤ 50 ms
 - Rationale: A latency figure without its load, or a throughput figure without its latency, says little. 50 ms leaves room for a client-facing budget of the usual 100 to 200 ms
 - Alternatives: maximum throughput alone (ignores the tail); a fixed throughput target (unknown before measuring on this hardware)
+- Amended in M6 (D054): each run also has at most 1% of its responses degraded
 
 ## D006 ONNX Runtime through onnxruntime_go
 - Date: 2026-11-08
@@ -541,3 +542,9 @@ Format: ID, date, decision, rationale, alternatives. Append new decisions at the
 - Results: the order differs from the previous one, a sum from first to last element, so a result can differ from before in the last bits, about 1e-16 relative. Bundle golden cases are checked to 1e-6, and exact search orders two items differently only if their scores were equal to that precision. No committed file depends on those bits: the tests pass unchanged, and the result files of docs/BENCHMARKS.md hold recalls and latencies, not scores
 - Tests: `Dot`, the Go code and the assembly all equal the definition written out element by element, to the bit, for lengths 0 to 300 and in a fuzz test; special values (overflow, subnormals, infinities, NaN) agree; the error is within n · 2^-53 times the sum of the products' magnitudes. The assembly with the lanes added in another order fails the first test
 - Alternatives: `vec.Dot32`, the float32 product the TASKS candidate named (HNSW only; exact search, the default, does not call it); float32 accumulation in exact search (changes its results beyond the last bits); `GOEXPERIMENT=simd` (an experiment, needed by every build); avo to generate the assembly (a tool dependency for 60 lines)
+
+## D054 A degraded response counts against the headline
+- Date: 2026-11-11
+- Decision: D005's headline condition adds that at most 1% of each run's responses are degraded. A sweep's grid ends at its first rate that misses the condition, and the bisection runs below it. Every rule that takes the headline (capacity, admission limits, the history budget of D039, the cross-check, faults, hedge delay, swaps) takes the amended one. docs/BENCHMARKS.md (Load tests, Amendment) has the details
+- Rationale: The amendment was made after the headline sweep's grid had run to 4,400 requests/s, and says so. A request whose history read runs past its budget skips vector retrieval, so degraded responses are cheap: the degraded share rose from at most 1.93% of a run at 800/s to 94% at 2,400/s while p99 stayed at 11 to 17 ms, and D005 as written held at rates where almost no response was complete. Capacity and admission limits taken from the CPU per request at such a rate would be set too high, and fault runs at half of it would run the service degraded. The 1% is the share BENCHMARKS already marks and D039's budget rule uses
+- Alternatives: D005 as written alone (a headline where nine in ten responses skip retrieval); a second figure, a "clean rate", beside an unchanged headline (two figures for one question); continuing the grid to its stop rule (the grid had not stopped at 4,400/s, every further rate more than 98% degraded)
