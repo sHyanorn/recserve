@@ -3,17 +3,19 @@
 # optimization): scripts/bench-compare.sh BEFORE, a commit; after is the
 # working tree's HEAD. Builds vec's test binary and the images of both,
 # then alternates before and after, three runs each: BenchmarkDot pinned to
-# CPU 1, and the service at RATES (200 400), replay, cache off. Images are
+# CPU 1 (its file copied into BEFORE), and the service at RATES (200 400),
+# replay, cache off. Images are
 # tagged before and after; DOCKER_BUILD_FLAGS goes to docker build.
 cd "$(dirname "$0")/.."
 BEFORE=$1
-RATES=${RATES:-200 400}
+RATES=${RATES-200 400} # empty: BenchmarkDot only
 OUT=${OUT:-bench-results/m6/optimization}
 source scripts/bench-lib.sh
 export CACHE_SIZE=0
 wt=$(mktemp -d)
 git worktree add --detach "$wt" "$BEFORE" >/dev/null
 trap 'git worktree remove --force "$wt"' EXIT
+cp internal/vec/dot_bench_test.go "$wt/internal/vec/"
 (cd "$wt" && go test -c -o "$OLDPWD/$OUT/raw/vec.before.test" ./internal/vec && make images TAG=before DOCKER_BUILD_FLAGS="${DOCKER_BUILD_FLAGS:-}" >/dev/null)
 go test -c -o "$OUT/raw/vec.after.test" ./internal/vec
 make images TAG=after DOCKER_BUILD_FLAGS="${DOCKER_BUILD_FLAGS:-}" >/dev/null

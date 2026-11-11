@@ -5,7 +5,6 @@ import (
 	"math"
 	"math/big"
 	"math/rand/v2"
-	"strconv"
 	"testing"
 )
 
@@ -135,18 +134,4 @@ func floats(b []byte) []float32 {
 		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[4*i:]))
 	}
 	return out
-}
-
-func BenchmarkDot(b *testing.B) {
-	r := rand.New(rand.NewPCG(1, 1))
-	for _, n := range []int{64, 100} {
-		x, y := randomVector(r, n), randomVector(r, n)
-		b.Run(strconv.Itoa(n), func(b *testing.B) {
-			var s float64
-			for b.Loop() {
-				s += Dot(x, y)
-			}
-			_ = s
-		})
-	}
 }
