@@ -38,7 +38,7 @@ services:
       - -admin-addr=:8081
       - -cache-size=${CACHE_SIZE:-13000}
       - -hedge-delay=${HEDGE_DELAY:-5ms}
-      - -budget-history=${BUDGET_HISTORY:-3ms}
+      - -budget-history=${BUDGET_HISTORY:-5ms}
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: ""
       GOGC: ${GOGC:-}

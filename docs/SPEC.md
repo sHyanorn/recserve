@@ -79,12 +79,12 @@ All load tests run on one 4-vCPU VM. Kafka, Valkey, the shards and their replica
 | Stage | p99 budget | On timeout or error |
 |---|---|---|
 | Rate limit, A/B | 1 ms | over `-max-rate` or `-max-inflight`: 503 with `Retry-After: 1`, at once |
-| Feature lookup (Valkey), then cache lookup | 3 ms | history from the request's `recent` only: `history_unavailable` |
+| Feature lookup (Valkey), then cache lookup | 5 ms | history from the request's `recent` only: `history_unavailable` |
 | User encoder | 5 ms | vector retrieval skipped: `encoder_timeout`, `encoder_error` |
 | Retrieval (parallel; shard deadline 15 ms, replicas included) | 15 ms | shards that did not answer skipped: `vector_timeout` (every shard timed out), `vector_error` (none answered, one failed) or `shards_partial` (some answered); source skipped: `cooc_timeout`, `cooc_error`, `popular_timeout`, `popular_error` |
 | Ranking (at most 512 candidates) | 15 ms | retrieval order kept: `ranker_timeout`, `ranker_error` |
 | Re-ranking and filters | 2 ms | — |
-| Other overhead | 9 ms | — |
+| Other overhead | 7 ms | — |
 | **Server-side end to end** | **50 ms** | |
 
 The service target is a server-side p99 of 50 ms; the headline figure is the highest request rate that meets it (D005). Filters are never skipped: a degraded response is still filtered.

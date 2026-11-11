@@ -91,7 +91,7 @@ type Budgets struct {
 
 // DefaultBudgets are the budgets of docs/SPEC.md §5.
 var DefaultBudgets = Budgets{
-	History:   3 * time.Millisecond,
+	History:   5 * time.Millisecond,
 	Encoder:   5 * time.Millisecond,
 	Retrieval: 15 * time.Millisecond,
 	Shard:     15 * time.Millisecond,
