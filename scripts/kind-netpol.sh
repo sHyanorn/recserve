@@ -8,6 +8,7 @@
 # usage: scripts/kind-netpol.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
+k() { kubectl -n recserve "$@"; }
 image=recserve/netpol-client:busybox-1.37
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -23,15 +24,15 @@ kind load image-archive --name recserve "$tmp/client.tar"
 
 # Deployed by make kind-up, or here on a new cluster; applied again, the
 # manifests would set the gateways' version back (D048).
-kubectl -n recserve get deploy gateway >/dev/null 2>&1 || kubectl apply -k deploy/kind >/dev/null
+k get deploy gateway >/dev/null 2>&1 || kubectl apply -k deploy/kind >/dev/null
 # The replica's name resolves once its address is in the Service's EndpointSlice.
 for _ in $(seq 180); do
-  kubectl -n recserve get endpointslice -l kubernetes.io/service-name=annshard \
+  k get endpointslice -l kubernetes.io/service-name=annshard \
     -o jsonpath='{.items[*].endpoints[*].targetRef.name}' | grep -qw annshard-0 && break
   sleep 1
 done
-for pod in pod/annshard-0 "$(kubectl -n recserve get pods -l app.kubernetes.io/name=gateway -o name | head -1)"; do
-  kubectl -n recserve wait --for=jsonpath='{.status.phase}'=Running "$pod" --timeout=3m >/dev/null
+for pod in pod/annshard-0 "$(k get pods -l app.kubernetes.io/name=gateway -o name | head -1)"; do
+  k wait --for=jsonpath='{.status.phase}'=Running "$pod" --timeout=3m >/dev/null
 done
 replica=annshard-0.annshard.recserve.svc.cluster.local
 # What the namespace's Pod Security level asks of a container.
@@ -42,12 +43,12 @@ sc='{"runAsNonRoot": true, "runAsUser": 65534, "allowPrivilegeEscalation": false
 # know a gateway Pod just created; a refusal never turns into a connection.
 from_gateway() {
   local pod name=netpol-$RANDOM code=
-  pod=$(kubectl -n recserve get pods -l app.kubernetes.io/name=gateway -o jsonpath='{.items[0].metadata.name}')
+  pod=$(k get pods -l app.kubernetes.io/name=gateway -o jsonpath='{.items[0].metadata.name}')
   echo '{"securityContext": {"runAsUser": 65534}}' > "$tmp/custom.json"
-  kubectl -n recserve debug "$pod" -c "$name" --image="$image" --profile=restricted --custom="$tmp/custom.json" -- \
+  k debug "$pod" -c "$name" --image="$image" --profile=restricted --custom="$tmp/custom.json" -- \
     sh -c "for i in 1 2 3 4 5; do nc -z -w 5 $replica 9090 && exit 0; sleep 2; done; exit 1" >/dev/null
   for _ in $(seq 120); do
-    code=$(kubectl -n recserve get pod "$pod" -o jsonpath="{.status.ephemeralContainerStatuses[?(@.name==\"$name\")].state.terminated.exitCode}")
+    code=$(k get pod "$pod" -o jsonpath="{.status.ephemeralContainerStatuses[?(@.name==\"$name\")].state.terminated.exitCode}")
     [ -z "$code" ] || break
     sleep 0.5
   done
@@ -80,8 +81,8 @@ from_pod recserve '{"app.kubernetes.io/name": "other"}' && { echo "FAIL: a Pod w
 from_pod default '{"app.kubernetes.io/name": "gateway"}' && { echo "FAIL: a Pod of another namespace reaches the replicas" >&2; fail=1; }
 # The kubelet probes from the node, which the policy must let through: the
 # replica's readiness probe reached it if it is ready, or answered NOT_SERVING.
-[ "$(kubectl -n recserve get pod annshard-0 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = True ] ||
-  kubectl -n recserve get events --field-selector involvedObject.name=annshard-0,reason=Unhealthy \
+[ "$(k get pod annshard-0 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = True ] ||
+  k get events --field-selector involvedObject.name=annshard-0,reason=Unhealthy \
     -o jsonpath='{.items[*].message}' | grep -q NOT_SERVING ||
   { echo "FAIL: the kubelet's probes do not reach the replicas" >&2; fail=1; }
 [ $fail = 0 ] && echo PASS
