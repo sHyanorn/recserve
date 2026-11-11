@@ -45,6 +45,7 @@ for gogc in "" off; do
 	export GOGC=$gogc
 	for n in $(seq 1 "$RUNS"); do
 		p=$OUT/gc${gogc:+-$gogc}-run$n
+		[[ -s $p.swap.json ]] && continue # summarized: a cut-off series resumes
 		for try in 1 2 3; do
 			log "$(basename "$p") attempt $try"
 			attempt "$p"

@@ -11,10 +11,11 @@ OUT=${OUT:-bench-results/m6/hedge}
 source scripts/bench-lib.sh
 export CACHE_SIZE=0 HEDGE_DELAY=0
 env_record
-for n in 1 2 3; do one_run "$OUT/delay0-run$n" "$RATE"; done
+# Runs already summarized are kept, so a cut-off series resumes.
+for n in 1 2 3; do [[ -s $OUT/delay0-run$n.summary.json ]] || one_run "$OUT/delay0-run$n" "$RATE"; done
 d=$(bin/benchsum hedge -dir "$OUT" | sed -n 's/^default_ms=//p')
 log "default hedge delay: $d ms"
 export HEDGE_DELAY=${d}ms
-for n in 1 2 3; do one_run "$OUT/default-run$n" "$RATE"; done
+for n in 1 2 3; do [[ -s $OUT/default-run$n.summary.json ]] || one_run "$OUT/default-run$n" "$RATE"; done
 bin/benchsum hedge -dir "$OUT" | tee "$OUT/hedge.md"
 down

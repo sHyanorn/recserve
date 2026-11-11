@@ -14,6 +14,7 @@ mkdir -p "$OUT/raw"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 for n in $(seq 1 "$RUNS"); do
+	[[ -s $OUT/run$n.marks ]] && continue # done: a cut-off series resumes
 	kind delete cluster --name recserve >/dev/null 2>&1 || true
 	scripts/kind-up.sh "$DATA"
 	kubectl kustomize deploy/kind | sed '/- -budget-[a-z]*=100ms$/d' | kubectl apply -f - >/dev/null
