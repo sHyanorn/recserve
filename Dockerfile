@@ -3,7 +3,7 @@
 # All three run as the distroless nonroot user (65532). The gateway image holds
 # ONNX Runtime at /usr/local/lib/libonnxruntime.so.1.31.1, for -ort-lib.
 
-FROM golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80 AS build
+FROM golang:1.27.4-trixie@sha256:b54b2639de8c1bfe538ec5ffc45f29b1932235ac5f6d63c059853646677112d9 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
@@ -16,7 +16,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     go build -trimpath -ldflags='-s -w' -o /out/ ./cmd/gateway ./cmd/annshard && \
     CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/ ./cmd/ingest
 
-FROM golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80 AS ort
+FROM golang:1.27.4-trixie@sha256:b54b2639de8c1bfe538ec5ffc45f29b1932235ac5f6d63c059853646677112d9 AS ort
 ADD --checksum=sha256:c849e36a1ef3e22d4ff217b9d1ce4a3cf5b9467b975610913ae959ad5b16bdc9 \
     https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-linux-x64-1.31.1.tgz /ort.tgz
 RUN tar -xzf /ort.tgz -C /usr/local/lib --strip-components=2 onnxruntime-linux-x64-1.31.1/lib/libonnxruntime.so.1.31.1

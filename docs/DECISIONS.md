@@ -7,6 +7,7 @@ Format: ID, date, decision, rationale, alternatives. Append new decisions at the
 - Decision: go.mod says `go 1.27.3`, the latest release on go.dev/dl (2026-10-19). The module path is `github.com/sHyanorn/recserve`; the license is MIT
 - Rationale: Go supports each major release until two newer ones are out, so 1.27 and 1.26 are supported. grpc v1.85.0, client_golang v1.25.0 and otel v1.47.0 all require Go 1.26 or later in their go.mod
 - Alternatives: Go 1.26 (supported, but the toolchain the sister project matching-engine already uses is 1.27.3)
+- Amended 2026-11-11: go.mod and the Dockerfile's golang image move to 1.27.4, which fixes GO-2026-6859: `http.MaxBytesReader`, which `internal/api` puts on every request body, can make a server panic under HTTP/1. M6's figures were measured on 1.27.3, before the change, and were not rerun. experiments/m0 stays on 1.27.3, the toolchain of its recorded results
 
 ## D002 HTTP/JSON outside, gRPC inside
 - Date: 2026-11-08
