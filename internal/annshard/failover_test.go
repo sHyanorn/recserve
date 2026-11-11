@@ -282,3 +282,59 @@ func TestSearchLatencyObservesEveryCall(t *testing.T) {
 		t.Fatalf("observed %.4f s in all, below %d answers of %v", sum, searches, slow)
 	}
 }
+
+// hangSearches is a server interceptor that holds every search until its
+// caller cancels it or the deadline ends it.
+func hangSearches(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	if _, ok := req.(*annshardpb.SearchRequest); ok {
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
+	return handler(ctx, req)
+}
+
+// Every call to a replica is counted under the replica's address by how it
+// ended: answered, failed, ended by the deadline, or cancelled because
+// another replica answered first.
+func TestCallsByReplicaAndResult(t *testing.T) {
+	r := rand.New(rand.NewPCG(23, 23))
+	root := t.TempDir()
+	version := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2))
+	failing := annshardtest.Start(t, root, grpc.UnaryInterceptor(failSearches))
+	hanging := annshardtest.Start(t, root, grpc.UnaryInterceptor(hangSearches))
+	healthy := annshardtest.Start(t, root)
+	search := func(c *annshard.Client, n int, timeout time.Duration) {
+		t.Helper()
+		s, err := c.Prepare(context.Background(), version, 50)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range n {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			s.Search(ctx, 0, []float32{1, 1}, 5, nil) //nolint:errcheck // the calls' counts are the test
+			cancel()
+		}
+	}
+
+	// Without hedging: each of the three replicas is asked first in turn.
+	c := annshardtest.Dial(t, [][]string{{failing, hanging, healthy}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}})
+	search(c, 9, 50*time.Millisecond)
+	got := counts(t, c, "recserve_shard_calls_total", "replica", "result")
+	for k, n := range got {
+		if n > 0 && k != failing+" failed" && k != hanging+" deadline" && k != healthy+" answered" {
+			t.Fatalf("calls %v: %q counted", got, k)
+		}
+	}
+	if got[failing+" failed"] < 3 || got[hanging+" deadline"] < 3 || got[healthy+" answered"] < 3 {
+		t.Fatalf("calls %v, want each replica asked first three times", got)
+	}
+
+	// With hedging the call to the hanging replica is cancelled once the
+	// healthy one has answered.
+	c = annshardtest.Dial(t, [][]string{{hanging, healthy}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, HedgeDelay: 5 * time.Millisecond})
+	search(c, 4, 10*time.Second)
+	got = counts(t, c, "recserve_shard_calls_total", "replica", "result")
+	if got[hanging+" cancelled"] < 2 || got[hanging+" deadline"] != 0 || got[healthy+" answered"] != 4 {
+		t.Fatalf("calls %v, want the hanging replica's cancelled and the healthy one's answered", got)
+	}
+}

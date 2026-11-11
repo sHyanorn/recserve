@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,8 +66,9 @@ func TestSilentReplicaCatchesBrokenVariant(t *testing.T) {
 	}
 }
 
-// counts returns the counter name of c by the value of its label.
-func counts(t *testing.T, c *annshard.Client, name, label string) map[string]float64 {
+// counts returns the counter name of c by the values of its labels, joined
+// by spaces.
+func counts(t *testing.T, c *annshard.Client, name string, labels ...string) map[string]float64 {
 	t.Helper()
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(c.Collectors()...)
@@ -80,11 +82,13 @@ func counts(t *testing.T, c *annshard.Client, name, label string) map[string]flo
 			continue
 		}
 		for _, m := range f.GetMetric() {
+			values := make([]string, len(labels))
 			for _, l := range m.GetLabel() {
-				if l.GetName() == label {
-					n[l.GetValue()] += m.GetCounter().GetValue()
+				if i := slices.Index(labels, l.GetName()); i >= 0 {
+					values[i] = l.GetValue()
 				}
 			}
+			n[strings.Join(values, " ")] += m.GetCounter().GetValue()
 		}
 	}
 	return n

@@ -122,6 +122,7 @@ type Client struct {
 	hedges    *prometheus.CounterVec
 	failovers *prometheus.CounterVec
 	calls     *prometheus.HistogramVec
+	results   *prometheus.CounterVec
 
 	// Replicas that are preparing an index a search found them to lack.
 	ctx      context.Context // ends at Close
@@ -155,6 +156,23 @@ type replica struct {
 	conn     *grpc.ClientConn
 	rpc      annshardpb.AnnShardClient
 	failover prometheus.Counter // searches that went on to the next replica after it failed
+
+	// Calls to the replica by how they ended.
+	answered, failed, deadline, cancelled prometheus.Counter
+}
+
+// ended counts a call to r that returned err.
+func (r *replica) ended(err error) {
+	switch {
+	case err == nil:
+		r.answered.Inc()
+	case errors.Is(err, context.DeadlineExceeded):
+		r.deadline.Inc()
+	case errors.Is(err, context.Canceled):
+		r.cancelled.Inc()
+	default:
+		r.failed.Inc()
+	}
 }
 
 // modes are the shard modes the replicas build.
@@ -192,6 +210,10 @@ func Dial(addrs [][]string, opt Options) (*Client, error) {
 			Help:    "Calls to a shard's replicas, from the send until the call returned, whatever its result, by shard.",
 			Buckets: callBuckets,
 		}, []string{"shard"}),
+		results: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "recserve_shard_calls_total",
+			Help: "Calls to the replicas by shard, replica (its address in -shard-addrs) and result: answered, failed, deadline (the search's deadline ended it), or cancelled (another replica answered first, or the request was cancelled).",
+		}, []string{"shard", "replica", "result"}),
 	}
 	for i, replicas := range addrs {
 		if len(replicas) == 0 {
@@ -209,7 +231,11 @@ func Dial(addrs [][]string, opt Options) (*Client, error) {
 			if err != nil {
 				return nil, errors.Join(fmt.Errorf("shard %d, replica %s: %w", i, addr, err), c.Close())
 			}
-			g.replicas = append(g.replicas, &replica{addr: addr, conn: conn, rpc: annshardpb.NewAnnShardClient(conn), failover: c.failovers.WithLabelValues(shard, addr)})
+			result := func(r string) prometheus.Counter { return c.results.WithLabelValues(shard, addr, r) }
+			g.replicas = append(g.replicas, &replica{
+				addr: addr, conn: conn, rpc: annshardpb.NewAnnShardClient(conn), failover: c.failovers.WithLabelValues(shard, addr),
+				answered: result("answered"), failed: result("failed"), deadline: result("deadline"), cancelled: result("cancelled"),
+			})
 		}
 	}
 	for i, g := range c.shards {
@@ -272,7 +298,7 @@ func (c *Client) index(version string, i int) *annshardpb.Index {
 
 // Collectors returns the client's metrics.
 func (c *Client) Collectors() []prometheus.Collector {
-	return []prometheus.Collector{c.hedges, c.failovers, c.calls}
+	return []prometheus.Collector{c.hedges, c.failovers, c.calls, c.results}
 }
 
 // Close closes the connections; calls in flight fail.
@@ -479,6 +505,7 @@ func (s *Shards) Search(ctx context.Context, i int, q []float32, k int, seen map
 			start := time.Now()
 			hits, err := r.search(ctx, req, s.items)
 			g.calls.Observe(time.Since(start).Seconds())
+			r.ended(err)
 			if status.Code(err) == codes.FailedPrecondition {
 				s.c.catchUp(r, req.GetIndex())
 			}
