@@ -506,3 +506,10 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 - p99 over the swap windows is above the other windows' in every run, with GC on (6.73 to 7.50 against 5.18 to 5.99 ms) and off (6.50 to 11.33 against 5.48 to 6.34 ms): turning GC off does not remove it. The CPU readings above are the only other figures; no cause is named.
 - With GC on, the swap windows hold 6 or 7 collections per run, 1.4 to 2.9 ms of pauses in all; the other windows 205 to 207, 72 to 78 ms.
 
+#### Rollouts and a swap in kind with SPEC §5's budgets
+
+`make bench-kind VERSION=b7ff0634dd7b` (`kind/`, the table in `kind.md`), on the third VM with the images of the 2.5 ms hedge delay: each run on a new cluster, the gateways' stage budgets at the binary's defaults, SPEC §5's, then `kind-check`'s load of 100 requests/s through the gateways' rollout, the replicas' and a swap. Reported, not judged (D022).
+
+- No error in any phase of the three runs. At most 0.133% of a phase's responses are degraded: one `vector_timeout` while the gateways rolled in run 1, one `shards_partial` while the replicas rolled in run 2, and one of each during the swap in run 3.
+- p99 by phase, over the three runs: before 3.80 to 4.71 ms, the gateways' rollout 7.68 to 9.91, the replicas' 5.87 to 6.13, the swap 7.09 to 8.84, after 5.12 to 5.23; the largest single response took 26.77 ms, during the replicas' rollout in run 2.
+
