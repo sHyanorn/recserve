@@ -78,8 +78,8 @@ kind-down: ## Delete the kind cluster
 bench-ref: build ## Take the session's noise reference on an idle machine (docs/BENCHMARKS.md), before the bench- targets
 	mkdir -p bench-results/m6 && taskset -c 1 bin/noisebase -n 10 -cpu 1 -out bench-results/m6/noise-reference.json
 
-bench-sweep: build ## Load sweep in compose (docs/BENCHMARKS.md): SCENARIO replay, writes or repeats, CACHE on or off, RATES (empty: the grid); DATA, VERSION
-	$(BENCH) scripts/bench-sweep.sh $(SCENARIO) $(CACHE) $(RATES)
+bench-sweep: build ## Load sweep in compose (docs/BENCHMARKS.md): SCENARIO replay, writes or repeats, CACHE on or off, RATES (empty: the grid, to GRID_MAX if set); DATA, VERSION
+	$(BENCH) GRID_MAX=$(GRID_MAX) scripts/bench-sweep.sh $(SCENARIO) $(CACHE) $(RATES)
 
 bench-fault: build ## Fault runs in compose (docs/BENCHMARKS.md): FAULT F1 to F6, RATE half the headline rate; DATA, VERSION
 	$(BENCH) scripts/bench-fault.sh $(FAULT) $(RATE)

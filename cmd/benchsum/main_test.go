@@ -264,9 +264,10 @@ func TestLagDrained(t *testing.T) {
 func TestNextRate(t *testing.T) {
 	m, miss, stop := rateVerdict{meets: true}, rateVerdict{}, rateVerdict{stop: true}
 	v := map[float64]rateVerdict{}
+	var gridMax float64
 	step := func(bisect bool, wantNext float64, wantDone bool, wantHeadline float64) {
 		t.Helper()
-		next, done, headline := nextRate(v, bisect)
+		next, done, headline := nextRate(v, bisect, gridMax)
 		if next != wantNext || done != wantDone || headline != wantHeadline {
 			t.Fatalf("got %g %v %g, want %g %v %g", next, done, headline, wantNext, wantDone, wantHeadline)
 		}
@@ -274,24 +275,37 @@ func TestNextRate(t *testing.T) {
 	step(true, 100, false, 0)
 	v[100], v[200], v[400], v[800] = m, m, m, m
 	step(true, 1200, false, 0)
-	// The grid ends at the first rate that misses (D054); a higher rate run
-	// before the amendment does not move the bisection.
+	// 1200 misses, 1600 meets: the grid goes on to its stop rule, and the
+	// bisection starts from 1600, the highest grid rate that meets.
 	v[1200], v[1600] = miss, m
+	step(true, 2000, false, 0)
+	v[2000] = stop
 	step(false, 0, true, 0)
-	step(true, 1000, false, 0)
-	v[1000] = m
-	step(true, 1100, false, 0)
-	v[1100] = miss
-	step(true, 1050, false, 0)
-	v[1050] = m
-	step(true, 0, true, 1050)
+	step(true, 1800, false, 0)
+	v[1800] = m
+	step(true, 1900, false, 0)
+	v[1900] = miss
+	step(true, 1850, false, 0)
+	v[1850] = m
+	step(true, 0, true, 1850)
 
-	// A rate that stops the sweep ends the grid too.
-	v = map[float64]rateVerdict{100: m, 200: stop}
-	step(true, 150, false, 0)
+	// A grid that ended at a given rate with no rate stopping it, as the
+	// headline sweep of M6 did at 4,400/s.
+	v = map[float64]rateVerdict{100: m, 200: m, 400: m, 800: miss, 1200: miss}
+	step(true, 1600, false, 0)
+	gridMax = 1200
+	step(false, 0, true, 0)
+	step(true, 600, false, 0)
+	v[600] = m
+	step(true, 700, false, 0)
+	// One that meets at that rate has no higher one to bisect toward.
+	v = map[float64]rateVerdict{100: m, 200: m}
+	gridMax = 200
+	step(true, 0, true, 200)
+	gridMax = 0
 
 	// Nothing meets: 50 runs as well.
-	v = map[float64]rateVerdict{100: miss}
+	v = map[float64]rateVerdict{100: miss, 200: stop}
 	step(true, 50, false, 0)
 	v[50] = m
 	step(true, 0, true, 50)

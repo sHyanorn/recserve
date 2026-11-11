@@ -3,7 +3,7 @@
 //
 //	benchsum run -prefix P -samples S            a sweep run: P.summary.json
 //	benchsum rate -dir D -rate R                 whether rate R meets the headline condition, and whether the sweep stops
-//	benchsum next -dir D [-bisect]               the sweep's next rate, or "done headline=H" (H with -bisect)
+//	benchsum next -dir D [-bisect] [-grid-max R] the sweep's next rate, or "done headline=H" (H with -bisect)
 //	benchsum sweep -dir D                        a sweep's table, from its run summaries
 //	benchsum fault -prefix P -samples S -fault F a fault run judged: P.fault.json
 //	benchsum faults -dir D                       the fault runs' table
@@ -51,6 +51,7 @@ func run(args []string, out io.Writer) error {
 	lbl := fs.String("label", "", "k=v: only the series with that label")
 	q := fs.Float64("q", 0.95, "quantile")
 	bisect := fs.Bool("bisect", false, "next: bisect after the grid, as the headline sweep does")
+	gridMax := fs.Float64("grid-max", 0, "next: the grid's last rate, for a sweep whose grid ended there with no rate stopping it (0: none)")
 	preload := fs.String("preload", "", "histories: comma-separated splits the gateway preloaded")
 	split := fs.String("split", "", "histories: the split loadgen replayed")
 	valkeyAddr := fs.String("valkey", "", "histories: the Valkey server that holds the histories")
@@ -90,7 +91,7 @@ func run(args []string, out io.Writer) error {
 				verdicts[rate] = rateVerdict{meets, stop}
 			}
 		}
-		next, done, headline := nextRate(verdicts, *bisect)
+		next, done, headline := nextRate(verdicts, *bisect, *gridMax)
 		if done {
 			return printf(out, "done headline=%g\n", headline)
 		}

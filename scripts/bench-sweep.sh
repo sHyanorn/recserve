@@ -6,9 +6,10 @@
 # rerun at most twice while one is flagged; the sweep stops at the first
 # rate with an invalid run or a median p99 over 100 ms. Without rates it
 # runs the grid 100, 200, 400, 800, then steps of 400, up to the first rate
-# that misses the headline condition (D054), and for replay with the cache
-# off then bisects to 50 requests/s below that rate (benchsum next). Results
-# in OUT (bench-results/m6/sweep-...).
+# that stops it, or to GRID_MAX (the headline sweep of M6: 4000, D054), and
+# for replay with the cache off then bisects to 50 requests/s above the
+# highest grid rate that meets the headline condition (benchsum next).
+# Results in OUT (bench-results/m6/sweep-...).
 cd "$(dirname "$0")/.."
 SCENARIO=$1 CACHE=$2
 shift 2
@@ -45,7 +46,7 @@ if (($# > 0)); then
 else
 	bisect=false
 	[[ $SCENARIO == replay && $CACHE == off ]] && bisect=true
-	while next=$(bin/benchsum next -dir "$OUT" -bisect="$bisect") && [[ $next != done* ]]; do
+	while next=$(bin/benchsum next -dir "$OUT" -bisect="$bisect" -grid-max "${GRID_MAX:-0}") && [[ $next != done* ]]; do
 		run_rate "$next"
 	done
 	log "$next"

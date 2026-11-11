@@ -161,12 +161,12 @@ type rateVerdict struct{ meets, stop bool }
 
 // nextRate returns the next rate of a sweep from the verdicts of the rates
 // run so far (docs/BENCHMARKS.md, Load tests): the grid 100, 200, 400, 800,
-// then steps of 400, up to the first rate that misses the headline
-// condition or stops the sweep (D054); then, with bisect, halving between
-// the highest grid rate that meets the condition and the next grid rate
-// until the two are 50 apart. done comes with the headline, the lower of
-// the two, when bisecting (0 if no rate meets).
-func nextRate(verdicts map[float64]rateVerdict, bisect bool) (next float64, done bool, headline float64) {
+// then steps of 400, up to the first rate that stops it, or to gridMax if
+// that is above 0; then, with bisect, halving between the highest grid rate
+// that meets the headline condition and the next grid rate until the two
+// are 50 apart. done comes with the headline, the lower of the two, when
+// bisecting (0 if no rate meets).
+func nextRate(verdicts map[float64]rateVerdict, bisect bool, gridMax float64) (next float64, done bool, headline float64) {
 	var grid []float64
 	for g := 100.0; ; {
 		grid = append(grid, g)
@@ -174,7 +174,7 @@ func nextRate(verdicts map[float64]rateVerdict, bisect bool) (next float64, done
 		if !ok {
 			return g, false, 0
 		}
-		if v.stop || !v.meets {
+		if v.stop || g == gridMax {
 			break
 		}
 		if g < 800 {
@@ -186,12 +186,15 @@ func nextRate(verdicts map[float64]rateVerdict, bisect bool) (next float64, done
 	if !bisect {
 		return 0, true, 0
 	}
-	// The last grid rate does not meet the condition, so every rate that
-	// does has a next one.
+	// A rate that stops the sweep does not meet the condition; a grid that
+	// ended at gridMax may, and there is then nothing above it to bisect.
 	var lo, hi float64
 	for i, g := range grid {
 		if verdicts[g].meets {
-			lo, hi = g, grid[i+1]
+			lo, hi = g, g
+			if i+1 < len(grid) {
+				hi = grid[i+1]
+			}
 		}
 	}
 	if lo == 0 {
