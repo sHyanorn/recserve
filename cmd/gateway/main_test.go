@@ -391,7 +391,7 @@ func TestRunOnReplicas(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- run(log, addr, "", dir, "", "", "", "", "", 0, shard.DefaultConfig, a+";"+b, 0, 10*time.Second,
-			recommend.Budgets{}, 0, time.Minute, 5*time.Second, 0, experiment.None(), false)
+			recommend.Budgets{}, 0, time.Minute, 5*time.Second, 0, experiment.None(), false, api.Limits{})
 	}()
 	eventually := func(what string, ok func() bool) {
 		t.Helper()

@@ -51,12 +51,16 @@ type Server struct {
 	Experiment *experiment.Experiment
 	// Exposures, if not nil, logs every answered recommend request.
 	Exposures *Exposures
-	Now       func() time.Time
-	Log       *slog.Logger
+	// Limits turns recommend requests away with 503 beyond a rate or a
+	// number in flight; Handler reads it.
+	Limits Limits
+	Now    func() time.Time
+	Log    *slog.Logger
 
 	ready           atomic.Bool
 	requests        *prometheus.CounterVec
 	armRequests     *prometheus.CounterVec
+	shed            *prometheus.CounterVec
 	latency         *prometheus.HistogramVec
 	rankerTruncated prometheus.Counter
 	rankerDropped   prometheus.Counter
@@ -79,6 +83,12 @@ func New(l *recommend.Live, h history.Store, log *slog.Logger) *Server {
 		Name: "recserve_http_request_duration_seconds", Help: "Server-side request duration by route.",
 		Buckets: prometheus.ExponentialBuckets(0.0005, 2, 14),
 	}, []string{"route"})
+	s.shed = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "recserve_shed_total", Help: "Recommend requests turned away with 503 by the admission limits: over the rate, or with too many in flight.",
+	}, []string{"reason"})
+	for _, r := range []string{shedRate, shedInFlight} {
+		s.shed.WithLabelValues(r)
+	}
 	s.rankerTruncated = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "recserve_ranker_truncated_requests_total", Help: "Requests with more candidates than the ranker takes.",
 	})
@@ -100,7 +110,7 @@ func New(l *recommend.Live, h history.Store, log *slog.Logger) *Server {
 	for _, r := range []string{swapOK, swapRejected, swapBusy} {
 		s.swaps.WithLabelValues(r)
 	}
-	s.reg.MustRegister(s.requests, s.armRequests, s.latency, s.rankerTruncated, s.rankerDropped, s.degraded, s.cacheLookups, s.swaps,
+	s.reg.MustRegister(s.requests, s.armRequests, s.shed, s.latency, s.rankerTruncated, s.rankerDropped, s.degraded, s.cacheLookups, s.swaps,
 		collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return s
 }
@@ -116,7 +126,7 @@ func (s *Server) SetReady(v bool) { s.ready.Store(v) }
 // that keeps connections open goes to another instance (D045).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("POST /v1/recommend", s.instrument("recommend", s.recommend))
+	mux.Handle("POST /v1/recommend", s.instrument("recommend", s.admit(s.recommend)))
 	mux.Handle("POST /v1/events", s.instrument("events", s.events))
 	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {

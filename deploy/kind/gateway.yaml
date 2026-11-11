@@ -38,6 +38,11 @@ spec:
             - -shard-addrs=annshard-0.annshard:9090,annshard-1.annshard:9090;annshard-2.annshard:9090,annshard-3.annshard:9090
             - -shutdown-delay=5s
             - -drain=10s
+            # Admission (D050): 400/s is about 80% of what the CPU limit serves
+            # at the CPU per request measured in D047; 64 in flight is three
+            # times 400/s over SPEC §5's 50 ms.
+            - -max-rate=400
+            - -max-inflight=64
             # kind checks behavior, not latency (D022): one node's CPUs serve the
             # control plane, the Pods and the load generator, and SPEC §5's
             # budgets let about 1 response in 8,000 time out with no rollout

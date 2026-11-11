@@ -67,6 +67,9 @@ func main() {
 	cacheTTL := flag.Duration("cache-ttl", 5*time.Minute, "result cache time to live, changed by up to 10% either way")
 	expName := flag.String("experiment", "", "A/B experiment name, which also salts the users' assignment; empty for none, with every request ranked")
 	arms := flag.String("arms", "", "the experiment's arms as name=mode:weight,..., mode ranker or retrieval, weights in percent summing to 100, e.g. control=retrieval:50,treatment=ranker:50")
+	var limits api.Limits
+	flag.Float64Var(&limits.Rate, "max-rate", 0, "recommend requests per second this gateway takes, with a burst of one second's worth; beyond it 503. 0 for no limit")
+	flag.IntVar(&limits.InFlight, "max-inflight", 0, "recommend requests this gateway serves at a time; beyond it 503. 0 for no limit")
 	exposureLog := flag.Bool("exposure-log", false, "write a JSON line to stdout for every answered recommend request: user, arm, ranking, version, items")
 	flag.Parse()
 	exp, err := experiment.Parse(*expName, *arms)
@@ -78,13 +81,13 @@ func main() {
 	// gRPC's DNS resolver would look up only 30 s after the last time (D041).
 	dns.SetMinResolutionInterval(time.Second)
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if err := run(log, *addr, *adminAddr, *dir, *testSplit, *preload, *ortLib, *valkeyAddr, *kafkaBrokers, *eventsTimeout, shards, *shardAddrs, *hedgeDelay, *prepareTimeout, budgets, *cacheSize, *cacheTTL, *drain, *shutdownDelay, exp, *exposureLog); err != nil {
+	if err := run(log, *addr, *adminAddr, *dir, *testSplit, *preload, *ortLib, *valkeyAddr, *kafkaBrokers, *eventsTimeout, shards, *shardAddrs, *hedgeDelay, *prepareTimeout, budgets, *cacheSize, *cacheTTL, *drain, *shutdownDelay, exp, *exposureLog, limits); err != nil {
 		log.Error("gateway stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, valkeyAddr, kafkaBrokers string, eventsTimeout time.Duration, shards shard.Config, shardAddrs string, hedgeDelay, prepareTimeout time.Duration, budgets recommend.Budgets, cacheSize int, cacheTTL time.Duration, drain, shutdownDelay time.Duration, exp *experiment.Experiment, exposureLog bool) (err error) {
+func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, valkeyAddr, kafkaBrokers string, eventsTimeout time.Duration, shards shard.Config, shardAddrs string, hedgeDelay, prepareTimeout time.Duration, budgets recommend.Budgets, cacheSize int, cacheTTL time.Duration, drain, shutdownDelay time.Duration, exp *experiment.Experiment, exposureLog bool, limits api.Limits) (err error) {
 	if dir == "" {
 		return errors.New("-bundle is required")
 	}
@@ -169,7 +172,7 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 	defer closeProducer() // after the servers have shut down
 	srv := api.New(live, store, log)
 	srv.Register(shardMetrics...)
-	srv.Prepare, srv.Events, srv.EventsTimeout, srv.Experiment = prepare, producer, eventsTimeout, exp
+	srv.Prepare, srv.Events, srv.EventsTimeout, srv.Experiment, srv.Limits = prepare, producer, eventsTimeout, exp, limits
 	if exposureLog {
 		srv.Exposures = api.NewExposures(os.Stdout)
 		srv.Register(srv.Exposures.Collector())
