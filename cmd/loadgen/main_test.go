@@ -25,7 +25,7 @@ func fakeGateway(t *testing.T, stall func(), status int) string {
 		}
 		mu.Unlock()
 		w.WriteHeader(status)
-		_, _ = w.Write([]byte(`{"items":[],"model_version":"v"}`)) //nolint:errcheck // loadgen may have given up on the request; the tests check what it received
+		_, _ = w.Write([]byte(`{"items":[],"arm":"default","model_version":"v"}`)) //nolint:errcheck // loadgen may have given up on the request; the tests check what it received
 	})
 	mux.HandleFunc("POST /v1/events", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
 	s := httptest.NewServer(mux)
@@ -73,9 +73,9 @@ func TestDegradedAndVersions(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /readyz", func(http.ResponseWriter, *http.Request) {})
 	mux.HandleFunc("POST /v1/recommend", func(w http.ResponseWriter, _ *http.Request) {
-		body := `{"items":[],"model_version":"b","degraded":[],"coverage":{"shards":2,"answered":2}}`
+		body := `{"items":[],"arm":"default","model_version":"b","degraded":[],"coverage":{"shards":2,"answered":2}}`
 		if n.Add(1)%2 == 0 {
-			body = `{"items":[],"model_version":"a","degraded":["shards_partial"],"coverage":{"shards":2,"answered":1}}`
+			body = `{"items":[],"arm":"default","model_version":"a","degraded":["shards_partial"],"coverage":{"shards":2,"answered":1}}`
 		}
 		_, _ = w.Write([]byte(body)) //nolint:errcheck // loadgen may have given up on the request; the test checks what it received
 	})

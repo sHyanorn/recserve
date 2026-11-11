@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"runtime"
 	"strconv"
@@ -22,6 +23,7 @@ type config struct {
 	duration time.Duration
 	conns    int
 	work     workload
+	samples  string // file for one sample per measured request; empty for none
 }
 
 // workload produces the body of request i.
@@ -65,6 +67,8 @@ type worker struct {
 	versions map[string]int
 	firstErr string
 	sent     int // measured requests sent before the window ended
+	t0       time.Time
+	samples  []sample // when cfg.samples is set
 	// Latency samples in nanoseconds, of measured requests that succeeded:
 	// due to reply, sent to reply, due to sent.
 	reply, service, lag []int64
@@ -89,11 +93,13 @@ func newWorker(ctx context.Context, cfg config, end time.Time) (*worker, error) 
 
 var (
 	versionField  = []byte(`"model_version":"`)
+	armField      = []byte(`"arm":"`)
 	degradedField = []byte(`"degraded":["`)
 )
 
-// classify names a reply's outcome. A recommendation must carry the model
-// version; one that reports a degradation is an answer, counted apart.
+// classify names a reply's outcome. A recommendation must carry its arm and
+// the model version; one that reports a degradation is an answer, counted
+// apart.
 func classify(path string, status int, data []byte, err error) string {
 	switch {
 	case err != nil:
@@ -102,7 +108,7 @@ func classify(path string, status int, data []byte, err error) string {
 		return "busy"
 	case path == "/v1/events" && status == http.StatusAccepted:
 		return "events_ok"
-	case path == "/v1/recommend" && status == http.StatusOK && bytes.Contains(data, versionField):
+	case path == "/v1/recommend" && status == http.StatusOK && bytes.Contains(data, versionField) && bytes.Contains(data, armField):
 		if bytes.Contains(data, degradedField) {
 			return "recommend_degraded"
 		}
@@ -134,6 +140,9 @@ func (w *worker) handle(ctx context.Context, j job) {
 	}
 	if sent.Before(w.end) {
 		w.sent++
+	}
+	if w.cfg.samples != "" {
+		w.samples = append(w.samples, newSample(j, w.t0, path, status, outcome, data, done))
 	}
 	if outcome == "busy" || outcome == "error" {
 		if w.firstErr == "" {
@@ -184,7 +193,7 @@ func measure(ctx context.Context, cfg config) (report, error) {
 	start := t0.Add(cfg.warmup)
 	end := start.Add(cfg.duration)
 	for _, w := range workers {
-		w.end = end
+		w.end, w.t0 = end, t0
 	}
 	hiccups := make(chan []int64, 1)
 	go func() { hiccups <- sampleHiccups(start, end) }()
@@ -223,6 +232,15 @@ send:
 	}
 	r := summarizeRun(cfg, workers)
 	r.Latency["hiccup"] = summarize(<-hiccups)
+	if cfg.samples != "" {
+		var all []sample
+		for _, w := range workers {
+			all = append(all, w.samples...)
+		}
+		if err := writeSamples(cfg.samples, all); err != nil {
+			return report{}, err
+		}
+	}
 	return r, nil
 }
 
@@ -290,11 +308,36 @@ func wokeLate(late []int64, d time.Duration) []int64 {
 
 // datasetWorkload replays dataset rows in order, cycling: one recommendation
 // request per row at the row's time, and an event write instead for a
-// writeShare of the requests, spread evenly.
+// writeShare of the requests, spread evenly. With repeats, a request may
+// instead copy an earlier one (newDatasetWorkload).
 type datasetWorkload struct {
 	rows       []row
 	k          int
 	writeShare float64
+	order      []int // row of each request; nil: request i takes row i mod len(rows)
+}
+
+// repeatWindow is how far back a repeated request may reach.
+const repeatWindow = 1000
+
+// newDatasetWorkload returns the workload of total requests in which each
+// request, with probability repeat, takes the row of one of the repeatWindow
+// requests before it, drawn uniformly; the draws follow from seed. Without
+// writes such a copy has the same history, so the same cache key: a client
+// asking again.
+func newDatasetWorkload(rows []row, k int, writeShare, repeat float64, seed uint64, total int) *datasetWorkload {
+	w := &datasetWorkload{rows: rows, k: k, writeShare: writeShare}
+	if repeat > 0 {
+		rng := rand.New(rand.NewPCG(seed, 0))
+		w.order = make([]int, total)
+		for i := range total {
+			w.order[i] = i % len(rows)
+			if i > 0 && rng.Float64() < repeat {
+				w.order[i] = w.order[i-1-rng.IntN(min(i, repeatWindow))]
+			}
+		}
+	}
+	return w
 }
 
 type row struct {
@@ -304,6 +347,9 @@ type row struct {
 
 func (d *datasetWorkload) request(i int, b []byte) (string, []byte) {
 	r := d.rows[i%len(d.rows)]
+	if d.order != nil {
+		r = d.rows[d.order[i]]
+	}
 	if int(float64(i+1)*d.writeShare) > int(float64(i)*d.writeShare) {
 		b = append(b, `{"events":[{"user_id":`...)
 		b = appendJSONString(b, r.user)
