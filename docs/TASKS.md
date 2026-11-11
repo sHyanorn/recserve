@@ -74,8 +74,8 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] From the sweeps, a gateway's capacity, and `-max-rate` and `-max-inflight` set from it in place of the one measurement of D050: about 1,800 requests/s on 2 CPUs (an estimate), 1,450 and 152 in kind
 - [x] Per rate of the sweep, the share of requests whose history read or cache call runs past `-budget-history`; decide on the budget or the per-user history version left open in D039: the budget becomes 5 ms, no history version (D039)
 - [x] A cache-on workload with repeated requests: replaying the test split never hits (BENCHMARKS, M3); in M6 replay hits 47 to 78%, repeats 58 to 80%
-- [ ] Fault runs with toxiproxy and container control (D021)
-- [ ] In the fault runs, a replica that goes silent with its connection up, and one that answers keepalive pings while its searches hang: the share of responses with `shards_partial` during the 13 s before the keepalive acts, and for as long as the second lasts; decide on outlier detection (D041)
+- [x] Fault runs with toxiproxy and container control (D021): F1, F2, F3 and F6 pass; F4 and F5 fail, each on one second with the Valkey circuit breaker open (BENCHMARKS, M6)
+- [x] In the fault runs, a replica that goes silent with its connection up, and one that answers keepalive pings while its searches hang: the share of responses with `shards_partial` during the 13 s before the keepalive acts, and for as long as the second lasts; decide on outlier detection (D041): about 12% and 11%, so it is adopted
 - [ ] Shard search latency through annshard and the hedge delay's default, from measured latencies (D041)
 - [ ] ANN and sharded recall and latency on glove-100 and synthetic vectors
 - [x] `annbench` in shards mode labels results with the `-m` and `-efc` flags even when it reuses graph files built with other values; record the graphs' own parameters: each shard reports its graph's, and shards that differ are an error
@@ -89,4 +89,5 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] Load seqrec-lab's exported bundle; reject one whose `train_cutoff_ts` is not before the first test event
 - [ ] Golden top-10 lists may hold items whose vector is zero, which the shards leave out (D028); decide with seqrec-lab whether its export excludes them, so a golden case matches what the service retrieves
 - [ ] Quality evaluation with each degradation forced
+- [ ] Outlier detection on the replicas, adopted in M6 (D041): a replica whose calls end at the shard deadline a number of times in a row leaves the selection until a trial search is answered
 - [ ] README

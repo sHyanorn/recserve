@@ -1,0 +1,6 @@
+{"time":"2026-11-11T13:00:39.364207246Z","level":"WARN","msg":"valkey circuit breaker","from":"closed","to":"open"}
+{"time":"2026-11-11T13:00:40.367530753Z","level":"WARN","msg":"valkey circuit breaker","from":"open","to":"half-open"}
+{"time":"2026-11-11T13:00:40.368204328Z","level":"WARN","msg":"valkey circuit breaker","from":"half-open","to":"closed"}
+{"time":"2026-11-11T13:00:58.508400516Z","level":"WARN","msg":"valkey circuit breaker","from":"closed","to":"open"}
+{"time":"2026-11-11T13:00:59.509364237Z","level":"WARN","msg":"valkey circuit breaker","from":"open","to":"half-open"}
+{"time":"2026-11-11T13:00:59.510010897Z","level":"WARN","msg":"valkey circuit breaker","from":"half-open","to":"closed"}

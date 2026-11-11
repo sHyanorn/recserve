@@ -411,7 +411,9 @@ One rate, cache on, no writes; not the headline, which M6 measures with the swee
 
 The VM of M3's description: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.3, Docker 29.9.2 with cgroup v1 (`bench-results/m6/*/env.txt`). Session reference 698,757 ns (`bench-results/m6/noise-reference-1.json`, ten runs from 676,015 to 748,753 ns). Bundle b7ff0634dd7b, services in compose by `deploy/bench.compose.yaml`. The profiles and the optimization below ran on this VM.
 
-The sweeps and the runs after them ran on another VM of the same kind: Intel Xeon @ 2.30GHz, 4 vCPU, 15.7 GiB, the same kernel, Go and Docker. Its reference is 657,992 ns (`bench-results/m6/noise-reference.json`, ten runs from 559,758 to 869,192 ns, on an idle machine).
+The sweeps ran on another VM of the same kind: Intel Xeon @ 2.30GHz, 4 vCPU, 15.7 GiB, the same kernel, Go and Docker. Its reference is 657,992 ns (`bench-results/m6/noise-reference-2.json`, ten runs from 559,758 to 869,192 ns, on an idle machine).
+
+The fault runs and those after them ran on a third: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, the same kernel, Go and Docker, with the images rebuilt from the code of the sweeps' last commit, whose history budget is 5 ms. Its reference is 887,645 ns (`bench-results/m6/noise-reference.json`, ten runs from 839,028 to 949,394 ns, on an idle machine).
 
 #### Kafka's health check
 
@@ -466,3 +468,21 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 - With the cache on, the gateway's CPU per request falls with the hit rate, from 1.42 ms at 100/s to 0.62 ms at 800/s in replay.
 - **History budget (D039).** In replay with the cache on, the share of requests past the 3 ms budget is at most 0.03% at 100 and 200/s, but one run of 400/s has 1.74% (0.02% in the other two), so the rule runs the headline rate, 550/s, with 5 ms and 8 ms (`budget-history-5ms/`, `budget-history-8ms/`). With 5 ms the share is 0.02, 0.00 and 0.00% in three unflagged runs, with 8 ms 0.00% in all three (two of them flagged), so SPEC §5's budget for the history read and cache lookup becomes 5 ms. The headline itself was measured with 3 ms.
 - **Cross-check** (`make bench-vegeta RATE=275`, `vegeta/`): at half the headline, loadgen's p99 is 3.89, 3.92 and 4.14 ms and vegeta's 3.35, 3.26 and 3.38 ms, every one of vegeta's 16,500 requests per run answered 200. vegeta times a request from its send and loadgen from its due time, so loadgen's figure also holds any wait before the send.
+
+#### Fault runs: F1, F2, F3 and F6 pass; F4 and F5 fail
+
+`make bench-fault FAULT=F1 ... F6 RATE=275` (`faults/`, the table in `faults.md`), on the third VM, with the 5 ms history budget and the cache on. Every fault has three valid runs; 9 of the 27 attempts were invalid, 3 on flagged baselines and 6 with 1.73 to 3.47% of the healthy phase degraded (their files were replaced by the reruns). No valid run has an error in any phase, and every fault phase has p99 ≤ 50 ms.
+
+| Fault | Result | Fault phase p99, ms | Degraded in the fault phase | Recovery, s | Also |
+|---|---|---|---|---|---|
+| F1 replica killed | pass | 8.66, 9.02, 10.14 | 0.0% | 0, 0, 0 | no failover in any fault phase; annshard-1 used 7, 5 and 28 ms of CPU in the last 60 s |
+| F2 50 ms on shard 1 | pass | 21.08, 21.20, 21.19 | 35.0, 34.9, 34.5%, all `shards_partial` | 0, 0, 0 | mean coverage 0.72; shard 1's hedges 4,088 to 4,139 denied and 464 to 470 lost per run, none won |
+| F3 Valkey unavailable | pass | 2.99, 2.58, 3.06 | 99.9%, `history_unavailable` | 1, 1, 1 | |
+| F4 consumer paused | fail | 9.12, 10.60, 10.59 | 0.0, 0.1, 1.7% | 0, 0, 0 | lag back at 0 in 2.11, 1.44 and 1.15 s; property 9 holds in all three; run 3: `history_unavailable` 1.67 points above the healthy phase |
+| F5 replica paused | fail | 18.89, 18.79, 19.12 | 2.6, 2.6, 4.4% | 0, 0, 0 | `shards_partial` in [0, 13 s) after the pause 11.75, 12.06, 12.11%; in [13, 15 s) 0.36, 0, 0%; in [15, 60 s) 0%; run 3: `history_unavailable` 2.22 points above the healthy phase in [15, 60 s) |
+| F6 searches hang | pass | 20.49, 20.10, 19.58 | 11.44, 11.18, 11.51% `shards_partial` | 0, 0, 0 | mean coverage 0.91; shard 0's hedges 1,521 to 1,559 denied and 385 to 390 won per run |
+
+- **F4 and F5 fail on one second each, in which the gateway's Valkey circuit breaker was open.** In every valid run, each second outside F3's fault in which more than 20% of the responses report `history_unavailable` starts with a change of the breaker from closed to open in the gateway's log (`*.breaker`), and the breaker closes 1.0 s later on its first trial call: 15 openings in the 18 runs, 11 of them in the first 30 s, 2 in fault phases (F4 run 3 at 112.7 s, F5 run 3 at 145.5 s) and 2 in recovery phases. The breaker opens after five failed Valkey calls in a row (D037); what made those calls fail is not established.
+- **The cache serves most of the late traffic.** 59 to 67% of the lookups hit in the healthy phases, 63 to 75% in the fault phases (none in F3's) and 86 to 99% in the recovery phases, since replay repeats keys as the run goes on. Shard 0 gets 73 to 79 calls per second while healthy and 2 to 25 in the recovery phases, so the recovery times of the replica faults rest on that much search traffic, and the shares above are of all responses: in F6's fault phase, with 71% hits, about 39% of the responses that searched were partial.
+- **Outlier detection (D041).** F5's share in [0, 13 s) and F6's over its fault phase are above 1%, so D041 records outlier detection as adopted, and TASKS has it; it is not built in M6.
+- The healthy phases' p99 is 8.2 to 13.1 ms, against 3.9 to 4.1 ms for loadgen at the same rate in the cross-check: here toxiproxy is on every call to the replicas and Valkey, the cache is on, and the VM is another. Which of these accounts for the difference was not measured.
