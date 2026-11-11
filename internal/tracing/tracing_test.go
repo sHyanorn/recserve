@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +18,6 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
-	"go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc"
 
 	"github.com/sHyanorn/recserve/internal/annshard"
@@ -31,20 +31,30 @@ import (
 	"github.com/sHyanorn/recserve/internal/vec"
 )
 
+// rec records every span of the package's tests: a tracer provider set
+// once stays the one behind tracers taken before it, such as the
+// pipeline's, so the tests share it.
+var rec = tracetest.NewSpanRecorder()
+
+func TestMain(m *testing.M) {
+	tracing.Install(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)))
+	os.Exit(m.Run())
+}
+
 // checkTrace sends one recommend request to a gateway over two shards on
-// replicas, wired as cmd/gateway and cmd/annshard wire them when tracing,
-// with install making the recorder the tracer provider. It requires the
+// replicas, wired as cmd/gateway and cmd/annshard wire them when tracing;
+// without propagate, the instrumentation is built with no propagator, as
+// the global default is. It requires the
 // replicas' spans of the request's searches to be in the trace of the
 // gateway's HTTP span, each below a client call below the retrieval stage
 // below the HTTP span, with the history and encoder stages beside
 // retrieval, and the probe untraced.
-func checkTrace(t *testing.T, install func(trace.TracerProvider)) error {
-	rec := tracetest.NewSpanRecorder()
-	install(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec)))
-	t.Cleanup(func() {
-		otel.SetTracerProvider(noop.NewTracerProvider())
+func checkTrace(t *testing.T, propagate bool) error {
+	if !propagate { // the instrumentation reads the propagator when it is built
 		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator())
-	})
+		defer otel.SetTextMapPropagator(propagation.TraceContext{})
+	}
+	before := len(rec.Ended())
 
 	m, err := vec.NewMatrix(2, []float32{0, 0, 1, 0, 0.9, 0.1, 0, 1, -1, 0})
 	if err != nil {
@@ -87,7 +97,7 @@ func checkTrace(t *testing.T, install func(trace.TracerProvider)) error {
 	// A server span may end just after its client has the answer.
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		err := checkSpans(rec.Ended())
+		err := checkSpans(rec.Ended()[before:])
 		if err == nil || time.Now().After(deadline) {
 			return err
 		}
@@ -161,15 +171,15 @@ func checkSpans(spans []sdktrace.ReadOnlySpan) error {
 }
 
 func TestTraceJoinsGatewayAndReplicas(t *testing.T) {
-	if err := checkTrace(t, tracing.Install); err != nil {
+	if err := checkTrace(t, true); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// The broken variant sets the tracer provider without the propagator: the
-// replicas' spans start traces of their own.
+// The broken variant has no propagator: the replicas' spans start traces of
+// their own.
 func TestTraceCatchesMissingPropagator(t *testing.T) {
-	err := checkTrace(t, func(tp trace.TracerProvider) { otel.SetTracerProvider(tp) })
+	err := checkTrace(t, false)
 	if err == nil || !strings.Contains(err.Error(), "replica") {
 		t.Fatalf("broken variant: %v", err)
 	}
