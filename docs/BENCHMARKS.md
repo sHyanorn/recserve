@@ -254,6 +254,7 @@ As in Load tests (M6): replay, cache off, half the headline rate, 10 s warmup, 1
 - Per run: the p99 and max over the 1 s windows that overlap a swap (from the admin request until its answer) and over the other windows; prepare and drain times from the swaps' answers; GC cycles and pauses in each group, from the trace; the CPU time of the gateway and of the replicas during each swap.
 - Three runs as is, three with `GOGC=off`.
 - If with `GOGC=off` the median over runs of the max over swap windows is at most 1.2 times the median of the max over the other windows, the largest values are attributed to GC. Otherwise the record says that turning GC off does not remove them, gives the CPU readings, and names no other cause.
+- Defect, found 2026-11-11 after the M6 runs: the rule takes for granted that with GC on the swap windows hold the largest values, and does not check it. Where they do not, its ratio can read as GC with nothing for GC to explain. The rule stands as written and nothing was rerun; the M6 results give its reading and why it does not hold there.
 
 ## Rollouts with SPEC §5's budgets (M6, D047)
 
@@ -502,7 +503,7 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 | off | 6.93, 11.33, 6.50 | 20.19, 23.39, 23.49 | 5.54, 6.34, 5.48 | 52.22, 31.16, 29.25 |
 
 - A swap's prepare took 65 to 864 ms and its drain at most 3.0 ms. During a swap the gateway used 87 to 462 ms of CPU and the four replicas 28 to 505 ms.
-- By the rule above, the median max over the swap windows with `GOGC=off`, 23.39 ms, is 0.75 times that over the other windows, 31.16 ms, which the rule reads as GC. The rule supposes that the swap windows hold the largest values. They do not, with GC on either (medians 18.65 against 19.85 ms), so there is no excess for GC to explain and this record attributes nothing to GC. The other windows' largest values, up to 52.22 ms, also occur with no GC at all.
+- By the rule above, the median max over the swap windows with `GOGC=off`, 23.39 ms, is 0.75 times that over the other windows, 31.16 ms: read as written, the rule attributes the largest values to GC. That reading does not hold here, by the rule's defect noted above: the swap windows do not hold the largest values with GC on either (medians 18.65 against 19.85 ms), so there is no excess for GC to explain and this record attributes nothing to GC. The other windows' largest values, up to 52.22 ms, also occur with no GC at all.
 - p99 over the swap windows is above the other windows' in every run, with GC on (6.73 to 7.50 against 5.18 to 5.99 ms) and off (6.50 to 11.33 against 5.48 to 6.34 ms): turning GC off does not remove it. The CPU readings above are the only other figures; no cause is named.
 - With GC on, the swap windows hold 6 or 7 collections per run, 1.4 to 2.9 ms of pauses in all; the other windows 205 to 207, 72 to 78 ms.
 
