@@ -11,31 +11,42 @@ cd "$(dirname "$0")/.."
 image=recserve/netpol-client:busybox-1.37
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-docker pull -q docker.io/library/busybox:1.37@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec >/dev/null
-docker tag docker.io/library/busybox:1.37@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec "$image"
+busybox=docker.io/library/busybox:1.37@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
+for try in 1 2 3; do
+  docker image inspect "$busybox" >/dev/null 2>&1 || docker pull -q "$busybox" >/dev/null && break
+  [ $try = 3 ] && exit 1
+  sleep 5
+done
+docker tag "$busybox" "$image"
 docker save --platform linux/amd64 -o "$tmp/client.tar" "$image"
 kind load image-archive --name recserve "$tmp/client.tar"
 
-kubectl apply -k deploy/kind >/dev/null
+# Deployed by make kind-up, or here on a new cluster; applied again, the
+# manifests would set the gateways' version back (D048).
+kubectl -n recserve get deploy gateway >/dev/null 2>&1 || kubectl apply -k deploy/kind >/dev/null
 # The replica's name resolves once its address is in the Service's EndpointSlice.
 for _ in $(seq 180); do
   kubectl -n recserve get endpointslice -l kubernetes.io/service-name=annshard \
     -o jsonpath='{.items[*].endpoints[*].targetRef.name}' | grep -qw annshard-0 && break
   sleep 1
 done
-kubectl -n recserve wait --for=jsonpath='{.status.phase}'=Running \
-  "$(kubectl -n recserve get pods -l app.kubernetes.io/name=gateway -o name | head -1)" --timeout=3m >/dev/null
+for pod in pod/annshard-0 "$(kubectl -n recserve get pods -l app.kubernetes.io/name=gateway -o name | head -1)"; do
+  kubectl -n recserve wait --for=jsonpath='{.status.phase}'=Running "$pod" --timeout=3m >/dev/null
+done
 replica=annshard-0.annshard.recserve.svc.cluster.local
 # What the namespace's Pod Security level asks of a container.
 sc='{"runAsNonRoot": true, "runAsUser": 65534, "allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}, "seccompProfile": {"type": "RuntimeDefault"}}'
 
 # from_gateway: whether a gateway Pod opens a TCP connection to the replica.
+# Tried five times: the replica may not listen yet, and the policy may not yet
+# know a gateway Pod just created; a refusal never turns into a connection.
 from_gateway() {
   local pod name=netpol-$RANDOM code=
   pod=$(kubectl -n recserve get pods -l app.kubernetes.io/name=gateway -o jsonpath='{.items[0].metadata.name}')
   echo '{"securityContext": {"runAsUser": 65534}}' > "$tmp/custom.json"
-  kubectl -n recserve debug "$pod" -c "$name" --image="$image" --profile=restricted --custom="$tmp/custom.json" -- nc -z -w 5 "$replica" 9090 >/dev/null
-  for _ in $(seq 60); do
+  kubectl -n recserve debug "$pod" -c "$name" --image="$image" --profile=restricted --custom="$tmp/custom.json" -- \
+    sh -c "for i in 1 2 3 4 5; do nc -z -w 5 $replica 9090 && exit 0; sleep 2; done; exit 1" >/dev/null
+  for _ in $(seq 120); do
     code=$(kubectl -n recserve get pod "$pod" -o jsonpath="{.status.ephemeralContainerStatuses[?(@.name==\"$name\")].state.terminated.exitCode}")
     [ -z "$code" ] || break
     sleep 0.5
@@ -67,5 +78,11 @@ fail=0
 from_gateway || { echo "FAIL: a gateway Pod cannot reach the replicas" >&2; fail=1; }
 from_pod recserve '{"app.kubernetes.io/name": "other"}' && { echo "FAIL: a Pod without the gateway's labels reaches the replicas" >&2; fail=1; }
 from_pod default '{"app.kubernetes.io/name": "gateway"}' && { echo "FAIL: a Pod of another namespace reaches the replicas" >&2; fail=1; }
+# The kubelet probes from the node, which the policy must let through: the
+# replica's readiness probe reached it if it is ready, or answered NOT_SERVING.
+[ "$(kubectl -n recserve get pod annshard-0 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = True ] ||
+  kubectl -n recserve get events --field-selector involvedObject.name=annshard-0,reason=Unhealthy \
+    -o jsonpath='{.items[*].message}' | grep -q NOT_SERVING ||
+  { echo "FAIL: the kubelet's probes do not reach the replicas" >&2; fail=1; }
 [ $fail = 0 ] && echo PASS
 exit $fail
