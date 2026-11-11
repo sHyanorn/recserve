@@ -8,7 +8,7 @@ COMPOSE := docker compose -f deploy/compose.yaml
 
 .DEFAULT_GOAL := help
 BENCH   := DATA=$(abspath $(DATA)) VERSION=$(VERSION)
-.PHONY: bench-ref bench-sweep bench-profile bench-compare bench-fault bench-hedge bench-swap bench-kind
+.PHONY: bench-ref bench-sweep bench-profile bench-compare bench-fault bench-hedge bench-swap bench-kind bench-vegeta
 .PHONY: help build test test-real e2e lint fmt proto data bundle images infra-up infra-down up down test-alerts kind-up kind-swap kind-check kind-netpol kind-down
 
 help: ## Show available targets
@@ -92,6 +92,9 @@ bench-swap: build ## Bundle swaps under load in compose, with GC on and off (doc
 
 bench-kind: build ## kind-check's rollouts and swap to VERSION with SPEC §5's budgets, three new clusters (docs/BENCHMARKS.md); DATA, VERSION
 	$(BENCH) scripts/bench-kind.sh
+
+bench-vegeta: build ## loadgen and vegeta at RATE, half the headline rate, three runs each (docs/BENCHMARKS.md); needs vegeta v12.12.0; DATA, VERSION
+	$(BENCH) scripts/bench-vegeta.sh $(RATE)
 
 bench-profile: build ## CPU profiles of the gateway and a replica under load in compose (docs/BENCHMARKS.md); DATA, VERSION
 	$(BENCH) scripts/bench-profile.sh
