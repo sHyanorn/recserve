@@ -87,7 +87,7 @@ All load tests run on one 4-vCPU VM. Kafka, Valkey, the shards and their replica
 | Other overhead | 7 ms | — |
 | **Server-side end to end** | **50 ms** | |
 
-The service target is a server-side p99 of 50 ms; the headline figure is the highest request rate that meets it (D005). Filters are never skipped: a degraded response is still filtered.
+The service target is a server-side p99 of 50 ms; the headline figure is the highest request rate that meets it with at most 1% of the responses degraded (D005, D054). Filters are never skipped: a degraded response is still filtered.
 
 The cache is looked up after the history, since its key includes the history (D030); a response is cached only if it was not degraded, so a request whose history cannot be read neither reads nor writes it. With `-valkey-addr` the cache is on Valkey and shared by the gateways; the cache read shares the history budget with the history read, the cache write gets it once more, and a cache that cannot be read or written within it costs the request nothing but the cache: it is answered in full as a miss, and is not degraded (D036). The gateway's calls to Valkey go through a circuit breaker: after five failures in a row it answers from `recent` without asking Valkey, and tries Valkey again after a second (D037). Connections to Valkey are opened in the background: a request that finds none waits for one within its history budget, and falls back the same way without counting as a failure. Requests that miss on the same key at the same time compute the response once and share it.
 

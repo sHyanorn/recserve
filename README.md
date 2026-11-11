@@ -2,7 +2,7 @@
 
 A recommendation serving system in Go: retrieval, features, ranking and rerank behind one HTTP API, with a sharded vector tier, caching, degradation, rate limiting, A/B assignment, metrics and tracing.
 
-Status: M5 is done. The gateway serves the full request path; the item vectors are split into shards that it holds itself or, with `-shard-addrs`, searches on `annshard` replicas over gRPC, with failover, hedged searches within a budget, and bundle swaps across the replicas. Events go through Kafka and an ingest consumer into user histories in Valkey, which also holds the result cache; a circuit breaker keeps the gateway answering, from the items the request carries, while Valkey is down. Users are split between A/B arms that rank with the bundle's logistic-regression ranker or keep retrieval order; requests beyond a gateway's rate or in-flight limit get 503; traces follow a request from the gateway to the replicas. It runs in compose and in kind, where load passes through rolling restarts and a swap without an error. Benchmarks and fault injection follow in M6. See [docs/SPEC.md](docs/SPEC.md), [docs/DECISIONS.md](docs/DECISIONS.md), [docs/TASKS.md](docs/TASKS.md) and [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+Status: M5 is done. The gateway serves the full request path; the item vectors are split into shards that it holds itself or, with `-shard-addrs`, searches on `annshard` replicas over gRPC, with failover, hedged searches within a budget, and bundle swaps across the replicas. Events go through Kafka and an ingest consumer into user histories in Valkey, which also holds the result cache; a circuit breaker keeps the gateway answering, from the items the request carries, while Valkey is down. Users are split between A/B arms that rank with the bundle's logistic-regression ranker or keep retrieval order; requests beyond a gateway's rate or in-flight limit get 503; traces follow a request from the gateway to the replicas. It runs in compose and in kind, where load passes through rolling restarts and a swap without an error. M6 measured it under load and under faults; the results, with charts, are in [bench-results/m6/report.md](bench-results/m6/report.md). See [docs/SPEC.md](docs/SPEC.md), [docs/DECISIONS.md](docs/DECISIONS.md), [docs/TASKS.md](docs/TASKS.md) and [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## Quick start
 
@@ -62,7 +62,7 @@ make kind-down
 - A bundle's version is the digest of its files, checked by the gateway and by every replica (D046)
 - User encoder and ranker through ONNX Runtime (D026, D027); a logistic-regression ranker over six features, trained on the valid split in `tools/bundle`, whose bundle carries golden features that the gateway recomputes at load, within 1e-6 (D027)
 - A/B arms by a hash of the experiment and the user, ranked or in retrieval order, in the response, the cache key and an exposure log (D049)
-- Rate and in-flight limits answering 503 at once, without touching readiness (D050)
+- Rate and in-flight limits answering 503 at once, without touching readiness; kind's values come from M6's capacity estimate (D050)
 - OpenTelemetry traces from the gateway's API through each stage to the replicas' searches, exported over OTLP; Jaeger in compose (D051)
 - Seen-item filter, deduplication and MMR; per-stage deadlines with degradation reasons and shard coverage in every response (D029)
 - Result cache keyed by bundle version, A/B arm and the user's history (D030)
@@ -71,9 +71,23 @@ make kind-down
 - User histories and the result cache on Valkey, shared by the gateways; concurrent misses on one key computed once (D033, D036)
 - Circuit breaker on the gateway's Valkey calls; connections to Valkey opened and replaced outside the request path (D037)
 - Tests on the built binaries with ingest killed, Valkey paused, Kafka stopped, and, on four `annshard` processes, a replica killed, a swap, an empty restart, a rejected swap, swaps in a row over three bundles and a rolling restart of the replicas under requests (`make e2e`)
-- Prometheus metrics; load generator corrected for coordinated omission
+- Prometheus metrics, among them each replica call's latency, from which the hedge delay is set (D041); pprof on the gateway's admin listener and, with `-debug-addr`, on the replicas (D052)
+- Load generator corrected for coordinated omission, with per-second windows and a workload of repeated requests; `make bench-*` targets that run the load sweeps, six fault injections with toxiproxy and container control, bundle swaps under load and the ANN measurements, each with noise baselines and an environment record, judged by `cmd/benchsum` against criteria committed before the runs (D052)
+- Inner products in AVX2 for exact search and in AVX for HNSW, each summed in one fixed order that the Go code on other CPUs matches to the bit (D053, D055)
 - Images run as a non-root user on distroless; compose with Prometheus, an alert on replica failovers, and Grafana (D047)
 - kind manifests: replicas as a StatefulSet ready by `grpc.health.v1`, gateways with an HPA, Pod Security `restricted`, and a NetworkPolicy that only the gateways pass, whose enforcement CI checks; a swap is a rollout of the gateways that keeps the replicas to two versions; under load through rolling restarts of both and a swap, no response fails or is degraded (D047, D048)
+
+## Results
+
+Measured in M6 on 4-vCPU cloud VMs, with every service on the same three CPUs ([report with charts](bench-results/m6/report.md), [docs/BENCHMARKS.md](docs/BENCHMARKS.md)). The figures are that machine's and that topology's, and figures from different VMs are not compared.
+
+| What | Result |
+|---|---|
+| Headline: the highest rate with p99 ≤ 50 ms and at most 1% of the responses degraded; replay, cache off | 550 requests/s, p99 4.6 to 5.1 ms (with the earlier 3 ms history budget) |
+| One gateway on 2 CPUs | about 1,800 requests/s, an estimate from its CPU per request |
+| Faults at half the headline, three runs each | replica killed, 50 ms on a shard, Valkey down, searches hanging: pass; ingest paused, replica paused: fail, each on one second with Valkey's circuit breaker open |
+| `vec.Dot` in AVX2 | the replicas' CPU per request 37% lower, p99 a quarter lower at 200 requests/s |
+| HNSW on glove-100, one thread | p99 1.0 to 1.3 times faiss's at the same ef; recall@100 reaches 0.95 only at a p99 of 7.66 ms |
 
 ## Scale
 
@@ -83,16 +97,17 @@ The catalog served has 25.6k items (Amazon Reviews 2023 Video_Games, 5-core). At
 
 - User histories keep every event: no cap per user and no expiry (D023, D033). In Valkey they are never evicted (`maxmemory` is 1 GB in compose; a long history takes about 87 bytes per event). Once they fill it, reads go on and writes fail: `/v1/events` answers 503 until memory is added or histories are deleted.
 - Valkey persists with snapshots only, so events since the last snapshot are lost if it stops uncleanly.
-- Once every connection to Valkey is lost, and while the server accepts new ones without answering, each request waits out its history budget (3 ms) for up to a second before the circuit breaker opens (D037).
-- With four workers saturating the four CPUs that Valkey shares, the history read and cache lookup took 4.3 ms at p99 against a budget of 3 ms; at 200 requests/s, 0.2 to 0.3% of the responses fell back for that reason (docs/BENCHMARKS.md, M3).
+- Once every connection to Valkey is lost, and while the server accepts new ones without answering, each request waits out its history budget (5 ms) for up to a second before the circuit breaker opens (D037).
+- The history read and cache lookup budget is 5 ms: with the cache on, up to 1.74% of the requests at 400 requests/s ran past the earlier 3 ms, and at most 0.02% run past 5 ms at 550 requests/s (D039).
+- The circuit breaker on Valkey opens for a second after five failed calls in a row, and no metric shows its state. In M6 such openings, whose trigger is not established, degraded whole seconds and failed two fault runs (D037; BENCHMARKS, M6).
 
 - The kind manifests deploy the gateways and the replicas; the gateways keep histories in the process. A production deployment also needs Valkey, Kafka and ingest, with manifests of their own. In kind the gateways' stage budgets are 100 ms, since one node shares its CPUs with the control plane and the load generator (D047).
 - A gateway that cannot prepare its first bundle exits; if the replicas come long after the gateways, the kubelet's restart back-off, up to 5 minutes, delays the first deployment (D047).
 - The gateway and the `annshard` replicas talk without TLS or authentication (D040). A deployment must make the replicas' port reachable from the gateways only; the kind manifests do it with a NetworkPolicy, which kind enforces only on a kernel with nftables' queue expression (D047).
-- A replica that goes silent with its connection up still counts as ready for 13 s, until the keepalive closes the connection. Until then every second search of its shard depends on a hedge; beyond the hedge budget (10 in reserve, then one search in ten) the shard is left out and the response reports `shards_partial`. A replica that answers pings while its searches hang is not taken out at all (D041).
+- A replica that goes silent with its connection up still counts as ready for 13 s, until the keepalive closes the connection. Until then every second search of its shard depends on a hedge; beyond the hedge budget (10 in reserve, then one search in ten) the shard is left out and the response reports `shards_partial`. A replica that answers pings while its searches hang is not taken out at all; M6 measured 11 to 12% of the responses partial in both cases, so outlier detection is adopted, for M7 (D041).
 - A replica holds two bundle versions. With three in use at once, as when several gateways swap in no agreed order, a replica drops one that another gateway still serves, and that gateway's responses report `shards_partial` until the replica has prepared it again (D042, D043). In kind, `make kind-swap` keeps the gateways to two (D048); with compose or processes the order of swaps is the operator's.
 - Exposure lines are dropped when the writer's queue is full or stdout fails, and lost if the process is killed with lines queued (D049).
-- The rate and in-flight limits are per gateway, and the kind values rest on one measurement at 100 requests/s, not on a capacity sweep (D050).
+- The rate and in-flight limits are per gateway. kind's values, 1,450 requests/s and 152 in flight, follow from an estimate of one gateway's capacity, made from its CPU per request while it shared three CPUs with the rest of the service (D050).
 - The cost of tracing when on is not measured; Valkey and Kafka calls have no spans of their own (D051).
 - On the 680 held-out users the ranker's recall@10 is 0.091 against 0.026 for retrieval order, measured before MMR; its effect on the served lists is for an A/B experiment to show (D027).
 - A replica that restarts is empty and not ready until the gateway has it prepare the version served again, which it does as soon as its connection is back (D044); for up to a second after a swap, a replica reports ready on the previous version.
