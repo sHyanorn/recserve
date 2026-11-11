@@ -76,7 +76,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] A cache-on workload with repeated requests: replaying the test split never hits (BENCHMARKS, M3); in M6 replay hits 47 to 78%, repeats 58 to 80%
 - [x] Fault runs with toxiproxy and container control (D021): F1, F2, F3 and F6 pass; F4 and F5 fail, each on one second with the Valkey circuit breaker open (BENCHMARKS, M6)
 - [x] In the fault runs, a replica that goes silent with its connection up, and one that answers keepalive pings while its searches hang: the share of responses with `shards_partial` during the 13 s before the keepalive acts, and for as long as the second lasts; decide on outlier detection (D041): about 12% and 11%, so it is adopted
-- [ ] Shard search latency through annshard and the hedge delay's default, from measured latencies (D041)
+- [x] Shard search latency through annshard and the hedge delay's default, from measured latencies (D041): 2.5 ms, from a p95 of a call of about 2 ms
 - [ ] ANN and sharded recall and latency on glove-100 and synthetic vectors
 - [x] `annbench` in shards mode labels results with the `-m` and `-efc` flags even when it reuses graph files built with other values; record the graphs' own parameters: each shard reports its graph's, and shards that differ are an error
 - [ ] Latency during bundle swaps under load, and the cause of its largest values, GC or CPU contention with prepare (D031)

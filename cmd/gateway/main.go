@@ -55,7 +55,7 @@ func main() {
 	shards := shard.DefaultConfig
 	flag.IntVar(&shards.Shards, "shards", shards.Shards, "in-process shards of the item vectors; with -shard-addrs the number of shards is the number of address groups")
 	shardAddrs := flag.String("shard-addrs", "", "annshard replicas that hold the shards, as \"a:9090,b:9090;c:9090,d:9090\": shards separated by ';', a shard's replicas by ','; empty keeps the shards in this process")
-	hedgeDelay := flag.Duration("hedge-delay", 5*time.Millisecond, "with -shard-addrs: time a shard search waits for one replica before it also asks another; 0 never does")
+	hedgeDelay := flag.Duration("hedge-delay", 2500*time.Microsecond, "with -shard-addrs: time a shard search waits for one replica before it also asks another; 0 never does")
 	prepareTimeout := flag.Duration("prepare-timeout", 2*time.Minute, "time the replicas of -shard-addrs get to load and index a bundle version, at start, in a swap and when one is found to lack it")
 	flag.StringVar((*string)(&shards.Mode), "shard-mode", string(shards.Mode), "vector search in each shard: exact or hnsw")
 	flag.IntVar(&shards.Ef, "hnsw-ef", shards.Ef, "HNSW search list size, with -shard-mode hnsw")

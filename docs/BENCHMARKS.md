@@ -487,3 +487,8 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 - **The cache serves most of the late traffic.** 59 to 67% of the lookups hit in the healthy phases, 63 to 75% in the fault phases (none in F3's) and 86 to 99% in the recovery phases, since replay repeats keys as the run goes on. Shard 0 gets 73 to 79 calls per second while healthy and 2 to 25 in the recovery phases, so the recovery times of the replica faults rest on that much search traffic, and the shares above are of all responses: in F6's fault phase, with 71% hits, about 39% of the responses that searched were partial.
 - **Outlier detection (D041).** F5's share in [0, 13 s) and F6's over its fault phase are above 1%, so D041 records outlier detection as adopted, and TASKS has it; it is not built in M6.
 - The healthy phases' p99 is 8.2 to 13.1 ms, against 3.9 to 4.1 ms for loadgen at the same rate in the cross-check: here toxiproxy is on every call to the replicas and Valkey, the cache is on, and the VM is another. Which of these accounts for the difference was not measured.
+
+#### Hedge delay: 2.5 ms
+
+`make bench-hedge RATE=275` (`hedge/`, the table in `hedge.md`), on the third VM, the cache off. With hedging off the p95 of a call is 2.12, 1.97 and 1.91 ms on shard 0 and 2.20, 2.05 and 1.99 ms on shard 1, so the default becomes 2.5 ms, the median of the larger shard's, 2.05 ms, rounded up (D041). With 2.5 ms, 1.0 to 1.3% of each shard's searches sent a hedge, fewer than the 5% the rule aims at: the rounding up puts the delay past most of the slowest 5% of calls. p99 is 5.84 to 6.56 ms with hedging off and 5.70 to 6.32 ms with 2.5 ms, ranges that overlap, so a difference in p99 is not resolved on this machine. No run is invalid or flagged.
+
