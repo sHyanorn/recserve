@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"time"
 
 	"golang.org/x/time/rate"
 )
@@ -23,36 +24,53 @@ const (
 
 var errOverloaded = errors.New("overloaded: retry later")
 
-// admit applies s.Limits to h. A request over the rate, or one that finds
-// the in-flight limit reached, is answered 503 with Retry-After at once:
+// gate applies Limits. A request over the rate, or one that finds the
+// in-flight limit reached, is answered 503 with Retry-After at once:
 // nothing waits for a token or a slot, since a request that waited would
 // spend its latency budget at the door.
-func (s *Server) admit(h func(http.ResponseWriter, *http.Request) error) func(http.ResponseWriter, *http.Request) error {
-	var limiter *rate.Limiter
-	if s.Limits.Rate > 0 {
-		limiter = rate.NewLimiter(rate.Limit(s.Limits.Rate), int(math.Ceil(s.Limits.Rate)))
+type gate struct {
+	limiter *rate.Limiter // nil without a rate limit
+	slots   chan struct{} // nil without an in-flight limit
+}
+
+func newGate(l Limits) *gate {
+	g := &gate{}
+	if l.Rate > 0 {
+		g.limiter = rate.NewLimiter(rate.Limit(l.Rate), int(math.Ceil(l.Rate)))
 	}
-	var slots chan struct{}
-	if s.Limits.InFlight > 0 {
-		slots = make(chan struct{}, s.Limits.InFlight)
+	if l.InFlight > 0 {
+		g.slots = make(chan struct{}, l.InFlight)
 	}
-	turnAway := func(w http.ResponseWriter, reason string) error {
-		s.shed.WithLabelValues(reason).Inc()
-		w.Header().Set("Retry-After", "1")
-		return httpError{http.StatusServiceUnavailable, errOverloaded}
+	return g
+}
+
+// allow reports whether a request arriving at now is within the rate.
+func (g *gate) allow(now time.Time) bool {
+	return g.limiter == nil || g.limiter.AllowN(now, 1)
+}
+
+// enter takes an in-flight slot, if one is free; leave returns it.
+func (g *gate) enter() bool {
+	if g.slots == nil {
+		return true
 	}
-	return func(w http.ResponseWriter, r *http.Request) error {
-		if limiter != nil && !limiter.AllowN(s.Now(), 1) {
-			return turnAway(w, shedRate)
-		}
-		if slots != nil {
-			select {
-			case slots <- struct{}{}:
-				defer func() { <-slots }()
-			default:
-				return turnAway(w, shedInFlight)
-			}
-		}
-		return h(w, r)
+	select {
+	case g.slots <- struct{}{}:
+		return true
+	default:
+		return false
 	}
+}
+
+func (g *gate) leave() {
+	if g.slots != nil {
+		<-g.slots
+	}
+}
+
+// turnAway answers a request that the limits turn away.
+func (s *Server) turnAway(w http.ResponseWriter, reason string) error {
+	s.shed.WithLabelValues(reason).Inc()
+	w.Header().Set("Retry-After", "1")
+	return httpError{http.StatusServiceUnavailable, errOverloaded}
 }

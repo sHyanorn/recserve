@@ -54,8 +54,9 @@ type Server struct {
 	// Exposures, if not nil, logs every answered recommend request.
 	Exposures *Exposures
 	// Limits turns recommend requests away with 503 beyond a rate or a
-	// number in flight; Handler reads it.
+	// number in flight, as Handler finds it.
 	Limits Limits
+	gate   *gate
 	Now    func() time.Time
 	Log    *slog.Logger
 
@@ -128,7 +129,8 @@ func (s *Server) SetReady(v bool) { s.ready.Store(v) }
 // that keeps connections open goes to another instance (D045).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("POST /v1/recommend", s.instrument("recommend", s.admit(s.recommend)))
+	s.gate = newGate(s.Limits)
+	mux.Handle("POST /v1/recommend", s.instrument("recommend", s.recommend))
 	mux.Handle("POST /v1/events", s.instrument("events", s.events))
 	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
@@ -274,10 +276,19 @@ func ParseRecommend(r io.Reader, now int64) (recommend.Request, error) {
 
 func (s *Server) recommend(w http.ResponseWriter, r *http.Request) error {
 	now := s.Now()
+	if !s.gate.allow(now) {
+		return s.turnAway(w, shedRate)
+	}
 	req, err := ParseRecommend(r.Body, now.UnixMilli())
 	if err != nil {
 		return err
 	}
+	// The slot is taken once the body is read: a client that holds back
+	// its body holds no slot.
+	if !s.gate.enter() {
+		return s.turnAway(w, shedInFlight)
+	}
+	defer s.gate.leave()
 	req.Arm = s.Experiment.Assign(req.User)
 	resp, err := s.Live.Recommend(r.Context(), req)
 	if resp.Cached != nil { // also set when the request failed after the lookup

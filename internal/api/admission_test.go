@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -159,5 +160,26 @@ func TestRateLimit(t *testing.T) {
 	}
 	if n := testutil.ToFloat64(s.shed.WithLabelValues(shedRate)); n != 1 {
 		t.Fatalf("%v requests counted as over the rate, want 1", n)
+	}
+}
+
+// A client that sends its headers and then holds back the body takes no
+// in-flight slot: it would hold one for as long as it liked.
+func TestSlowBodyTakesNoSlot(t *testing.T) {
+	s := degradedServer(t, history.NewMemory(), io.Discard)
+	s.Limits = Limits{InFlight: 1}
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	conn, err := net.Dial("tcp", ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close() //nolint:errcheck // the stalled client
+	if _, err := fmt.Fprintf(conn, "POST /v1/recommend HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n{\"user_id\"", len(recommendBody)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond) // the handler is reading the body
+	if code, _, err := do(http.MethodPost, ts.URL+"/v1/recommend", recommendBody); err != nil || code != http.StatusOK {
+		t.Fatalf("with a body held back: %d, %v; want 200", code, err)
 	}
 }
