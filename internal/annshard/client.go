@@ -58,6 +58,8 @@ type Options struct {
 	// (D044). nil is none.
 	Serving func() string
 	Log     *slog.Logger // nil logs nothing
+	// Dial holds options added to DialOptions, such as tracing's.
+	Dial []grpc.DialOption
 }
 
 // catchUpWait is how long a replica that failed to prepare an index it
@@ -191,7 +193,7 @@ func Dial(addrs [][]string, opt Options) (*Client, error) {
 		}
 		c.shards = append(c.shards, g)
 		for _, addr := range replicas {
-			conn, err := grpc.NewClient(addr, DialOptions()...)
+			conn, err := grpc.NewClient(addr, append(DialOptions(), opt.Dial...)...)
 			if err != nil {
 				return nil, errors.Join(fmt.Errorf("shard %d, replica %s: %w", i, addr, err), c.Close())
 			}

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/resolver/dns"
 
 	"github.com/sHyanorn/recserve/internal/annshard"
@@ -32,6 +33,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/onnx"
 	"github.com/sHyanorn/recserve/internal/recommend"
 	"github.com/sHyanorn/recserve/internal/shard"
+	"github.com/sHyanorn/recserve/internal/tracing"
 	"github.com/sHyanorn/recserve/internal/valkeyclient"
 )
 
@@ -91,6 +93,11 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 	if dir == "" {
 		return errors.New("-bundle is required")
 	}
+	stopTracing, err := tracing.Start("gateway", log)
+	if err != nil {
+		return err
+	}
+	defer stopTracing() // last: the spans of the shutdown go too
 	if ortLib != "" {
 		if err := onnx.Init(ortLib); err != nil {
 			return err
@@ -178,7 +185,11 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 		srv.Register(srv.Exposures.Collector())
 		defer srv.Exposures.Close() // after the servers have shut down
 	}
-	servers := []*http.Server{{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second}}
+	handler := srv.Handler()
+	if tracing.Enabled() {
+		handler = tracing.Handler(handler, "/v1/recommend", "/v1/events")
+	}
+	servers := []*http.Server{{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}}
 	if adminAddr != "" {
 		servers = append(servers, &http.Server{Addr: adminAddr, Handler: srv.AdminHandler(), ReadHeaderTimeout: 5 * time.Second})
 	}
@@ -317,7 +328,11 @@ func openShards(replicas [][]string, cfg shard.Config, hedgeDelay, timeout time.
 			return s, nil
 		}, nil, func() {}, nil
 	}
-	client, err := annshard.Dial(replicas, annshard.Options{Config: cfg, HedgeDelay: hedgeDelay, PrepareTimeout: timeout, Serving: serving, Log: log})
+	opt := annshard.Options{Config: cfg, HedgeDelay: hedgeDelay, PrepareTimeout: timeout, Serving: serving, Log: log}
+	if tracing.Enabled() {
+		opt.Dial = []grpc.DialOption{tracing.ClientOption()}
+	}
+	client, err := annshard.Dial(replicas, opt)
 	if err != nil {
 		return nil, nil, nil, err
 	}

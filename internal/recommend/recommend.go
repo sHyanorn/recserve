@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/sHyanorn/recserve/internal/breaker"
@@ -73,6 +74,10 @@ const (
 	stagePopular = SourcePopular
 	stageRanker  = "ranker"
 )
+
+// tracer makes a span for each stage of a request (D051); until a tracer
+// provider is installed its spans record nothing.
+var tracer = otel.Tracer("github.com/sHyanorn/recserve/internal/recommend")
 
 // Budgets bounds the stages of a request (docs/SPEC.md §5). A stage that
 // runs out of time is skipped or falls back, and the response says so; zero
@@ -330,7 +335,9 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error)
 	// The history read and the cache read share one budget.
 	hctx, cancel := within(ctx, p.Budgets.History)
 	defer cancel()
+	_, span := tracer.Start(ctx, stageHistory)
 	hist, err := p.history(ctx, hctx, req, &d)
+	span.End()
 	if err != nil {
 		return Response{}, err
 	}
@@ -338,7 +345,9 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error)
 		return p.compute(ctx, req, hist, &d)
 	}
 	key := p.cacheKey(req, hist)
+	_, span = tracer.Start(ctx, stageCache)
 	resp, ok, cacheErr := p.Cache.Get(hctx, key)
+	span.End()
 	cancel()
 	if cacheErr != nil {
 		if err := ended(ctx, stageCache); err != nil {
@@ -442,11 +451,15 @@ func (p *Pipeline) compute(ctx context.Context, req Request, hist []int32, d *de
 			seen[id] = true
 		}
 	}
+	_, span := tracer.Start(ctx, stageEncoder)
 	uv, err := p.userVector(ctx, hist, d)
+	span.End()
 	if err != nil {
 		return Response{}, err
 	}
-	results, cov, err := p.retrieve(ctx, hist, uv, seen, d)
+	rctx, span := tracer.Start(ctx, "retrieval") // the shard searches' calls are its children
+	results, cov, err := p.retrieve(rctx, hist, uv, seen, d)
+	span.End()
 	if err != nil {
 		return Response{}, err
 	}
@@ -454,12 +467,14 @@ func (p *Pipeline) compute(ctx context.Context, req Request, hist []int32, d *de
 	scored := p.retrievalScores(results, uv, seen)
 	if rk := p.ranker(); rk != nil && len(scored) > 0 && req.Arm.Mode != experiment.Retrieval {
 		kctx, cancel := within(ctx, p.Budgets.Ranker)
+		_, span := tracer.Start(ctx, stageRanker)
 		err := p.stalled(kctx, stageRanker, -1)
 		var ranked []vec.Hit
 		var dropped int
 		if err == nil {
 			ranked, dropped, err = p.rank(kctx, rk, scored, results, hist, uv)
 		}
+		span.End()
 		cancel()
 		if err != nil {
 			if err := ended(ctx, stageRanker); err != nil {

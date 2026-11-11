@@ -4,10 +4,11 @@
 #
 # The profile "app" adds the service on them, from the images of make images
 # (make up DATA=... VERSION=...): ingest, four annshard replicas (two shards of
-# two), the gateway, Prometheus and Grafana. DATA is mounted read-only at /data
-# and the gateway serves DATA/bundle/VERSION. From the host: the gateway at
-# localhost:8080, its admin API at localhost:8081 (swaps take a path under
-# /data), Prometheus at localhost:9090, Grafana at localhost:3000.
+# two), the gateway, Prometheus, Grafana and Jaeger. DATA is mounted read-only
+# at /data and the gateway serves DATA/bundle/VERSION. From the host: the
+# gateway at localhost:8080, its admin API at localhost:8081 (swaps take a path
+# under /data), Prometheus at localhost:9090, Grafana at localhost:3000, Jaeger
+# at localhost:16686. The gateway and the replicas trace every request (D051).
 # ingest creates the events topic; until it exists a gateway started with
 # -kafka-brokers answers 503 on /v1/events (D034). A gateway that cannot
 # prepare its bundle on the replicas exits and is restarted.
@@ -67,6 +68,9 @@ services:
     profiles: [app]
     image: recserve/annshard:${TAG:-dev}
     command: [-bundles=/data/bundle]
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_SERVICE_NAME: annshard
     volumes:
       - ${DATA:-../data}:/data:ro
     restart: on-failure
@@ -86,6 +90,9 @@ services:
       - -kafka-brokers=kafka:9092
       - -shard-addrs=annshard-0:9090,annshard-1:9090;annshard-2:9090,annshard-3:9090
       - -admin-addr=:8081
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_SERVICE_NAME: gateway
     volumes:
       - ${DATA:-../data}:/data:ro
     ports:
@@ -112,3 +119,10 @@ services:
       - ./grafana/dashboards:/etc/grafana/dashboards:ro
     ports:
       - "127.0.0.1:3000:3000"
+
+  jaeger:
+    profiles: [app]
+    # All in one, spans in memory; OTLP on 4317 inside this network.
+    image: jaegertracing/jaeger:2.23.0@sha256:3823829974ccfc2485d2e48b165579091f32295022ae80ca49704e2f4834116e
+    ports:
+      - "127.0.0.1:16686:16686"

@@ -15,7 +15,7 @@ An online recommendation and search serving system written in Go. A request goes
 - Result cache keyed by user, request, bundle version, experiment arm and the user's history before the request
 - Rate limiting and overload protection (bounded concurrency, fail fast with 503)
 - A/B assignment by deterministic hash of the user ID, configurable traffic split, the arm and what ordered the items in every response, and an exposure log
-- Prometheus metrics and OpenTelemetry tracing
+- Prometheus metrics and OpenTelemetry tracing across the gateway and the replicas, on when the standard `OTEL_EXPORTER_OTLP_ENDPOINT` is set (D051)
 - Index and model hot swap: a new version loads and verifies in the background, then all shards switch atomically; no request mixes versions
 - Sharded vector tier: shards with replicas, scatter-gather with per-shard deadlines, hedged requests, replica failover
 - Event ingestion through a Kafka-protocol topic: `POST /v1/events` produces to it, keyed by user; an ingest consumer applies events to the user histories at least once, idempotently, and resumes from its committed offsets after a restart

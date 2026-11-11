@@ -16,6 +16,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/sHyanorn/recserve/internal/events"
 	"github.com/sHyanorn/recserve/internal/experiment"
@@ -305,6 +307,11 @@ func (s *Server) recommend(w http.ResponseWriter, r *http.Request) error {
 		s.Log.Warn("request degraded", "reason", f.Reason, "err", f.Err)
 	}
 	s.armRequests.WithLabelValues(resp.Arm, resp.Ranking).Inc()
+	if span := trace.SpanFromContext(r.Context()); span.IsRecording() {
+		span.SetAttributes(attribute.String("recserve.arm", resp.Arm), attribute.String("recserve.ranking", resp.Ranking),
+			attribute.String("recserve.model_version", resp.ModelVersion), attribute.Bool("recserve.cached", resp.Cached != nil && *resp.Cached),
+			attribute.StringSlice("recserve.degraded", resp.Degraded))
+	}
 	if s.Exposures != nil {
 		items := make([]string, len(resp.Items))
 		for i, it := range resp.Items {

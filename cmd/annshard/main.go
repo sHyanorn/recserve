@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/sHyanorn/recserve/internal/annshard"
+	"github.com/sHyanorn/recserve/internal/tracing"
 )
 
 func main() {
@@ -45,6 +46,11 @@ func run(log *slog.Logger, addr, bundles string, drain time.Duration) error {
 	if err != nil {
 		return err
 	}
+	stopTracing, err := tracing.Start("annshard", log)
+	if err != nil {
+		return err
+	}
+	defer stopTracing()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	log.Info("serving", "addr", ln.Addr().String(), "bundles", bundles)
@@ -56,7 +62,11 @@ func run(log *slog.Logger, addr, bundles string, drain time.Duration) error {
 // returns once the calls in flight have finished or drain has passed,
 // which ends those still running (D045).
 func serve(ctx context.Context, log *slog.Logger, ln net.Listener, bundles string, drain time.Duration) error {
-	gs := grpc.NewServer(annshard.ServerOptions()...)
+	opts := annshard.ServerOptions()
+	if tracing.Enabled() {
+		opts = append(opts, tracing.ServerOption())
+	}
+	gs := grpc.NewServer(opts...)
 	s := annshard.NewServer(bundles, log)
 	s.Register(gs)
 	go func() {
