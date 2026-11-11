@@ -27,15 +27,6 @@ func (m Matrix) Rows() int { return len(m.Data) / m.Dim }
 // Row returns row i.
 func (m Matrix) Row(i int32) []float32 { return m.Data[int(i)*m.Dim : (int(i)+1)*m.Dim] }
 
-// Dot is the inner product, accumulated in float64.
-func Dot(a, b []float32) float64 {
-	var s float64
-	for i, v := range a {
-		s += float64(v) * float64(b[i])
-	}
-	return s
-}
-
 // Dot32 is the inner product in float32, over four independent partial
 // sums: about twice as fast as Dot, with float32 rounding. len(b) must be
 // at least len(a).
