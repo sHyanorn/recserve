@@ -4,8 +4,9 @@
 # FAULT is F1 to F6, RATE half the headline rate. Each run: toxiproxy between
 # the gateway and the replicas and Valkey, fresh services, 270 s of load from
 # the first request's due time, the fault injected at 90 s and removed at
-# 150 s; the gateway's metrics at 30, 90, 150 s and the end. An invalid run is
-# rerun at most twice. Results in OUT (bench-results/m6/faults).
+# 150 s; the gateway's metrics at 30, 90, 150 s and the end, and its log in
+# OUT/raw. An invalid run is rerun at most twice. Results in OUT
+# (bench-results/m6/faults).
 cd "$(dirname "$0")/.."
 FAULT=$1 RATE=$2 RUNS=${3:-3}
 OUT=${OUT:-bench-results/m6/faults}
@@ -89,6 +90,7 @@ attempt() {
 	fi
 	wait "$LOADGEN" || true
 	metrics "$p" b3
+	docker logs recserve-gateway-1 >"$OUT/raw/$(basename "$p").gateway.log" 2>&1 # the breaker's changes of state
 	noise "$p" after
 	if [[ -n $lagpid ]]; then
 		at $((t0 + 300000)) # the lag file shows the drain; the histories need it done
