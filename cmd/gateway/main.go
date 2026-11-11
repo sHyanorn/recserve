@@ -27,6 +27,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/cache"
 	"github.com/sHyanorn/recserve/internal/dataset"
 	"github.com/sHyanorn/recserve/internal/events"
+	"github.com/sHyanorn/recserve/internal/experiment"
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/onnx"
 	"github.com/sHyanorn/recserve/internal/recommend"
@@ -64,18 +65,26 @@ func main() {
 	flag.DurationVar(&budgets.Ranker, "budget-ranker", budgets.Ranker, "ranker budget; 0 for none")
 	cacheSize := flag.Int("cache-size", 13000, "result cache entries; 0 for no cache. With -valkey-addr the cache is on Valkey, bounded by the server's memory, and this only turns it on or off")
 	cacheTTL := flag.Duration("cache-ttl", 5*time.Minute, "result cache time to live, changed by up to 10% either way")
+	expName := flag.String("experiment", "", "A/B experiment name, which also salts the users' assignment; empty for none, with every request ranked")
+	arms := flag.String("arms", "", "the experiment's arms as name=mode:weight,..., mode ranker or retrieval, weights in percent summing to 100, e.g. control=retrieval:50,treatment=ranker:50")
+	exposureLog := flag.Bool("exposure-log", false, "write a JSON line to stdout for every answered recommend request: user, arm, ranking, version, items")
 	flag.Parse()
+	exp, err := experiment.Parse(*expName, *arms)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "-experiment, -arms:", err)
+		os.Exit(2)
+	}
 	// A replica restarted under its name comes back on another address, which
 	// gRPC's DNS resolver would look up only 30 s after the last time (D041).
 	dns.SetMinResolutionInterval(time.Second)
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if err := run(log, *addr, *adminAddr, *dir, *testSplit, *preload, *ortLib, *valkeyAddr, *kafkaBrokers, *eventsTimeout, shards, *shardAddrs, *hedgeDelay, *prepareTimeout, budgets, *cacheSize, *cacheTTL, *drain, *shutdownDelay); err != nil {
+	if err := run(log, *addr, *adminAddr, *dir, *testSplit, *preload, *ortLib, *valkeyAddr, *kafkaBrokers, *eventsTimeout, shards, *shardAddrs, *hedgeDelay, *prepareTimeout, budgets, *cacheSize, *cacheTTL, *drain, *shutdownDelay, exp, *exposureLog); err != nil {
 		log.Error("gateway stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, valkeyAddr, kafkaBrokers string, eventsTimeout time.Duration, shards shard.Config, shardAddrs string, hedgeDelay, prepareTimeout time.Duration, budgets recommend.Budgets, cacheSize int, cacheTTL time.Duration, drain, shutdownDelay time.Duration) (err error) {
+func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, valkeyAddr, kafkaBrokers string, eventsTimeout time.Duration, shards shard.Config, shardAddrs string, hedgeDelay, prepareTimeout time.Duration, budgets recommend.Budgets, cacheSize int, cacheTTL time.Duration, drain, shutdownDelay time.Duration, exp *experiment.Experiment, exposureLog bool) (err error) {
 	if dir == "" {
 		return errors.New("-bundle is required")
 	}
@@ -160,7 +169,12 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 	defer closeProducer() // after the servers have shut down
 	srv := api.New(live, store, log)
 	srv.Register(shardMetrics...)
-	srv.Prepare, srv.Events, srv.EventsTimeout = prepare, producer, eventsTimeout
+	srv.Prepare, srv.Events, srv.EventsTimeout, srv.Experiment = prepare, producer, eventsTimeout, exp
+	if exposureLog {
+		srv.Exposures = api.NewExposures(os.Stdout)
+		srv.Register(srv.Exposures.Collector())
+		defer srv.Exposures.Close() // after the servers have shut down
+	}
 	servers := []*http.Server{{Addr: addr, Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second}}
 	if adminAddr != "" {
 		servers = append(servers, &http.Server{Addr: adminAddr, Handler: srv.AdminHandler(), ReadHeaderTimeout: 5 * time.Second})
@@ -181,7 +195,8 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 	}
 	srv.SetReady(true)
 	log.Info("serving", "addr", addr, "admin_addr", adminAddr, "model_version", p.Bundle.ModelVersion, "items", p.Bundle.ItemCount,
-		"shards", shards.Shards, "shard_mode", shards.Mode, "shard_addrs", shardAddrs, "zero_vectors", zeroVectors(p.Bundle))
+		"shards", shards.Shards, "shard_mode", shards.Mode, "shard_addrs", shardAddrs, "zero_vectors", zeroVectors(p.Bundle),
+		"experiment", exp.Name, "ranker", p.Bundle.Ranker != nil)
 	var serveErr error
 	select {
 	case serveErr = <-errc:

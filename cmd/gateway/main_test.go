@@ -27,6 +27,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/bundle/bundletest"
 	"github.com/sHyanorn/recserve/internal/cache"
 	"github.com/sHyanorn/recserve/internal/events"
+	"github.com/sHyanorn/recserve/internal/experiment"
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/infratest"
 	"github.com/sHyanorn/recserve/internal/onnx/onnxtest"
@@ -390,7 +391,7 @@ func TestRunOnReplicas(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- run(log, addr, "", dir, "", "", "", "", "", 0, shard.DefaultConfig, a+";"+b, 0, 10*time.Second,
-			recommend.Budgets{}, 0, time.Minute, 5*time.Second, 0)
+			recommend.Budgets{}, 0, time.Minute, 5*time.Second, 0, experiment.None(), false)
 	}()
 	eventually := func(what string, ok func() bool) {
 		t.Helper()

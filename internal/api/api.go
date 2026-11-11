@@ -18,6 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/sHyanorn/recserve/internal/events"
+	"github.com/sHyanorn/recserve/internal/experiment"
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/recommend"
 )
@@ -45,11 +46,17 @@ type Server struct {
 	// Prepare loads, verifies and indexes the bundle in a directory, for
 	// POST /v1/admin/swap; nil refuses swaps.
 	Prepare func(dir string) (*recommend.Pipeline, error)
-	Now     func() time.Time
-	Log     *slog.Logger
+	// Experiment assigns each recommend request's arm; New sets one
+	// without an experiment.
+	Experiment *experiment.Experiment
+	// Exposures, if not nil, logs every answered recommend request.
+	Exposures *Exposures
+	Now       func() time.Time
+	Log       *slog.Logger
 
 	ready           atomic.Bool
 	requests        *prometheus.CounterVec
+	armRequests     *prometheus.CounterVec
 	latency         *prometheus.HistogramVec
 	rankerTruncated prometheus.Counter
 	rankerDropped   prometheus.Counter
@@ -61,10 +68,13 @@ type Server struct {
 
 // New returns a server that is not ready until SetReady(true).
 func New(l *recommend.Live, h history.Store, log *slog.Logger) *Server {
-	s := &Server{Live: l, History: h, Events: events.Direct{Store: h}, EventsTimeout: DefaultEventsTimeout, Now: time.Now, Log: log, reg: prometheus.NewRegistry()}
+	s := &Server{Live: l, History: h, Events: events.Direct{Store: h}, EventsTimeout: DefaultEventsTimeout, Experiment: experiment.None(), Now: time.Now, Log: log, reg: prometheus.NewRegistry()}
 	s.requests = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "recserve_http_requests_total", Help: "HTTP requests by route and status code.",
 	}, []string{"route", "code"})
+	s.armRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "recserve_arm_requests_total", Help: "Answered recommend requests by arm and by what ordered the items (ranker or retrieval).",
+	}, []string{"arm", "ranking"})
 	s.latency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name: "recserve_http_request_duration_seconds", Help: "Server-side request duration by route.",
 		Buckets: prometheus.ExponentialBuckets(0.0005, 2, 14),
@@ -90,7 +100,7 @@ func New(l *recommend.Live, h history.Store, log *slog.Logger) *Server {
 	for _, r := range []string{swapOK, swapRejected, swapBusy} {
 		s.swaps.WithLabelValues(r)
 	}
-	s.reg.MustRegister(s.requests, s.latency, s.rankerTruncated, s.rankerDropped, s.degraded, s.cacheLookups, s.swaps,
+	s.reg.MustRegister(s.requests, s.armRequests, s.latency, s.rankerTruncated, s.rankerDropped, s.degraded, s.cacheLookups, s.swaps,
 		collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return s
 }
@@ -251,10 +261,12 @@ func ParseRecommend(r io.Reader, now int64) (recommend.Request, error) {
 }
 
 func (s *Server) recommend(w http.ResponseWriter, r *http.Request) error {
-	req, err := ParseRecommend(r.Body, s.Now().UnixMilli())
+	now := s.Now()
+	req, err := ParseRecommend(r.Body, now.UnixMilli())
 	if err != nil {
 		return err
 	}
+	req.Arm = s.Experiment.Assign(req.User)
 	resp, err := s.Live.Recommend(r.Context(), req)
 	if resp.Cached != nil { // also set when the request failed after the lookup
 		result := "miss"
@@ -281,6 +293,17 @@ func (s *Server) recommend(w http.ResponseWriter, r *http.Request) error {
 	}
 	for _, f := range resp.Failures {
 		s.Log.Warn("request degraded", "reason", f.Reason, "err", f.Err)
+	}
+	s.armRequests.WithLabelValues(resp.Arm, resp.Ranking).Inc()
+	if s.Exposures != nil {
+		items := make([]string, len(resp.Items))
+		for i, it := range resp.Items {
+			items[i] = it.ID
+		}
+		s.Exposures.Log(Exposure{
+			Time: now, UserID: req.User, TS: req.TS, Experiment: s.Experiment.Name, Arm: resp.Arm, Ranking: resp.Ranking,
+			ModelVersion: resp.ModelVersion, Items: items, Degraded: resp.Degraded, Cached: resp.Cached != nil && *resp.Cached,
+		})
 	}
 	return writeJSON(w, http.StatusOK, resp)
 }

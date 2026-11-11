@@ -21,6 +21,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/cache"
 	"github.com/sHyanorn/recserve/internal/events"
+	"github.com/sHyanorn/recserve/internal/experiment"
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/infratest"
 	"github.com/sHyanorn/recserve/internal/onnx"
@@ -91,6 +92,66 @@ func ids(out map[string]any) []string {
 		r = append(r, it.(map[string]any)["id"].(string))
 	}
 	return r
+}
+
+// Each answered recommend request is logged once, with its arm and what
+// ordered its items: an arm that asks for the ranker on a bundle without
+// one is ordered by retrieval, and the response and the log say so (D049).
+func TestExposures(t *testing.T) {
+	s, ts := testServer(t)
+	e, err := experiment.Parse("ranker-v1", "control=retrieval:50,treatment=ranker:50")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var log bytes.Buffer
+	s.Experiment, s.Exposures = e, NewExposures(&log)
+	// u1 is in bucket 4561, control; u2 in 5518, treatment.
+	var answered []map[string]any
+	for _, body := range []string{`{"user_id":"u1","k":2}`, `{"user_id":"u2","k":2}`, `{"user_id":"u2","k":2,"ts":5}`, `{"user_id":"u2","k":0}`} {
+		code, out := post(t, ts.URL+"/v1/recommend", body)
+		if code == http.StatusOK {
+			answered = append(answered, out)
+		}
+	}
+	s.Exposures.Close()
+	lines := strings.Split(strings.TrimSpace(log.String()), "\n")
+	if len(answered) != 3 || len(lines) != len(answered) {
+		t.Fatalf("%d answered, %d exposures:\n%s", len(answered), len(lines), log.String())
+	}
+	for i, out := range answered {
+		var x Exposure
+		if err := json.Unmarshal([]byte(lines[i]), &x); err != nil {
+			t.Fatal(err)
+		}
+		wantArm := map[bool]string{true: "control", false: "treatment"}[i == 0]
+		if out["arm"] != wantArm || out["ranking"] != recommend.RankedByRetrieval || x.Arm != wantArm || x.Ranking != recommend.RankedByRetrieval {
+			t.Errorf("request %d: response arm %v, ranking %v; exposure arm %q, ranking %q; want %s, retrieval", i, out["arm"], out["ranking"], x.Arm, x.Ranking, wantArm)
+		}
+		wantTS := map[bool]int64{true: 5, false: 1000}[i == 2]
+		if x.Experiment != "ranker-v1" || x.UserID != map[bool]string{true: "u1", false: "u2"}[i == 0] || x.TS != wantTS ||
+			!x.Time.Equal(time.UnixMilli(1000)) || x.ModelVersion != "v1" || !slices.Equal(x.Items, ids(out)) || x.Cached {
+			t.Errorf("request %d: exposure %+v, response %v", i, x, out)
+		}
+	}
+	if n := testutil.ToFloat64(s.armRequests.WithLabelValues("treatment", recommend.RankedByRetrieval)); n != 2 {
+		t.Errorf("recserve_arm_requests_total{arm=treatment,ranking=retrieval} = %v, want 2", n)
+	}
+}
+
+// A queue that is full drops the exposure instead of waiting for the writer.
+func TestExposuresDropWhenFull(t *testing.T) {
+	r, w := io.Pipe() // nothing reads: the writer blocks on its first line
+	e := NewExposures(w)
+	for range ExposureQueue + 2 {
+		e.Log(Exposure{UserID: "u"})
+	}
+	if n := testutil.ToFloat64(e.dropped); n < 1 {
+		t.Fatalf("%v exposures dropped, want at least 1", n)
+	}
+	if err := r.Close(); err != nil { // the blocked write fails, and the rest
+		t.Fatal(err)
+	}
+	e.Close()
 }
 
 func TestEventsThenRecommend(t *testing.T) {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/cache"
+	"github.com/sHyanorn/recserve/internal/experiment"
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/infratest"
 	"github.com/sHyanorn/recserve/internal/shard"
@@ -268,6 +269,44 @@ func TestCacheErrorIsAMiss(t *testing.T) {
 	cancel()
 	if resp, err := p.Recommend(ctx, req); !errors.Is(err, context.Canceled) || resp.Cached != nil {
 		t.Fatalf("a cancelled request returned cached %v, %v", resp.Cached, err)
+	}
+}
+
+// The arm is in the cache key: gateways that share a cache may run other
+// experiments, so a user's response is held once per arm, and each names
+// the arm and the ordering it was computed with.
+func TestArmJoinsCacheKey(t *testing.T) {
+	p, err := randomPipeline(rand.New(rand.NewPCG(17, 17)), 30, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.rankWith, p.Cache = positionRanker(1, 0), memoryCache()
+	arms := []struct {
+		arm     experiment.Arm
+		ranking string
+	}{
+		{experiment.Arm{Name: "control", Mode: experiment.Retrieval}, RankedByRetrieval},
+		{experiment.Arm{Name: "treatment", Mode: experiment.Ranker}, RankedByRanker},
+	}
+	items := map[string][]Item{}
+	for round := range 2 {
+		for _, a := range arms {
+			resp, err := p.Recommend(context.Background(), Request{User: "u0", K: 5, TS: 50, Arm: a.arm})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.Arm != a.arm.Name || resp.Ranking != a.ranking || *resp.Cached != (round == 1) {
+				t.Fatalf("round %d, arm %s: arm %q, ranking %q, cached %v", round, a.arm.Name, resp.Arm, resp.Ranking, *resp.Cached)
+			}
+			if round == 0 {
+				items[a.arm.Name] = resp.Items
+			} else if !slices.Equal(resp.Items, items[a.arm.Name]) {
+				t.Fatalf("arm %s: the cache served %v, computed %v", a.arm.Name, resp.Items, items[a.arm.Name])
+			}
+		}
+	}
+	if slices.Equal(items["control"], items["treatment"]) {
+		t.Fatal("the ranker left the order as it was; the arms are not told apart")
 	}
 }
 

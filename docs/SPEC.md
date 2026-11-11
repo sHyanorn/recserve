@@ -14,7 +14,7 @@ An online recommendation and search serving system written in Go. A request goes
 - Per-stage deadlines with degradation: a retrieval source that times out is skipped, a ranker that times out falls back to retrieval order, a missing shard yields partial results; every response reports what was degraded and the shard coverage
 - Result cache keyed by user, request, bundle version, experiment arm and the user's history before the request
 - Rate limiting and overload protection (bounded concurrency, fail fast with 503)
-- A/B assignment by deterministic hash of the user ID, configurable traffic split, arm and config version in every response
+- A/B assignment by deterministic hash of the user ID, configurable traffic split, the arm and what ordered the items in every response, and an exposure log
 - Prometheus metrics and OpenTelemetry tracing
 - Index and model hot swap: a new version loads and verifies in the background, then all shards switch atomically; no request mixes versions
 - Sharded vector tier: shards with replicas, scatter-gather with per-shard deadlines, hedged requests, replica failover
@@ -99,7 +99,7 @@ With the shards on replicas, a shard search is one call to one replica, within t
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/v1/recommend` | `{"user_id", "k", "ts"?, "exclude"?, "recent"?}` → items, scores, arm, versions, degraded reasons (§5), coverage |
+| POST | `/v1/recommend` | `{"user_id", "k", "ts"?, "exclude"?, "recent"?}` → items, scores, arm, ranking, versions, degraded reasons (§5), coverage |
 | POST | `/v1/events` | Append user events (`user_id`, `item_id`, `ts`, `kind`); 202 once the broker has acknowledged them, or, without `-kafka-brokers`, once they are stored; 503 if that fails or takes longer than `-events-timeout` |
 | POST | `/v1/admin/swap` | `{"bundle": dir}`: prepare and activate the bundle in a directory → version, previous version, prepare and drain times; 409 while another swap runs or if the version is active, 422 if the bundle fails to load or verify. Served on its own listener (`-admin-addr`, 127.0.0.1:8081 by default), without authentication |
 | GET | `/livez`, `/readyz`, `/metrics` | Liveness (the process serves), readiness (a bundle is active and the instance is not stopping: 503 from SIGTERM on, D045), Prometheus metrics |
@@ -108,13 +108,15 @@ With the shards on replicas, a shard search is one call to one replica, within t
 
 `ts` defaults to the server clock; benchmarks and evaluation pass the event time from the dataset so the same request always sees the same history.
 
+With `-experiment NAME -arms control=retrieval:50,treatment=ranker:50` each user is in one arm: bucket = the first 8 bytes of SHA-256(NAME + "." + user_id) as a big-endian unsigned integer, mod 10,000, and the arms take consecutive buckets in the order listed, 100 per percent of weight. An arm in mode `ranker` orders the candidates with the bundle's ranker, one in mode `retrieval` by retrieval score without running it; without an experiment every request is in the arm `default`, mode `ranker` (D049). `arm` names the request's arm, and `ranking` what ordered its items: `ranker` only if the ranker scored them, `retrieval` otherwise, as when the arm does not rank, the bundle has no ranker, or the ranker timed out or failed. With `-exposure-log` every answered recommend request, cached or degraded, writes one JSON line to stdout: `{"time", "user_id", "ts", "experiment", "arm", "ranking", "model_version", "items", "degraded", "cached"}`, `items` being the item IDs in order; a line that finds the writer's queue full is dropped and counted in `recserve_exposures_dropped_total`.
+
 ## 7. Correctness properties
 
 Each property is an executable test; those marked * also run against a deliberately broken implementation to show the test catches it.
 
 1. * Features use only events strictly before the request timestamp (property test against a naive scan)
 2. * No response contains an item from the user's history before the request, or the same item twice
-3. * A/B assignment is uniform (chi-square over 1M IDs), stable across processes and restarts (golden cases), and matches the configured split within tolerance; the broken variant assigns with an in-process random seed
+3. * A/B assignment is uniform (chi-square over 1M IDs in 100 bucket ranges, below 148.23), stable across processes and restarts (golden buckets computed outside Go), and matches the configured split within 0.003; the broken variant assigns with an in-process random seed. The arm is in the result cache key, and a response's `ranking` says what ordered its items
 4. * During concurrent queries and repeated swaps, every returned score recomputes exactly from the vectors of the version the response names; the broken variant scores with the bundle active when scoring starts. Also with the shards on replicas, where the broken variant is a replica that answers from the version it prepared last
 5. * The cache never serves a result from another index or model version, including right after a swap
 6. * Scatter-gather top-k in exact mode equals single-node exact top-k item by item on small data; ties break by internal ID ascending. The same check runs on the in-process shards and on replicas over gRPC

@@ -21,6 +21,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/breaker"
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/cache"
+	"github.com/sHyanorn/recserve/internal/experiment"
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/shard"
 	"github.com/sHyanorn/recserve/internal/vec"
@@ -110,7 +111,15 @@ type Request struct {
 	// Recent is the client's list of the user's latest items, oldest
 	// first, used as the history when the stored one cannot be read.
 	Recent []string
+	// Arm is the user's arm; with mode Retrieval the ranker is not run.
+	Arm experiment.Arm
 }
+
+// How a response's items were ordered (Response.Ranking).
+const (
+	RankedByRanker    = "ranker"    // by the bundle's ranker
+	RankedByRetrieval = "retrieval" // by retrieval score
+)
 
 // Item is one recommended item.
 type Item struct {
@@ -120,7 +129,12 @@ type Item struct {
 
 // Response is the result of a request.
 type Response struct {
-	Items        []Item    `json:"items"`
+	Items []Item `json:"items"`
+	Arm   string `json:"arm"`
+	// Ranking says what ordered the items: RankedByRanker, or
+	// RankedByRetrieval when the arm does not rank, the bundle has no
+	// ranker, or the ranker timed out or failed.
+	Ranking      string    `json:"ranking"`
 	ModelVersion string    `json:"model_version"`
 	Degraded     []string  `json:"degraded"` // what was skipped or fell back, in the order of Reasons; empty if nothing
 	Coverage     *Coverage `json:"coverage"` // nil when vector retrieval did not run
@@ -436,9 +450,9 @@ func (p *Pipeline) compute(ctx context.Context, req Request, hist []int32, d *de
 	if err != nil {
 		return Response{}, err
 	}
-	resp := Response{ModelVersion: b.ModelVersion, Coverage: cov}
+	resp := Response{Arm: req.Arm.Name, Ranking: RankedByRetrieval, ModelVersion: b.ModelVersion, Coverage: cov}
 	scored := p.retrievalScores(results, uv, seen)
-	if rk := p.ranker(); rk != nil && len(scored) > 0 {
+	if rk := p.ranker(); rk != nil && len(scored) > 0 && req.Arm.Mode != experiment.Retrieval {
 		kctx, cancel := within(ctx, p.Budgets.Ranker)
 		err := p.stalled(kctx, stageRanker, -1)
 		var ranked []vec.Hit
@@ -453,7 +467,7 @@ func (p *Pipeline) compute(ctx context.Context, req Request, hist []int32, d *de
 			}
 			d.add(timeoutOr(err, RankerTimeout, RankerError), err)
 		} else {
-			scored, resp.Dropped = ranked, dropped
+			scored, resp.Dropped, resp.Ranking = ranked, dropped, RankedByRanker
 		}
 	}
 	picked := mmr(b.Vectors, b.InvNorms, scored, req.K, MMRLambda)
@@ -466,18 +480,20 @@ func (p *Pipeline) compute(ctx context.Context, req Request, hist []int32, d *de
 }
 
 // cacheKey returns the digest of what a response depends on, given the
-// history: the bundle version, the shard settings, the user, k, the
-// exclusions as a set and the history items in order. The request time only selects the history, and
-// the recent items are used only when the history cannot be read, which
-// is never cached.
+// history: the bundle version, the shard settings, the arm, the user, k,
+// the exclusions as a set and the history items in order. The request time
+// only selects the history, and the recent items are used only when the
+// history cannot be read, which is never cached.
 func (p *Pipeline) cacheKey(req Request, hist []int32) cache.Key {
 	str := func(b []byte, s string) []byte { return append(binary.AppendUvarint(b, uint64(len(s))), s...) }
 	var b []byte
 	if !p.keyWithoutVersion {
 		b = str(b, p.Bundle.ModelVersion)
 	}
-	// Gateways that share a cache may search with other settings.
+	// Gateways that share a cache may search with other settings, and run
+	// other experiments.
 	b = str(b, fmt.Sprintf("%+v", p.Shards.Config()))
+	b = str(str(b, req.Arm.Name), string(req.Arm.Mode))
 	b = binary.AppendUvarint(str(b, req.User), uint64(req.K))
 	exclude := slices.Compact(slices.Sorted(slices.Values(req.Exclude)))
 	b = binary.AppendUvarint(b, uint64(len(exclude)))
