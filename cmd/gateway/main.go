@@ -126,8 +126,9 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 		return err
 	}
 	defer closeCache()
+	var breakerMetrics []prometheus.Collector
 	if valkeyAddr != "" {
-		store, c = guard(store, c, log)
+		store, c, breakerMetrics = guard(store, c, log)
 	}
 	var replicas [][]string
 	if shardAddrs != "" {
@@ -179,6 +180,7 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 	defer closeProducer() // after the servers have shut down
 	srv := api.New(live, store, log)
 	srv.Register(shardMetrics...)
+	srv.Register(breakerMetrics...)
 	srv.Prepare, srv.Events, srv.EventsTimeout, srv.Experiment, srv.Limits = prepare, producer, eventsTimeout, exp, limits
 	if exposureLog {
 		srv.Exposures = api.NewExposures(os.Stdout)
@@ -287,15 +289,16 @@ const (
 )
 
 // guard returns store with its reads, and c with its reads and writes,
-// behind one circuit breaker that logs its changes of state.
-func guard(store history.Store, c recommend.Cache, log *slog.Logger) (history.Store, recommend.Cache) {
+// behind one circuit breaker that logs its changes of state, and the
+// breaker's metrics.
+func guard(store history.Store, c recommend.Cache, log *slog.Logger) (history.Store, recommend.Cache, []prometheus.Collector) {
 	b := breaker.New(breakerFailures, breakerOpen, func(from, to string) {
 		log.Warn("valkey circuit breaker", "from", from, "to", to)
 	})
 	if c != nil {
 		c = breaker.Cache[recommend.Response]{Cache: c, Breaker: b}
 	}
-	return breaker.Store{Store: store, Breaker: b}, c
+	return breaker.Store{Store: store, Breaker: b}, c, b.Collectors()
 }
 
 // openProducer returns what takes the events of /v1/events, and the

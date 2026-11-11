@@ -20,6 +20,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/sHyanorn/recserve/internal/annshard/annshardtest"
 	"github.com/sHyanorn/recserve/internal/api"
 	"github.com/sHyanorn/recserve/internal/breaker"
@@ -497,10 +500,11 @@ func (downStore) Before(context.Context, string, int64, int) ([]string, error) {
 }
 
 // The breaker of guard opens after breakerFailures failed history reads,
-// logs it, and leaves a gateway without a cache without one.
+// logs it, reports it in its metrics, and leaves a gateway without a cache
+// without one.
 func TestGuard(t *testing.T) {
 	var logged bytes.Buffer
-	store, c := guard(downStore{}, nil, slog.New(slog.NewTextHandler(&logged, nil)))
+	store, c, metrics := guard(downStore{}, nil, slog.New(slog.NewTextHandler(&logged, nil)))
 	if c != nil {
 		t.Fatalf("no cache became %T", c)
 	}
@@ -513,7 +517,19 @@ func TestGuard(t *testing.T) {
 	if !strings.Contains(logged.String(), "from=closed to=open") {
 		t.Fatalf("log: %q", logged.String())
 	}
-	_, c = guard(downStore{}, cache.New[recommend.Response](1, time.Minute), slog.New(slog.DiscardHandler))
+	reg := prometheus.NewPedanticRegistry()
+	reg.MustRegister(metrics...)
+	want := `
+# HELP recserve_valkey_breaker_state State of the circuit breaker on Valkey: 1 for the state it is in (closed, half-open or open), 0 for the others.
+# TYPE recserve_valkey_breaker_state gauge
+recserve_valkey_breaker_state{state="closed"} 0
+recserve_valkey_breaker_state{state="half-open"} 0
+recserve_valkey_breaker_state{state="open"} 1
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(want), "recserve_valkey_breaker_state"); err != nil {
+		t.Fatal(err)
+	}
+	_, c, _ = guard(downStore{}, cache.New[recommend.Response](1, time.Minute), slog.New(slog.DiscardHandler))
 	if _, ok := c.(breaker.Cache[recommend.Response]); !ok {
 		t.Fatalf("the cache is %T", c)
 	}

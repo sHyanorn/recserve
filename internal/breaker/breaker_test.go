@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/sHyanorn/recserve/internal/cache"
 	"github.com/sHyanorn/recserve/internal/history"
@@ -120,5 +124,107 @@ func TestBreaker(t *testing.T) {
 	want := []string{"closed>open", "open>half-open", "half-open>open", "open>half-open", "half-open>closed"}
 	if !slices.Equal(changes, want) {
 		t.Fatalf("state changes %v, want %v", changes, want)
+	}
+}
+
+// metrics returns the values b's collectors report, by metric name and
+// labels, as "name,label=value,...".
+func metrics(t *testing.T, b *Breaker) map[string]float64 {
+	t.Helper()
+	reg := prometheus.NewPedanticRegistry()
+	reg.MustRegister(b.Collectors()...)
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := map[string]float64{}
+	for _, f := range families {
+		for _, x := range f.GetMetric() {
+			key := f.GetName()
+			for _, l := range x.GetLabel() {
+				key += "," + l.GetName() + "=" + l.GetValue()
+			}
+			m[key] = x.GetCounter().GetValue() + x.GetGauge().GetValue()
+		}
+	}
+	return m
+}
+
+func TestMetrics(t *testing.T) {
+	ctx := context.Background()
+	const openFor = 300 * time.Millisecond
+	srv := &server{}
+	b := New(3, openFor, nil)
+	store, c := Store{srv, b}, Cache[int]{srv, b}
+	state := func() string {
+		t.Helper()
+		var in []string
+		for k, v := range metrics(t, b) {
+			if s, ok := strings.CutPrefix(k, "recserve_valkey_breaker_state,state="); ok && v == 1 {
+				in = append(in, s)
+			}
+		}
+		if len(in) != 1 {
+			t.Fatalf("breaker in states %v, want one", in)
+		}
+		return in[0]
+	}
+	if s := state(); s != "closed" {
+		t.Fatalf("state %s, want closed", s)
+	}
+
+	history := func() error { _, err := store.Before(ctx, "u", 1, 0); return err }
+	get := func() error { _, _, err := c.Get(ctx, cache.Key{}); return err }
+	put := func() error { return c.Put(ctx, cache.Key{}, 1) }
+	timeout := fmt.Errorf("read: %w", context.DeadlineExceeded)
+	connecting := fmt.Errorf("%w: %w", valkeyclient.ErrConnecting, context.DeadlineExceeded)
+	down := errors.New("down")
+	type step struct {
+		call      func() error
+		err, want error // the server's error, and the call's
+	}
+	run := func(steps ...step) {
+		t.Helper()
+		for i, s := range steps {
+			srv.err = s.err
+			if err := s.call(); !errors.Is(err, s.want) || (s.want == nil) != (err == nil) {
+				t.Fatalf("step %d: %v, want %v", i, err, s.want)
+			}
+		}
+	}
+	run(step{history, nil, nil}, step{get, nil, nil}, step{put, nil, nil},
+		step{get, context.Canceled, context.Canceled}, step{history, connecting, connecting},
+		step{history, timeout, timeout}, step{history, timeout, timeout}, step{put, down, down})
+	if s := state(); s != "open" {
+		t.Fatalf("after three failures in a row: state %s, want open", s)
+	}
+	run(step{history, nil, ErrOpen})
+	time.Sleep(openFor + 10*time.Millisecond)
+	if s := state(); s != "half-open" {
+		t.Fatalf("after the open time: state %s, want half-open", s)
+	}
+	run(step{get, nil, nil})
+	if s := state(); s != "closed" {
+		t.Fatalf("after a trial that succeeded: state %s, want closed", s)
+	}
+
+	calls := map[string]float64{}
+	for k, v := range metrics(t, b) {
+		if s, ok := strings.CutPrefix(k, "recserve_valkey_calls_total,"); ok {
+			calls[s] = v
+		}
+	}
+	want := map[string]float64{
+		"call=history,result=ok":          1,
+		"call=history,result=connecting":  1,
+		"call=history,result=timeout":     2,
+		"call=history,result=refused":     1,
+		"call=cache_get,result=ok":        2,
+		"call=cache_get,result=cancelled": 1,
+		"call=cache_put,result=ok":        1,
+		"call=cache_put,result=error":     1,
+	}
+	if !maps.Equal(calls, want) {
+		t.Fatalf("calls %v, want %v", calls, want)
 	}
 }
