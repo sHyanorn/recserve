@@ -1,0 +1,7 @@
+[
+  {"name": "annshard-0", "listen": "0.0.0.0:19090", "upstream": "annshard-0:9090"},
+  {"name": "annshard-1", "listen": "0.0.0.0:19091", "upstream": "annshard-1:9090"},
+  {"name": "annshard-2", "listen": "0.0.0.0:19092", "upstream": "annshard-2:9090"},
+  {"name": "annshard-3", "listen": "0.0.0.0:19093", "upstream": "annshard-3:9090"},
+  {"name": "valkey", "listen": "0.0.0.0:16379", "upstream": "valkey:6379"}
+]

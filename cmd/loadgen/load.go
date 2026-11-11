@@ -33,6 +33,7 @@ type workload interface {
 
 // report is the result of a measurement, written as JSON.
 type report struct {
+	Start      time.Time          `json:"start"` // when request 0 was due
 	TargetRate float64            `json:"target_rate"`
 	Achieved   float64            `json:"achieved_rate"`
 	Warmup     float64            `json:"warmup_s"`
@@ -231,6 +232,7 @@ send:
 		return report{}, err
 	}
 	r := summarizeRun(cfg, workers)
+	r.Start = t0
 	r.Latency["hiccup"] = summarize(<-hiccups)
 	if cfg.samples != "" {
 		var all []sample

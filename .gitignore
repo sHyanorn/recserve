@@ -10,3 +10,4 @@ __pycache__/
 /bin/
 !internal/npy/testdata/*.npy
 !internal/onnx/onnxtest/testdata/*.onnx
+bench-results/m6/**/raw/

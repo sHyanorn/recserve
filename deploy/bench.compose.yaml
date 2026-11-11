@@ -1,0 +1,52 @@
+# Overrides compose.yaml for the benchmarks of docs/BENCHMARKS.md (M6, D052),
+# run by scripts/bench.sh: every service on CPUs 1 to 3, leaving CPU 0 to
+# loadgen; no tracing; annshard-0 serves its profiles on :6060. The gateway's
+# varying flags come from the environment, with the binary's defaults:
+# CACHE_SIZE, HEDGE_DELAY, BUDGET_HISTORY, SHARD_ADDRS, VALKEY_ADDR, and
+# GOGC and GODEBUG for its runtime. The profile "faults" adds toxiproxy, whose
+# proxies (toxiproxy.json) the fault runs point the gateway at.
+x-annshard: &annshard
+  cpuset: "1-3"
+  environment:
+    OTEL_EXPORTER_OTLP_ENDPOINT: ""
+
+services:
+  kafka:
+    cpuset: "1-3"
+  valkey:
+    cpuset: "1-3"
+  ingest:
+    cpuset: "1-3"
+  annshard-0:
+    <<: *annshard
+    command: [-bundles=/data/bundle, -debug-addr=:6060]
+  annshard-1:
+    <<: *annshard
+    image: ${ANNSHARD1_IMAGE:-recserve/annshard:dev}
+  annshard-2: *annshard
+  annshard-3: *annshard
+  gateway:
+    cpuset: "1-3"
+    command:
+      - -bundle=/data/bundle/${VERSION:-}
+      - -test-split=/data/Video_Games.test.csv.gz
+      - -preload=/data/Video_Games.train.csv.gz,/data/Video_Games.valid.csv.gz
+      - -ort-lib=/usr/local/lib/libonnxruntime.so.1.31.1
+      - -valkey-addr=${VALKEY_ADDR:-valkey:6379}
+      - -kafka-brokers=kafka:9092
+      - -shard-addrs=${SHARD_ADDRS:-annshard-0:9090,annshard-1:9090;annshard-2:9090,annshard-3:9090}
+      - -admin-addr=:8081
+      - -cache-size=${CACHE_SIZE:-13000}
+      - -hedge-delay=${HEDGE_DELAY:-5ms}
+      - -budget-history=${BUDGET_HISTORY:-3ms}
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+      GOGC: ${GOGC:-}
+      GODEBUG: ${GODEBUG:-}
+  toxiproxy:
+    profiles: [faults]
+    image: ghcr.io/shopify/toxiproxy:2.13.0@sha256:5d3dae09bc185dcc5ff6cf43abf6062a4a720aff0c4306a471e773acdcd107aa
+    command: [-host=0.0.0.0, -config=/etc/toxiproxy.json]
+    cpuset: "1-3"
+    volumes:
+      - ./toxiproxy.json:/etc/toxiproxy.json:ro

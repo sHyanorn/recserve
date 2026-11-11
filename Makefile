@@ -7,6 +7,8 @@ VERSION ?=
 COMPOSE := docker compose -f deploy/compose.yaml
 
 .DEFAULT_GOAL := help
+BENCH   := DATA=$(abspath $(DATA)) VERSION=$(VERSION)
+.PHONY: bench-ref bench-sweep bench-profile
 .PHONY: help build test test-real e2e lint fmt proto data bundle images infra-up infra-down up down test-alerts kind-up kind-swap kind-check kind-netpol kind-down
 
 help: ## Show available targets
@@ -72,3 +74,12 @@ kind-netpol: ## Check in kind that only the gateways reach the replicas' port; f
 
 kind-down: ## Delete the kind cluster
 	kind delete cluster --name recserve
+
+bench-ref: build ## Take the session's noise reference on an idle machine (docs/BENCHMARKS.md), before the bench- targets
+	mkdir -p bench-results/m6 && taskset -c 1 bin/noisebase -n 10 -cpu 1 -out bench-results/m6/noise-reference.json
+
+bench-sweep: build ## Load sweep in compose (docs/BENCHMARKS.md): SCENARIO replay, writes or repeats, CACHE on or off, RATES (empty: the grid); DATA, VERSION
+	$(BENCH) scripts/bench-sweep.sh $(SCENARIO) $(CACHE) $(RATES)
+
+bench-profile: build ## CPU profiles of the gateway and a replica under load in compose (docs/BENCHMARKS.md); DATA, VERSION
+	$(BENCH) scripts/bench-profile.sh
