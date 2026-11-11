@@ -278,7 +278,7 @@ func TestRankerTruncationIsCounted(t *testing.T) {
 			cooc[i*bundle.CoocWidth+j] = int32(1 + (i*bundle.CoocWidth+j)%n)
 		}
 	}
-	popular := make([]int32, recommend.PopularTop)
+	popular := make([]int32, bundle.PopularTop)
 	for i := range popular {
 		popular[i] = int32(n - i)
 	}
@@ -293,7 +293,7 @@ func TestRankerTruncationIsCounted(t *testing.T) {
 	})
 	store := history.NewMemory()
 	var evs []history.Event
-	for i := range recommend.CoocSeeds {
+	for i := range bundle.CoocSeeds {
 		evs = append(evs, history.Event{ID: uint64(i), User: "u", Item: fmt.Sprint("i", 1+97*i), TS: int64(i)})
 	}
 	if err := store.Append(context.Background(), evs); err != nil {

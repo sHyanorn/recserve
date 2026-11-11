@@ -32,8 +32,6 @@ import (
 const (
 	MaxK          = 100
 	VectorTop     = 200 // candidates from vector retrieval
-	CoocSeeds     = 10  // most recent history items used as co-occurrence seeds
-	PopularTop    = 100 // candidates from the popularity list
 	MMRLambda     = 0.7 // weight of relevance against diversity
 	MaxRecent     = 500 // items in a request's recent list
 	SourceVector  = "vector"
@@ -692,7 +690,12 @@ func (p *Pipeline) rank(ctx context.Context, rk Ranker, scored []vec.Hit, result
 	})
 	dropped := max(0, len(cands)-bundle.RankerRows)
 	cands = cands[:len(cands)-dropped]
-	scores, err := rk.Rank(ctx, p.features(cands, results, hist, uv))
+	ids := make([]int32, len(cands))
+	for i, c := range cands {
+		ids[i] = c.ID
+	}
+	features := p.Bundle.Features(ids, hist, uv, bundle.BestScores(results[srcCooc]), bundle.BestScores(results[srcPopular]))
+	scores, err := rk.Rank(ctx, features)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -705,82 +708,26 @@ func (p *Pipeline) rank(ctx context.Context, rk Ranker, scored []vec.Hit, result
 	return cands, dropped, nil
 }
 
-// features returns the ranker's input for cands, one row per candidate,
-// bundle.RankerFeatures in order (docs/SPEC.md §8). Each value is computed
-// in float64 and rounded to float32.
-func (p *Pipeline) features(cands []vec.Hit, results [][]vec.Hit, hist []int32, uv []float32) []float32 {
-	b := p.Bundle
-	cooc, popular := best(results[srcCooc]), best(results[srcPopular])
-	var last []float32
-	var lastNorm float64
-	if len(hist) > 0 {
-		last = b.Vectors.Row(hist[len(hist)-1])
-		lastNorm = math.Sqrt(vec.Dot(last, last))
-	}
-	histLen := math.Log1p(float64(len(hist)))
-	nf := len(bundle.RankerFeatures)
-	out := make([]float32, len(cands)*nf)
-	for i, c := range cands {
-		row := b.Vectors.Row(c.ID)
-		norm := math.Sqrt(vec.Dot(row, row))
-		var vs, cos float64
-		if uv != nil {
-			vs = vec.Dot(uv, row)
-		}
-		if norm > 0 && lastNorm > 0 {
-			cos = vec.Dot(row, last) / (norm * lastNorm)
-		}
-		f := out[i*nf : (i+1)*nf]
-		f[0], f[1], f[2] = float32(vs), float32(cooc[c.ID]), float32(popular[c.ID])
-		f[3], f[4], f[5] = float32(norm), float32(cos), float32(histLen)
-	}
-	return out
-}
-
-// best returns each ID's highest score among hits.
-func best(hits []vec.Hit) map[int32]float64 {
-	out := make(map[int32]float64, len(hits))
-	for _, h := range hits {
-		if s, ok := out[h.ID]; !ok || h.Score > s {
-			out[h.ID] = h.Score
-		}
-	}
-	return out
-}
-
-// cooc returns the co-occurrence candidates: the neighbor at position r of
-// the seed s positions from the latest history item scores
-// 1 / ((s + 1)(r + 1)), as docs/SPEC.md §8 writes it.
+// cooc returns the co-occurrence candidates (bundle.CoocHits).
 func (p *Pipeline) cooc(ctx context.Context, hist []int32) ([]vec.Hit, error) {
 	if err := p.stalled(ctx, stageCooc, -1); err != nil {
 		return nil, err
 	}
-	var out []vec.Hit
-	for s := 0; s < CoocSeeds && s < len(hist); s++ {
-		for r, id := range p.Bundle.CoocRow(hist[len(hist)-1-s]) {
-			out = append(out, vec.Hit{ID: id, Score: 1 / float64((s+1)*(r+1))})
-		}
-	}
-	return out, nil
+	return p.Bundle.CoocHits(hist), nil
 }
 
-// popular returns the PopularTop most popular items, scored by rank.
+// popular returns the most popular items (bundle.PopularHits).
 func (p *Pipeline) popular(ctx context.Context) ([]vec.Hit, error) {
 	if err := p.stalled(ctx, stagePopular, -1); err != nil {
 		return nil, err
 	}
-	pop := p.Bundle.Popular[:min(PopularTop, len(p.Bundle.Popular))]
-	out := make([]vec.Hit, len(pop))
-	for r, id := range pop {
-		out[r] = vec.Hit{ID: id, Score: 1 / float64(r+1)}
-	}
-	return out, nil
+	return p.Bundle.PopularHits(), nil
 }
 
 // merge returns the union of the sources' hits, each ID once with its best
 // source score, ordered by ID.
 func merge(results [][]vec.Hit) []candidate {
-	top := best(slices.Concat(results...))
+	top := bundle.BestScores(slices.Concat(results...))
 	out := make([]candidate, 0, len(top))
 	for id, s := range top {
 		out = append(out, candidate{id, s})

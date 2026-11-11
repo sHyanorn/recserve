@@ -217,13 +217,13 @@ func TestRankerTruncates(t *testing.T) {
 	for i := 1; i <= n; i++ {
 		ids[i] = fmt.Sprint("i", i)
 	}
-	popular := make([]int32, PopularTop)
+	popular := make([]int32, bundle.PopularTop)
 	for i := range popular {
 		popular[i] = int32(n - i)
 	}
 	b := bundle.New(bundle.Manifest{ModelVersion: "t", ItemCount: n, Dim: dim, MaxSeqLen: 50}, ids, matrix(t, dim, data), cooc, popular)
 	var events []history.Event
-	for i := range CoocSeeds {
+	for i := range bundle.CoocSeeds {
 		events = append(events, history.Event{ID: uint64(i), User: "u", Item: fmt.Sprint("i", 1+97*i), TS: int64(i)})
 	}
 	store := storeWith(t, events...)
