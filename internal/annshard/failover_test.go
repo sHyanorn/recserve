@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -200,5 +201,55 @@ func TestReplicaDiesDuringSearches(t *testing.T) {
 		if !slices.Equal(got[j], want) {
 			t.Fatalf("search %d:\n got %v\nwant %v", j, got[j], want)
 		}
+	}
+}
+
+// recserve_shard_search_seconds observes every call to a replica, the
+// failed ones and those sent after a failure included, from its send until
+// it returns.
+func TestSearchLatencyObservesEveryCall(t *testing.T) {
+	const slow = 3 * time.Millisecond
+	slowSearches := func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if _, ok := req.(*annshardpb.SearchRequest); ok {
+			time.Sleep(slow)
+		}
+		return handler(ctx, req)
+	}
+	r := rand.New(rand.NewPCG(23, 23))
+	root := t.TempDir()
+	version := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2))
+	failing, healthy := annshardtest.Start(t, root, grpc.UnaryInterceptor(failSearches)), annshardtest.Start(t, root, grpc.UnaryInterceptor(slowSearches))
+	c := annshardtest.Dial(t, [][]string{{failing, healthy}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}})
+	s, err := c.Prepare(context.Background(), version, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const searches = 10
+	for range searches {
+		if _, err := s.Search(context.Background(), 0, []float32{1, 1}, 5, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	failovers := counts(t, c, "recserve_shard_failovers_total", "shard")["0"]
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(c.Collectors()...)
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls uint64
+	var sum float64
+	for _, f := range families {
+		for _, m := range f.GetMetric() {
+			if f.GetName() == "recserve_shard_search_seconds" && m.GetLabel()[0].GetValue() == "0" {
+				calls, sum = m.GetHistogram().GetSampleCount(), m.GetHistogram().GetSampleSum()
+			}
+		}
+	}
+	if failovers == 0 || calls != searches+uint64(failovers) {
+		t.Fatalf("%d calls observed, want %d searches and %.0f failovers", calls, searches, failovers)
+	}
+	if sum < searches*slow.Seconds() {
+		t.Fatalf("observed %.4f s in all, below %d answers of %v", sum, searches, slow)
 	}
 }

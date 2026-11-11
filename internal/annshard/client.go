@@ -66,6 +66,11 @@ type Options struct {
 // lacks is left alone before it is asked again.
 const catchUpWait = 5 * time.Second
 
+// callBuckets bound recserve_shard_search_seconds: every 0.25 ms up to
+// 5 ms, where a hedge delay is chosen (D041), then coarser up to the
+// retrieval budget and past it.
+var callBuckets = append(prometheus.LinearBuckets(0.00025, 0.00025, 20), 0.006, 0.008, 0.010, 0.015, 0.020, 0.030, 0.050, 0.100)
+
 // The hedge budget of a shard, in tenths of a hedge: every search earns
 // hedgeEarn, a hedge costs hedgeCost, and at most hedgeMax are kept. Over
 // n searches a shard so sends at most hedgeMax/hedgeCost + n/10 hedges.
@@ -116,6 +121,7 @@ type Client struct {
 	shards    []*group
 	hedges    *prometheus.CounterVec
 	failovers *prometheus.CounterVec
+	calls     *prometheus.HistogramVec
 
 	// Replicas that are preparing an index a search found them to lack.
 	ctx      context.Context // ends at Close
@@ -141,6 +147,7 @@ type group struct {
 	tokens int // hedge budget
 
 	hedgeWon, hedgeLost, hedgeDenied prometheus.Counter
+	calls                            prometheus.Observer
 }
 
 type replica struct {
@@ -180,6 +187,11 @@ func Dial(addrs [][]string, opt Options) (*Client, error) {
 			Name: "recserve_shard_failovers_total",
 			Help: "Shard searches sent to another replica because one failed, by shard and failed replica (its address in -shard-addrs).",
 		}, []string{"shard", "replica"}),
+		calls: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "recserve_shard_search_seconds",
+			Help:    "Calls to a shard's replicas, from the send until the call returned, whatever its result, by shard.",
+			Buckets: callBuckets,
+		}, []string{"shard"}),
 	}
 	for i, replicas := range addrs {
 		if len(replicas) == 0 {
@@ -189,7 +201,7 @@ func Dial(addrs [][]string, opt Options) (*Client, error) {
 		g := &group{
 			tokens:   hedgeMax,
 			hedgeWon: c.hedges.WithLabelValues(shard, "won"), hedgeLost: c.hedges.WithLabelValues(shard, "lost"),
-			hedgeDenied: c.hedges.WithLabelValues(shard, "denied"),
+			hedgeDenied: c.hedges.WithLabelValues(shard, "denied"), calls: c.calls.WithLabelValues(shard),
 		}
 		c.shards = append(c.shards, g)
 		for _, addr := range replicas {
@@ -260,7 +272,7 @@ func (c *Client) index(version string, i int) *annshardpb.Index {
 
 // Collectors returns the client's metrics.
 func (c *Client) Collectors() []prometheus.Collector {
-	return []prometheus.Collector{c.hedges, c.failovers}
+	return []prometheus.Collector{c.hedges, c.failovers, c.calls}
 }
 
 // Close closes the connections; calls in flight fail.
@@ -464,7 +476,9 @@ func (s *Shards) Search(ctx context.Context, i int, q []float32, k int, seen map
 		r := order[asked]
 		asked++
 		go func() {
+			start := time.Now()
 			hits, err := r.search(ctx, req, s.items)
+			g.calls.Observe(time.Since(start).Seconds())
 			if status.Code(err) == codes.FailedPrecondition {
 				s.c.catchUp(r, req.GetIndex())
 			}
