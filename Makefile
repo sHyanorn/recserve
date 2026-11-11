@@ -102,5 +102,5 @@ bench-ann: build ## ANN in docs/BENCHMARKS.md, STEP profile or table: annbench a
 bench-profile: build ## CPU profiles of the gateway and a replica under load in compose (docs/BENCHMARKS.md); DATA, VERSION
 	$(BENCH) scripts/bench-profile.sh
 
-bench-compare: build ## Before and after an optimization: BEFORE, a commit; vec's benchmark and the service at RATES (200 400); DATA, VERSION, DOCKER_BUILD_FLAGS
-	$(BENCH) DOCKER_BUILD_FLAGS="$(DOCKER_BUILD_FLAGS)" scripts/bench-compare.sh $(BEFORE)
+bench-compare: build ## Before and after an optimization: BEFORE, a commit; vec's benchmark MICRO (Dot), annbench on the glove graph ANN_GRAPH in ANN_DATA if set, the service at RATES (200 400); DATA, VERSION, DOCKER_BUILD_FLAGS, OUT
+	$(BENCH) MICRO=$(MICRO) ANN_GRAPH=$(ANN_GRAPH) ANN_DATA=$(ANN_DATA) OUT=$(OUT) DOCKER_BUILD_FLAGS="$(DOCKER_BUILD_FLAGS)" scripts/bench-compare.sh $(BEFORE)
