@@ -1,4 +1,4 @@
-"""Write the ONNX models the Go tests use, and their SHA256SUMS.
+"""Write the ONNX models and the ranker golden the Go tests use, and their SHA256SUMS.
 
 usage: testdata.py DIR   (DIR is internal/onnx/onnxtest/testdata)
 
@@ -14,17 +14,23 @@ cross_row_ranker.onnx subtracts the mean score of all rows from each, so a
 row's score depends on the others; next_row_ranker.onnx adds the next row's
 score to each, which a change of row 0 alone does not show; column_ranker.onnx outputs [C, 1];
 slow_ranker.onnx applies Sin 300 times to the features and sums each row.
-The same inputs give the same bytes.
+
+ranker_golden.jsonl is golden.jsonl for bundletest's bundle with a ranker:
+its two cases, histories [1] and [2, 5], over mean.onnx's items, item 1
+co-occurring with 3 then 2 and the popular items 3 then 1, with their
+candidates and features as build.py computes them, for the service to
+recompute. The same inputs give the same bytes.
 """
 
 import hashlib
+import json
 import os
 import sys
 
 import numpy as np
 from onnx import TensorProto, helper, numpy_helper
 
-from build import RANKER_FEATURES, linear_ranker, mean_encoder, model
+from build import RANKER_FEATURES, linear_ranker, mean_encoder, mean_vector, model, ranker_input, top_k
 
 MEAN_ITEMS = 12
 SIN_NODES = 300
@@ -97,6 +103,21 @@ def slow_ranker():
         [numpy_helper.from_array(np.array([1], dtype=np.int64), "axis1")]))
 
 
+def ranker_golden():
+    vecs = mean_vectors()
+    cooc_ids = np.zeros((MEAN_ITEMS + 1, 50), dtype=np.int64)
+    cooc_ids[1, :2] = [3, 2]
+    popular = np.array([3, 1], dtype=np.int64)
+    lines = []
+    for hist in ([1], [2, 5]):
+        uv = mean_vector(vecs, hist)
+        ids, _, x = ranker_input(vecs, cooc_ids, popular, hist, uv)
+        case = {"history": hist, "user_emb": uv.tolist(), "top10": top_k(vecs, uv, set(hist), 10),
+                "candidates": ids.tolist(), "features": x.tolist()}
+        lines.append(json.dumps(case) + "\n")
+    return "".join(lines).encode()
+
+
 def main(d):
     models = {
         "mean.onnx": mean_encoder(mean_vectors()),
@@ -108,9 +129,9 @@ def main(d):
         "column_ranker.onnx": column_ranker(),
         "slow_ranker.onnx": slow_ranker(),
     }
+    files = {name: m.SerializeToString() for name, m in models.items()} | {"ranker_golden.jsonl": ranker_golden()}
     sums = []
-    for name, m in models.items():
-        data = m.SerializeToString()
+    for name, data in files.items():
         with open(os.path.join(d, name), "wb") as f:
             f.write(data)
         sums.append(f"{hashlib.sha256(data).hexdigest()}  {name}\n")

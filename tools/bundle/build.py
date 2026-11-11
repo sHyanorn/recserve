@@ -1,6 +1,6 @@
 """Build a baseline bundle (docs/SPEC.md §8) from the Video_Games split.
 
-usage: build.py DATA OUT [--encoder mean|onnx]
+usage: build.py DATA OUT [--encoder mean|onnx] [--ranker]
 
 DATA holds the files downloaded by scripts/data.sh. Writes OUT/<version>/
 with item vectors from implicit-feedback ALS trained on the train split, a
@@ -9,7 +9,10 @@ prints the version. A user's vector is the mean of the vectors of their last
 MAX_SEQ_LEN history items. With --encoder mean (the default) the service
 computes it; with --encoder onnx the bundle carries user_encoder.onnx, a
 graph that computes the same mean, and the golden user vectors come from
-running it with ONNX Runtime.
+running it with ONNX Runtime. With --ranker the bundle also carries
+ranker.onnx, a logistic regression over the six features of SPEC §8 trained
+on the valid split (D027), and each golden case carries its candidates and
+their features, which the service recomputes.
 """
 
 import argparse
@@ -30,7 +33,10 @@ import numpy as np
 import onnx
 import onnxruntime as ort
 import scipy.sparse as sp
+import sklearn
 from onnx import TensorProto, helper, numpy_helper
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score
 
 SEED = 1  # the only source of randomness: ALS initialization and golden sampling
 DIM = 64
@@ -44,6 +50,10 @@ GOLDEN_CASES = 20
 DATASET = "amazon2023-video_games-5core-timestamp"
 OPSET, IR_VERSION = 17, 8  # IR version 8 is the one that goes with opset 17
 PARITY = 1e-5  # largest accepted difference between the ONNX encoder and the float64 mean
+# Retrieval as the service runs it (recommend.VectorTop, bundle.CoocSeeds, bundle.PopularTop).
+VECTOR_TOP, COOC_SEEDS, POPULAR_CANDIDATES = 200, 10, 100
+FEATURE_TOL = 1e-6  # largest accepted difference between the service's features and the golden's
+RANKER = {"C": 1.0, "held_out_share": 0.2}  # inverse L2 strength, and the share of users held out
 
 
 def read_split(data, name):
@@ -149,6 +159,112 @@ def check_ranker(sess, n_features):
     return None
 
 
+def source_scores(cooc_ids, popular, hist):
+    """Each item's best co-occurrence and popularity scores for hist, oldest
+    first (SPEC §8), as dicts by internal ID."""
+    cooc = {}
+    for s in range(min(COOC_SEEDS, len(hist))):
+        for r, i in enumerate(cooc_ids[hist[-1 - s]]):
+            if i == 0:
+                break
+            cooc[int(i)] = max(cooc.get(int(i), 0.0), 1 / ((s + 1) * (r + 1)))
+    pop = {}
+    for r, i in enumerate(popular[:POPULAR_CANDIDATES]):
+        pop.setdefault(int(i), 1 / (r + 1))
+    return cooc, pop
+
+
+def features(vecs, cooc, pop, hist, uv, ids):
+    """The ranker's input for the candidates ids (SPEC §8, in the order of
+    RANKER_FEATURES), computed in float64 and rounded to float32; uv is the
+    user vector or None."""
+    v = vecs[ids].astype(np.float64)
+    norm = np.sqrt((v * v).sum(axis=1))
+    out = np.zeros((len(ids), len(RANKER_FEATURES)))
+    if uv is not None:
+        out[:, 0] = v @ uv.astype(np.float64)
+    out[:, 1] = [cooc.get(int(i), 0.0) for i in ids]
+    out[:, 2] = [pop.get(int(i), 0.0) for i in ids]
+    out[:, 3] = norm
+    if len(hist):
+        last = vecs[hist[-1]].astype(np.float64)
+        last_norm = np.sqrt(last @ last)
+        ok = (norm > 0) & (last_norm > 0)
+        out[ok, 4] = (v[ok] @ last) / (norm[ok] * last_norm)
+    out[:, 5] = np.log1p(len(hist))
+    return out.astype(np.float32)
+
+
+def ranker_input(vecs, cooc_ids, popular, hist, uv):
+    """The service's ranker candidates for hist, best first, with their
+    retrieval scores and features: the union of the vector top VECTOR_TOP
+    (zero vectors left out, D028), the co-occurring and the popular items,
+    without the history's items; the RANKER_ROWS best by u · v, or without a
+    user vector by the best source score, ties to the lower ID."""
+    cooc, pop = source_scores(cooc_ids, popular, hist)
+    seen = set(hist)
+    ids = set(cooc) | set(pop)
+    if uv is not None:
+        dots = vecs.astype(np.float64) @ uv.astype(np.float64)
+        pool = np.flatnonzero(np.any(vecs != 0, axis=1) & ~np.isin(np.arange(len(vecs)), list(seen)))
+        ids |= set(pool[np.lexsort((pool, -dots[pool]))[:VECTOR_TOP]].tolist())
+    ids = np.array(sorted(ids - seen - {0}), dtype=np.int64)
+    if uv is not None:
+        score = dots[ids]
+    else:
+        score = np.array([max(cooc.get(i, 0.0), pop.get(i, 0.0)) for i in ids.tolist()])
+    order = np.lexsort((ids, -score))[:RANKER_ROWS]
+    return ids[order], score[order], features(vecs, cooc, pop, hist, uv, ids[order])
+
+
+def recall_at_10(scores, ids, relevant):
+    top = ids[np.lexsort((ids, -scores))[:10]]
+    return len(relevant & set(top.tolist())) / len(relevant)
+
+
+def train_ranker(vecs, cooc_ids, popular, seqs, valid, item_ix):
+    """Fit the ranker on the valid split: a request at each valid user's
+    first valid event, whose history is the user's train events, labels its
+    candidates 1 if the user has a valid event on them. The features read
+    only tables built from the train split, which ends before the valid
+    split starts. Users none of whose valid items are candidates teach a
+    ranker nothing and are left out. Returns the weights and bias of a
+    logistic regression on the raw features, and what it scored on the
+    users held out."""
+    relevant = defaultdict(set)
+    for user, item, _ in valid:
+        relevant[user].add(item_ix[item])
+    queries = []
+    for user in sorted(u for u in relevant if u in seqs):
+        hist = seqs[user]
+        uv = mean_vector(vecs, hist)
+        ids, retrieval, x = ranker_input(vecs, cooc_ids, popular, hist, uv if np.any(uv) else None)
+        y = np.isin(ids, list(relevant[user]))
+        if y.any():
+            queries.append((x, y, ids, retrieval, relevant[user]))
+    held = set(np.random.default_rng(SEED).choice(len(queries), size=int(len(queries) * RANKER["held_out_share"]), replace=False).tolist())
+    fit = [q for k, q in enumerate(queries) if k not in held]
+    X = np.concatenate([q[0] for q in fit]).astype(np.float64)
+    labels = np.concatenate([q[1] for q in fit])
+    # Standardized for the solver; the scaling is folded into the weights.
+    mean, std = X.mean(axis=0), X.std(axis=0)
+    std[std == 0] = 1
+    lr = LogisticRegression(C=RANKER["C"], max_iter=1000).fit((X - mean) / std, labels)
+    w = lr.coef_[0] / std
+    b = float(lr.intercept_[0] - np.sum(lr.coef_[0] * mean / std))
+    report = {"ranker": {"auc": [], "recall_at_10": []}, "retrieval": {"auc": [], "recall_at_10": []}}
+    for k in sorted(held):
+        x, y, ids, retrieval, rel = queries[k]
+        for name, scores in (("ranker", x.astype(np.float64) @ w + b), ("retrieval", retrieval)):
+            if not y.all():
+                report[name]["auc"].append(roc_auc_score(y, scores))
+            report[name]["recall_at_10"].append(recall_at_10(scores, ids, rel))
+    scores = {name: {k: round(float(np.mean(v)), 4) for k, v in r.items()} for name, r in report.items()}
+    stats = {"users": len(queries), "held_out_users": len(held), "rows": len(labels), "positives": int(labels.sum()),
+             "weights": [float(v) for v in w], "bias": b, "held_out": scores}
+    return w, b, stats
+
+
 def session(model_bytes):
     """An ONNX Runtime session with one intra-op thread, as the service runs it (D015)."""
     opts = ort.SessionOptions()
@@ -187,7 +303,7 @@ def version_of(sums):
     return hashlib.sha256("".join(f"{name}{sums[name]}" for name in sorted(sums)).encode()).hexdigest()[:12]
 
 
-def main(data, out, encoder):
+def main(data, out, encoder, ranker):
     train = read_split(data, "train")
     test = read_split(data, "test")
     valid = read_split(data, "valid")
@@ -233,6 +349,17 @@ def main(data, out, encoder):
     enc = mean_encoder(vecs).SerializeToString() if encoder == "onnx" else None
     sess = session(enc) if enc else None
 
+    rank = None
+    if ranker:
+        # The labels must come after every event the features are built from.
+        if not cutoff < min(ts for _, _, ts in valid):
+            sys.exit("the valid split must start after the train split")
+        w, b, ranker_stats = train_ranker(vecs, cooc_ids, popular, seqs, valid, item_ix)
+        rank = linear_ranker(w, b).SerializeToString()
+        if msg := check_ranker(session(rank), len(RANKER_FEATURES)):
+            sys.exit(f"ranker: {msg}")
+        cutoff = max(ts for _, _, ts in valid)  # the labels' events were used in training too
+
     rng = np.random.default_rng(SEED)
     test_users = sorted({u for u, _, _ in test if u in seqs})
     golden = []
@@ -248,7 +375,11 @@ def main(data, out, encoder):
             if not np.isfinite(got).all() or not diff <= PARITY:
                 sys.exit(f"user encoder differs from the mean by {diff} for user {u}")
             uv = got
-        golden.append({"history": hist, "user_emb": uv.tolist(), "top10": top_k(vecs, uv, set(hist), 10)})
+        case = {"history": hist, "user_emb": uv.tolist(), "top10": top_k(vecs, uv, set(hist), 10)}
+        if rank:
+            ids, _, x = ranker_input(vecs, cooc_ids, popular, hist, uv if np.any(uv) else None)
+            case |= {"candidates": ids.tolist(), "features": x.tolist()}
+        golden.append(case)
 
     os.makedirs(out, exist_ok=True)
     d = tempfile.mkdtemp(dir=out)
@@ -261,6 +392,9 @@ def main(data, out, encoder):
     if enc:
         with open(f"{d}/user_encoder.onnx", "wb") as f:
             f.write(enc)
+    if rank:
+        with open(f"{d}/ranker.onnx", "wb") as f:
+            f.write(rank)
     with open(f"{d}/golden.jsonl", "w") as f:
         f.writelines(json.dumps(g, allow_nan=False) + "\n" for g in golden)
     files = sorted(os.listdir(d))
@@ -270,6 +404,8 @@ def main(data, out, encoder):
     build = {"seed": SEED, "als": ALS, "implicit": implicit.__version__, "cooc_window": COOC_WINDOW, "popular_days": POPULAR_DAYS}
     if enc:
         build["user_encoder"] = {"graph": "mean", "opset": OPSET, "onnx": onnx.__version__, "onnxruntime": ort.__version__}
+    if rank:
+        build["ranker"] = {"model": "logistic_regression", "scikit_learn": sklearn.__version__, **RANKER, **ranker_stats}
     manifest = {
         "format_version": 1,
         "model_version": version,
@@ -282,6 +418,7 @@ def main(data, out, encoder):
         "max_seq_len": MAX_SEQ_LEN,
         "pad_id": 0,
         "user_encoder": encoder,
+        **({"ranker_features": RANKER_FEATURES} if rank else {}),
         "build": build,
         "sha256": sums,
     }
@@ -300,5 +437,6 @@ if __name__ == "__main__":
     p.add_argument("data")
     p.add_argument("out")
     p.add_argument("--encoder", choices=["mean", "onnx"], default="mean")
+    p.add_argument("--ranker", action="store_true", help="train and add a logistic-regression ranker")
     a = p.parse_args()
-    main(a.data, a.out, a.encoder)
+    main(a.data, a.out, a.encoder, a.ranker)

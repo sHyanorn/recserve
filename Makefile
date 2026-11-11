@@ -37,8 +37,8 @@ proto: ## Lint the proto files and regenerate their Go code (needs buf v1.75.0)
 data: ## Download the Amazon 2023 Video_Games split and metadata into DATA
 	scripts/data.sh $(DATA)
 
-bundle: ## Build the baseline bundle into DATA/bundle (needs uv); ENCODER=onnx adds user_encoder.onnx
-	cd tools/bundle && uv run --locked python build.py $(abspath $(DATA)) $(abspath $(DATA))/bundle --encoder $(ENCODER)
+bundle: ## Build the baseline bundle into DATA/bundle (needs uv); ENCODER=onnx adds user_encoder.onnx, RANKER=1 a trained ranker.onnx
+	cd tools/bundle && uv run --locked python build.py $(abspath $(DATA)) $(abspath $(DATA))/bundle --encoder $(ENCODER) $(if $(RANKER),--ranker)
 
 images: ## Build the gateway, annshard and ingest images as recserve/<name>:TAG; DOCKER_BUILD_FLAGS adds docker build flags
 	for t in gateway annshard ingest; do docker build $(DOCKER_BUILD_FLAGS) --target $$t -t recserve/$$t:$(TAG) . || exit 1; done

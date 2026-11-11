@@ -6,7 +6,9 @@ Recomputes every golden case from the files on disk with the same rules the
 service uses (user vector from the last max_seq_len history items, by mean
 or by user_encoder.onnx; exact dot product; history excluded; ties by
 internal ID) and exits non-zero on any mismatch. A ranker must declare the
-service's ranker_features and pass its load check (build.check_ranker).
+service's ranker_features and pass its load check (build.check_ranker), and
+then every golden case must give the features of its candidates, which are
+recomputed from the case's history and user vector (build.features).
 """
 
 import json
@@ -15,7 +17,8 @@ import sys
 
 import numpy as np
 
-from build import RANKER_FEATURES, check_ranker, encode, mean_vector, session, sha256, top_k, version_of
+from build import (FEATURE_TOL, RANKER_FEATURES, check_ranker, encode, features, mean_vector, session, sha256,
+                   source_scores, top_k, version_of)
 
 TOL = 1e-4
 # Read only when the manifest lists them; one on disk that it does not list
@@ -77,6 +80,8 @@ def main(d):
         sys.exit("ranker_features without ranker.onnx")
     with open(f"{d}/golden.jsonl") as f:
         cases = [json.loads(line, parse_constant=reject) for line in f]
+    cooc_ids = np.load(f"{d}/cooc_ids.npy") if "cooc_ids.npy" in m["sha256"] else np.zeros((len(vecs), 1), np.int64)
+    popular = np.load(f"{d}/popular.npy") if "popular.npy" in m["sha256"] else np.zeros(0, np.int64)
     for n, c in enumerate(cases):
         if not c["history"] or min(c["history"]) < 1 or max(c["history"]) > m["item_count"]:
             sys.exit(f"golden {n}: history IDs out of range")
@@ -91,6 +96,18 @@ def main(d):
             sys.exit(f"golden {n}: user vector differs by {diff}")
         if top_k(vecs, uv, set(c["history"]), 10) != c["top10"]:
             sys.exit(f"golden {n}: top-10 differs")
+        if ("candidates" in c or "features" in c) != ("ranker.onnx" in m["sha256"]):
+            sys.exit(f"golden {n}: candidates and features go with a ranker, and only with one")
+        if "ranker.onnx" in m["sha256"]:
+            cands = np.array(c["candidates"], dtype=np.int64)
+            want = np.array(c["features"], dtype=np.float32)
+            if not len(cands) or cands.min() < 1 or cands.max() > m["item_count"] or want.shape != (len(cands), len(RANKER_FEATURES)):
+                sys.exit(f"golden {n}: candidates out of range, or features of the wrong shape")
+            uv_case = np.array(c["user_emb"], dtype=np.float32)
+            got = features(vecs, *source_scores(cooc_ids, popular, c["history"]), c["history"], uv_case, cands)
+            diff = float(np.max(np.abs(got.astype(np.float64) - want)))
+            if not diff <= FEATURE_TOL:
+                sys.exit(f"golden {n}: features differ by {diff}")
     ranker = "yes" if "ranker.onnx" in m["sha256"] else "no"
     print(f"ok: {len(cases)} golden cases, {len(ids)} items, user encoder {m['user_encoder']}, ranker {ranker}")
 

@@ -391,7 +391,15 @@ type goldenCase struct {
 	History []int32   `json:"history"`
 	UserEmb []float32 `json:"user_emb"`
 	Top10   []int32   `json:"top10"`
+	// With a ranker: the case's candidates and their features, one row
+	// each, as the bundle's trainer computed them.
+	Candidates []int32     `json:"candidates,omitempty"`
+	Features   [][]float32 `json:"features,omitempty"`
 }
+
+// FeatureTolerance bounds the difference between a golden case's features
+// and the service's: rounding to float32 only.
+const FeatureTolerance = 1e-6
 
 func (b *Bundle) checkGolden(data []byte) error {
 	sc := bufio.NewScanner(bytes.NewReader(data))
@@ -436,6 +444,9 @@ func (b *Bundle) checkGolden(data []byte) error {
 		if !slices.Equal(got, c.Top10) {
 			return fmt.Errorf("golden %d: top-10 %v, want %v", n, got, c.Top10)
 		}
+		if err := b.checkFeatures(c); err != nil {
+			return fmt.Errorf("golden %d: %w", n, err)
+		}
 		n++
 	}
 	if err := sc.Err(); err != nil {
@@ -443,6 +454,40 @@ func (b *Bundle) checkGolden(data []byte) error {
 	}
 	if n == 0 {
 		return errors.New("golden.jsonl has no cases")
+	}
+	return nil
+}
+
+// checkFeatures requires a bundle with a ranker to compute the features its
+// trainer gave for a golden case's candidates, within FeatureTolerance,
+// from the case's history and user vector: a ranker trained on features
+// that the service computes otherwise would rank by others.
+func (b *Bundle) checkFeatures(c goldenCase) error {
+	if b.Ranker == nil {
+		if c.Candidates != nil || c.Features != nil {
+			return errors.New("candidates without a ranker")
+		}
+		return nil
+	}
+	if len(c.Candidates) == 0 || len(c.Features) != len(c.Candidates) {
+		return errors.New("a bundle with a ranker needs candidates and their features")
+	}
+	for _, id := range c.Candidates {
+		if id <= 0 || int(id) > b.ItemCount {
+			return fmt.Errorf("candidate ID %d out of range", id)
+		}
+	}
+	got := b.Features(c.Candidates, c.History, c.UserEmb, BestScores(b.CoocHits(c.History)), BestScores(b.PopularHits()))
+	nf := len(RankerFeatures)
+	for i, row := range c.Features {
+		if len(row) != nf {
+			return fmt.Errorf("candidate %d has %d features, want %d", c.Candidates[i], len(row), nf)
+		}
+		for j, want := range row {
+			if d := math.Abs(float64(got[i*nf+j]) - float64(want)); !(d <= FeatureTolerance) {
+				return fmt.Errorf("feature %s of candidate %d differs by %g", RankerFeatures[j], c.Candidates[i], d)
+			}
+		}
 	}
 	return nil
 }

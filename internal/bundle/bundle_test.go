@@ -242,12 +242,29 @@ func TestLoadRejectsONNX(t *testing.T) {
 }
 
 // withRanker adds the named test model as the bundle's ranker, with the
-// service's ranker_features.
+// service's ranker_features and golden cases that carry the features of
+// their candidates as tools/bundle computes them (ranker_golden.jsonl).
 func withRanker(t testing.TB, model string) editFunc {
-	data := onnxtest.Model(t, model)
+	data, golden := onnxtest.Model(t, model), onnxtest.Model(t, "ranker_golden.jsonl")
 	return func(f map[string][]byte, m map[string]any) {
-		f["ranker.onnx"] = data
+		f["ranker.onnx"], f["golden.jsonl"] = data, golden
 		m["ranker_features"] = RankerFeatures
+	}
+}
+
+// editCases applies edit to every golden case, decoded as JSON.
+func editCases(t testing.TB, edit func(c map[string]any)) editFunc {
+	return func(f map[string][]byte, _ map[string]any) {
+		var out []byte
+		for line := range bytes.Lines(f["golden.jsonl"]) {
+			var c map[string]any
+			if err := json.Unmarshal(line, &c); err != nil {
+				t.Fatal(err)
+			}
+			edit(c)
+			out = append(append(out, marshal(t, c)...), '\n')
+		}
+		f["golden.jsonl"] = out
 	}
 }
 
@@ -288,8 +305,21 @@ func TestLoadRejectsRanker(t *testing.T) {
 		"features alone":     {[]editFunc{features(RankerFeatures)}, "ranker_features without ranker.onnx"},
 		"rows mixed":         {[]editFunc{withRanker(t, "cross_row_ranker.onnx")}, "changes with rows [0]"},
 		"next row added":     {[]editFunc{withRanker(t, "next_row_ranker.onnx")}, "changes with rows [1 256 511]"},
-		"column output":      {[]editFunc{withRanker(t, "column_ranker.onnx")}, "Invalid rank for output: score"},
-		"other model":        {[]editFunc{withRanker(t, "mean.onnx")}, "Invalid input name: features"},
+		// Python's features of a case, and the service's, may differ by
+		// rounding only.
+		"feature off": {[]editFunc{withRanker(t, "linear_ranker.onnx"), editCases(t, func(c map[string]any) {
+			row := c["features"].([]any)[1].([]any)
+			row[5] = row[5].(float64) + 2e-6
+		})}, "feature log_history_len of candidate 7 differs by"},
+		"no features": {[]editFunc{withRanker(t, "linear_ranker.onnx"), editCases(t, func(c map[string]any) {
+			delete(c, "features")
+		})}, "needs candidates and their features"},
+		"features without a ranker": {[]editFunc{withRanker(t, "linear_ranker.onnx"), func(f map[string][]byte, m map[string]any) {
+			delete(f, "ranker.onnx")
+			delete(m, "ranker_features")
+		}}, "candidates without a ranker"},
+		"column output": {[]editFunc{withRanker(t, "column_ranker.onnx")}, "Invalid rank for output: score"},
+		"other model":   {[]editFunc{withRanker(t, "mean.onnx")}, "Invalid input name: features"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
