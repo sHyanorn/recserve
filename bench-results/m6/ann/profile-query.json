@@ -1,0 +1,57 @@
+{
+  "env": {
+    "commit": "9a75fd5e0ecafa55562dfcd287ae8619c90e1968",
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "cpu_affinity": "0,1,2,3",
+    "cpu_flags": "sse4_2 avx avx2 fma avx512f avx512_vnni avx512_bf16 amx_tile amx_bf16 amx_int8",
+    "date": "2026-11-11T20:16:08Z",
+    "executable_sha256": "a503aef68a24fd498f6bee71584b0e990f025a7b3d5fcca830c56d5d77bbdb7c",
+    "go": "go1.27.3",
+    "gomaxprocs": "4",
+    "kernel": "6.18.44-fc-v378",
+    "memory": "16472084 kB",
+    "noisebase": "bin/noisebase",
+    "noisebase_sha256": "e2d00feed5edc437294e34fca32e4a81e795bd1c8b1b050c0818e7e66a90176d",
+    "numcpu": "4",
+    "uncommitted_changes": "false"
+  },
+  "set": "glove",
+  "nodes": 1183514,
+  "queries": 10000,
+  "M": 16,
+  "ef_construction": 200,
+  "heap_objects_mib": 619.0393295288086,
+  "unreachable_layer0": 29,
+  "points": [
+    {
+      "index": "recserve/hnsw",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 400,
+      "k": 100,
+      "recall": 0.8423379999999757,
+      "latency": {
+        "n": 10000,
+        "p50_us": 2855.858,
+        "p90_us": 3567.91,
+        "p99_us": 4327.14,
+        "p999_us": 5769.009,
+        "max_us": 7801.059
+      },
+      "qps": 355.6757540172787,
+      "gc": {
+        "num_gc": 0,
+        "pauses": 0,
+        "max_pause_lower_ms": 0,
+        "max_pause_upper_ms": 0
+      },
+      "noise": {
+        "reference_ns": 779904.8075,
+        "before_ns": 762234.2925,
+        "after_ns": 776722.49,
+        "attempt": 1,
+        "noisy": false
+      }
+    }
+  ]
+}

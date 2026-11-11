@@ -27,26 +27,6 @@ func (m Matrix) Rows() int { return len(m.Data) / m.Dim }
 // Row returns row i.
 func (m Matrix) Row(i int32) []float32 { return m.Data[int(i)*m.Dim : (int(i)+1)*m.Dim] }
 
-// Dot32 is the inner product in float32, over four independent partial
-// sums: about twice as fast as Dot, with float32 rounding. len(b) must be
-// at least len(a).
-func Dot32(a, b []float32) float32 {
-	b = b[:len(a)]
-	var s0, s1, s2, s3 float32
-	i := 0
-	for ; i+4 <= len(a); i += 4 {
-		x, y := a[i:i+4:i+4], b[i:i+4:i+4]
-		s0 += x[0] * y[0]
-		s1 += x[1] * y[1]
-		s2 += x[2] * y[2]
-		s3 += x[3] * y[3]
-	}
-	for ; i < len(a); i++ {
-		s0 += a[i] * b[i]
-	}
-	return (s0 + s1) + (s2 + s3)
-}
-
 // InvNorms returns 1 / the Euclidean norm of every row, 0 for a zero row.
 func (m Matrix) InvNorms() []float32 {
 	out := make([]float32, m.Rows())

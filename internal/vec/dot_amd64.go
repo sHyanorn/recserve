@@ -8,3 +8,8 @@ var useAVX2 = cpu.X86.HasAVX2 && cpu.X86.HasFMA
 //
 //go:noescape
 func dotAVX2(a, b []float32) float64
+
+// dot32AVX2 is dot32Go in AVX; len(b) == len(a).
+//
+//go:noescape
+func dot32AVX2(a, b []float32) float32

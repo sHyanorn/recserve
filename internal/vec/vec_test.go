@@ -1,7 +1,6 @@
 package vec
 
 import (
-	"math"
 	"math/rand/v2"
 	"slices"
 	"testing"
@@ -37,26 +36,6 @@ func TestTopKMatchesSort(t *testing.T) {
 		want := all[:min(k, len(all))]
 		if got := m.TopK(q, k, skip); len(got)+len(want) > 0 && !slices.Equal(got, want) {
 			t.Fatalf("trial %d k=%d: got %v want %v", trial, k, got, want)
-		}
-	}
-}
-
-func TestDot32(t *testing.T) {
-	r := rand.New(rand.NewPCG(5, 6))
-	for n := range 40 {
-		a, b := make([]float32, n), make([]float32, n+3) // b may be longer
-		for i := range b {
-			b[i] = float32(r.NormFloat64())
-			if i < n {
-				a[i] = float32(r.NormFloat64())
-			}
-		}
-		want, scale := Dot(a, b), 0.0
-		for i, v := range a {
-			scale += math.Abs(float64(v) * float64(b[i]))
-		}
-		if got := float64(Dot32(a, b)); math.Abs(got-want) > 1e-6*scale {
-			t.Fatalf("n=%d: Dot32 %g, Dot %g", n, got, want)
 		}
 	}
 }

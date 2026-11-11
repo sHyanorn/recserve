@@ -135,3 +135,119 @@ func floats(b []byte) []float32 {
 	}
 	return out
 }
+
+// thirtyTwoLanes is the definition Dot32 follows (docs/DECISIONS.md D055),
+// written out element by element: each product is rounded to float32;
+// element k of each full block of 32 goes to partial sum k mod 32, those of
+// a last block of 8 to sums 0 to 7; the sums are added as
+// (s_l + s_8+l) + (s_16+l + s_24+l) for each lane l, the lanes as
+// ((l0 + l4) + (l2 + l6)) + ((l1 + l5) + (l3 + l7)), and the last elements
+// one at a time.
+func thirtyTwoLanes(a, b []float32) float32 {
+	var s [32]float32
+	n32 := len(a) / 32 * 32
+	n8 := len(a) / 8 * 8
+	for k := range n8 {
+		lane := k % 32
+		if k >= n32 {
+			lane = k % 8
+		}
+		s[lane] += float32(a[k] * b[k])
+	}
+	var l [8]float32
+	for i := range l {
+		l[i] = (s[i] + s[8+i]) + (s[16+i] + s[24+i])
+	}
+	sum := ((l[0] + l[4]) + (l[2] + l[6])) + ((l[1] + l[5]) + (l[3] + l[7]))
+	for k := n8; k < len(a); k++ {
+		sum += float32(a[k] * b[k])
+	}
+	return sum
+}
+
+// Dot32, the Go code and the assembly (where the CPU runs it) all follow
+// the definition to the bit.
+func TestDot32SumsInThirtyTwoLanes(t *testing.T) {
+	r := rand.New(rand.NewPCG(6, 6))
+	for n := range 301 {
+		for range 20 {
+			a, b := randomVector(r, n), randomVector(r, n+r.IntN(3))
+			want := thirtyTwoLanes(a, b)
+			for name, dot := range implementations32() {
+				if got := dot(a, b); math.Float32bits(got) != math.Float32bits(want) {
+					t.Fatalf("n %d: %s %v, want %v", n, name, got, want)
+				}
+			}
+		}
+	}
+}
+
+func implementations32() map[string]func(a, b []float32) float32 {
+	m := map[string]func(a, b []float32) float32{"Dot32": Dot32, "Go": dot32Go}
+	if useAVX2 {
+		m["AVX2"] = func(a, b []float32) float32 { return dot32AVX2(a, b[:len(a)]) }
+	}
+	return m
+}
+
+func TestDot32SpecialValues(t *testing.T) {
+	inf, nan := float32(math.Inf(1)), float32(math.NaN())
+	cases := []struct {
+		a, b []float32
+		want float32
+	}{
+		{nil, nil, 0},
+		{[]float32{math.MaxFloat32}, []float32{2}, inf},
+		{[]float32{math.SmallestNonzeroFloat32}, []float32{0.5}, 0},
+		{[]float32{inf, 1}, []float32{1, 1}, inf},
+		{[]float32{inf, -inf}, []float32{1, 1}, nan},
+		{[]float32{nan, 1, 2, 3, 4, 5, 6, 7, 8}, []float32{1, 1, 1, 1, 1, 1, 1, 1, 1}, nan},
+	}
+	for i, c := range cases {
+		for name, dot := range implementations32() {
+			got := dot(c.a, c.b)
+			if !(got == c.want || isNaN32(got) && isNaN32(c.want)) {
+				t.Errorf("case %d: %s %v, want %v", i, name, got, c.want)
+			}
+		}
+	}
+}
+
+func isNaN32(v float32) bool { return v != v }
+
+// The result is within the usual bound of a float32 inner product of n
+// terms: γ_n = n u / (1 - n u), u = 2^-24, times the sum of the products'
+// magnitudes.
+func TestDot32Accuracy(t *testing.T) {
+	r := rand.New(rand.NewPCG(10, 10))
+	for range 200 {
+		n := r.IntN(300)
+		a, b := randomVector(r, n), randomVector(r, n)
+		exact, magnitude := new(big.Float).SetPrec(2000), 0.0
+		for i := range a {
+			p := float64(a[i]) * float64(b[i])
+			exact.Add(exact, big.NewFloat(p))
+			magnitude += math.Abs(p)
+		}
+		want, _ := exact.Float64()
+		nu := float64(n) * 0x1p-24
+		if diff := math.Abs(float64(Dot32(a, b)) - want); diff > nu/(1-nu)*magnitude {
+			t.Fatalf("n %d: off by %g, bound %g", n, diff, nu/(1-nu)*magnitude)
+		}
+	}
+}
+
+func FuzzDot32(f *testing.F) {
+	f.Add([]byte{0, 0, 128, 63, 0, 0, 0, 64}, []byte{0, 0, 64, 64, 0, 0, 128, 64})
+	f.Fuzz(func(t *testing.T, x, y []byte) {
+		a, b := floats(x), floats(y)
+		n := min(len(a), len(b))
+		a, b = a[:n], b[:n]
+		want := thirtyTwoLanes(a, b)
+		for name, dot := range implementations32() {
+			if got := dot(a, b); math.Float32bits(got) != math.Float32bits(want) && !(isNaN32(got) && isNaN32(want)) {
+				t.Fatalf("%s %v, want %v", name, got, want)
+			}
+		}
+	})
+}

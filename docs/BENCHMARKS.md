@@ -417,6 +417,8 @@ The sweeps ran on another VM of the same kind: Intel Xeon @ 2.30GHz, 4 vCPU, 15.
 
 The fault runs and those after them ran on a third: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, the same kernel, Go and Docker, with the images rebuilt from the code of the sweeps' last commit, whose history budget is 5 ms. Its reference is 887,645 ns (`bench-results/m6/noise-reference-3.json`, ten runs from 839,028 to 949,394 ns, on an idle machine).
 
+The ANN runs and the comparison for `vec.Dot32` ran on a fourth: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, the same kernel, Go and Docker. Its reference is 779,905 ns (`bench-results/m6/noise-reference.json`, ten runs from 745,013 to 845,862 ns, on an idle machine). Figures from different VMs are not compared with one another.
+
 #### Kafka's health check
 
 An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute readings: its health check started a JVM every 2 s. Checked every 2 s only until healthy and every 10 minutes after, it used 24 ms (Environment record, D039). The profile run below was first taken with the old check, unrecorded: p99 was 10.97 ms there against 6.41 ms with the new one.
@@ -514,3 +516,6 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 - No error in any phase of the three runs. At most 0.133% of a phase's responses are degraded: one `vector_timeout` while the gateways rolled in run 1, one `shards_partial` while the replicas rolled in run 2, and one of each during the swap in run 3.
 - p99 by phase, over the three runs: before 3.80 to 4.71 ms, the gateways' rollout 7.68 to 9.91, the replicas' 5.87 to 6.13, the swap 7.09 to 8.84, after 5.12 to 5.23; the largest single response took 26.77 ms, during the replicas' rollout in run 2.
 
+#### annbench's profile on glove: `vec.Dot32` first
+
+`make bench-ann STEP=profile PY=...` (`ann/`, `profile-annbench.txt`), on the fourth VM: a glove graph with M = 16 and efConstruction 200, built with 4 goroutines in 434 s, then annbench's query at ef 400, k 100 under a CPU profile. Recall@100 is 0.8423 (M2: 0.8422) and p99 4.33 ms. `vec.Dot32` holds 75.7% of the samples flat, `hnsw.searchLayer` 12.5% and `hnsw.neighbors` 5.5%. `vec.Dot32` is first, so it gets the SIMD that TASKS made conditional on this (D055).

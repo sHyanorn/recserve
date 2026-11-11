@@ -2,8 +2,9 @@
 # ANN of docs/BENCHMARKS.md (ANN in M6, and annbench's profile in Profiles
 # and an optimization):
 #   scripts/bench-ann.sh profile|table
-# profile: glove's M = 16 graph, then annbench's query at ef 400, k 100 with
-#   a CPU profile; its top functions go to OUT/profile-annbench.txt.
+# profile: a glove M = 16 graph of its own, then annbench's query at ef 400,
+#   k 100 with a CPU profile; its top functions go to
+#   OUT/profile-annbench.txt. The graph stays for make bench-compare's runs.
 # table: annbench as in M2, one thread, recall@100 and p99 at ef 120, 200,
 #   400 and 800, on synth with M = 16, glove with M = 16 and 32, and glove
 #   with M = 32 on two shards; faiss on the same sets and settings.
@@ -27,10 +28,10 @@ if [[ ! -s $ANN_DATA/glove_gt.i32 ]]; then
 fi
 ann() { bin/annbench -data "$ANN_DATA" -noise bin/noisebase -ref "$REF" "$@"; }
 
-# graph SET M EFC: the graph, built once with 4 goroutines.
+# graph NAME SET M EFC: the graph NAME, built once with 4 goroutines.
 graph() {
-	local g=$ANN_DATA/graphs/$1-M$2.bin
-	[[ -s $g ]] || ann -mode build -set "$1" -M "$2" -efc "$3" -workers 4 -graph "$g" -out "$OUT/$1-M$2-build.json"
+	local g=$ANN_DATA/graphs/$1.bin
+	[[ -s $g ]] || ann -mode build -set "$2" -M "$3" -efc "$4" -workers 4 -graph "$g" -out "$OUT/$1-build.json"
 }
 
 # query SET M: recall and latency on the graph.
@@ -51,9 +52,9 @@ faiss() {
 
 case $STEP in
 profile)
-	graph glove 16 200
+	graph profile-glove-M16 glove 16 200
 	if [[ ! -s $OUT/profile-annbench.txt ]]; then
-		ann -mode query -set glove -graph "$ANN_DATA/graphs/glove-M16.bin" -ef 400 -k 100 -cpuprofile "$OUT/raw/annbench.pprof" -out "$OUT/profile-query.json"
+		ann -mode query -set glove -graph "$ANN_DATA/graphs/profile-glove-M16.bin" -ef 400 -k 100 -cpuprofile "$OUT/raw/annbench.pprof" -out "$OUT/profile-query.json"
 		go tool pprof -top -nodecount=25 "$OUT/raw/annbench.pprof" 2>/dev/null >"$OUT/profile-annbench.txt"
 	fi
 	;;
@@ -62,9 +63,9 @@ table)
 	for s in synth glove; do
 		[[ -s $OUT/$s-checkgt.json ]] || ann -mode checkgt -set "$s" -out "$OUT/$s-checkgt.json"
 	done
-	graph synth 16 200 && query synth 16
-	graph glove 16 200 && query glove 16
-	graph glove 32 400 && query glove 32
+	graph synth-M16 synth 16 200 && query synth 16
+	graph glove-M16 glove 16 200 && query glove 16
+	graph glove-M32 glove 32 400 && query glove 32
 	[[ -s $OUT/glove-M32-2shards.json ]] || ann -mode shards -set glove -M 32 -efc 400 -shards 2 -graph "$ANN_DATA/graphs/glove-M32-2shards.bin" \
 		-ef "$EFS" -k 100 -out "$OUT/glove-M32-2shards.json"
 	faiss synth 16 200
