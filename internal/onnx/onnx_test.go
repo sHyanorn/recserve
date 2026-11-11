@@ -286,3 +286,19 @@ func TestRunTerminates(t *testing.T) {
 		t.Fatalf("run after a terminated one: %v", err)
 	}
 }
+
+// A run that ONNX Runtime ends for the terminate flag ended with its
+// context; any other error of a run during which the context ended is the
+// run's own, since reporting it as a timeout would hide a failing model.
+func TestRunErrorOfEndedContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	terminated := errors.New("Error running network: Exiting due to terminate flag being set to true.")
+	if err := runError(ctx, terminated); !errors.Is(err, context.Canceled) {
+		t.Errorf("terminated run: %v, want it to wrap context.Canceled", err)
+	}
+	failed := errors.New("Error running network: Non-zero status code returned while running Reshape node.")
+	if err := runError(ctx, failed); errors.Is(err, context.Canceled) || !errors.Is(err, failed) {
+		t.Errorf("failed run: %v, want the run's error alone", err)
+	}
+}

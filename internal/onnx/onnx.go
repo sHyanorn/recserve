@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 
 	ort "github.com/yalue/onnxruntime_go"
@@ -78,7 +79,7 @@ func (c *call) destroy() error {
 }
 
 // run runs sess on c's tensors. If ctx ends first, the run is terminated
-// through c's run options and the error wraps ctx.Err(). reusable is false
+// through c's run options and the error wraps ctx.Err() (runError). reusable is false
 // when the terminate flag could not be set or cleared, so c must be
 // destroyed.
 func run(ctx context.Context, sess *ort.DynamicAdvancedSession, c *call) (reusable bool, err error) {
@@ -105,10 +106,21 @@ func run(ctx context.Context, sess *ort.DynamicAdvancedSession, c *call) (reusab
 	if uerr := c.opts.UnsetTerminate(); uerr != nil {
 		return false, errors.Join(fmt.Errorf("unset terminate: %w", uerr), err)
 	}
-	if err != nil {
-		err = fmt.Errorf("%w: %w", ctx.Err(), err)
+	return true, runError(ctx, err)
+}
+
+// terminatedMessage is how ONNX Runtime reports a run ended by the
+// terminate flag; it gives no code that would tell it apart.
+const terminatedMessage = "Exiting due to terminate flag being set to true"
+
+// runError returns the error of a run during which ctx ended: ctx's end if
+// ONNX Runtime terminated the run for it, else the run's own error, which
+// may have come just before the flag was set.
+func runError(ctx context.Context, err error) error {
+	if err != nil && strings.Contains(err.Error(), terminatedMessage) {
+		return fmt.Errorf("%w: %w", ctx.Err(), err)
 	}
-	return true, err
+	return err
 }
 
 // release returns c to free, or destroys it if it is not reusable. A
