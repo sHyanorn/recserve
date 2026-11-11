@@ -133,6 +133,30 @@ The share of degraded responses is reported per run, and runs above 1% are marke
 
 **Cross-check.** One rate is also driven by vegeta at the same constant rate, and the two p99 values are reported side by side.
 
+### Additions for M6 (D052)
+
+Fixed before the first M6 run.
+
+**Setup.** `deploy/bench.compose.yaml` over `deploy/compose.yaml`: the gateway, two shards of two annshard replicas, Valkey, Kafka and ingest, on the bundle with every stage, b7ff0634dd7b (`make bundle ENCODER=onnx RANKER=1`). The containers run on CPUs 1 to 3 (`cpuset`); loadgen runs on CPU 0 and sends to the gateway's address on the compose network, not through the published port; the noise baseline runs on CPU 1. Tracing is off (the OTLP variables are empty), the exposure log is off, and Prometheus, Grafana and Jaeger do not run: the scripts read the services' `/metrics` themselves. The gateway has compose's flags, `-cache-size 0` when the cache is off, and no admission limits. Before each run Valkey is emptied, and ingest, the replicas and the gateway are recreated; the gateway preloads the train and valid splits, as in compose, and the run starts once it is ready.
+
+**Scenarios.** Three workloads, each with the cache on and off:
+
+- replay: the test split in time order, as above;
+- writes: replay with 10% of the requests writing their event to `/v1/events` instead;
+- repeats: replay in which each request, with probability 0.3, is replaced by a copy of one of the 1 to 1,000 requests before it, drawn uniformly with a fixed seed. Without writes a copy has the same history, so the same cache key. 0.3 is a chosen value; no traffic it could be taken from exists.
+
+The headline sweep is replay with the cache off. The other five scenarios run the rates of its grid, without the bisection, and stop by the same rule.
+
+**Bisection.** After the grid of the headline sweep, the rate halfway between the highest grid rate that meets the headline condition and the next grid rate, rounded to a multiple of 50, runs three times, and the half that holds the boundary is kept, until the two rates are 50 apart. The headline is the lower one. If 100 requests/s does not meet the condition, 50 runs as well and the result says so.
+
+**Also reported, per rate.** Each container's CPU time over the measured window (its cgroup's counter) per request answered. The share of recommend requests whose history read or cache call ran past `-budget-history`: `history_unavailable` in `recserve_degraded_total` plus `error` in `recserve_cache_lookups_total`, over the recommend requests. In the writes scenario, the latency of `/v1/events` apart from that of `/v1/recommend`.
+
+**Capacity and admission limits (D050).** c is the gateway's CPU time per request at the headline rate. A gateway's capacity with the 2 CPUs of its kind limit is estimated as 2/c requests/s: an estimate from one measured quantity, since here the gateway shares three CPUs with the rest of the service. `-max-rate` in kind becomes 80% of it, rounded down to a multiple of 50, and `-max-inflight` 2 × `-max-rate` × 50 ms, rounded up to a multiple of 8.
+
+**History budget (D039).** In the replay sweep with the cache on, if the share past the budget is at most 1% at every rate up to the headline, the 3 ms budget stays, the per-user history version is not built and D039 is closed. Otherwise the headline rate runs three more times with `-budget-history` 5 ms, then 8 ms, and SPEC §5 takes the smallest that brings the share to at most 1% in all three runs; if neither does, the budget is recorded as not met at the headline and stays.
+
+**Cross-check.** vegeta drives half the headline rate, three runs.
+
 ## Valkey path (M3, D039)
 
 Two checks of the gateway with its histories and result cache on Valkey, fixed here before either was run. The second is an interim figure for M3: the sweep and the headline stay with M6.
@@ -156,7 +180,7 @@ Two checks of the gateway with its histories and result cache on Valkey, fixed h
 
 ## Fault injection under load
 
-Faults (D021), each in its own run: one shard replica killed; 50 ms of added latency on every connection to one shard; Valkey unavailable; the ingest consumer paused, with `/v1/events` writes at 10% of requests.
+Faults (D021), each in its own run: one shard replica killed; 50 ms of added latency on every connection to one shard; Valkey unavailable; the ingest consumer paused, with `/v1/events` writes at 10% of requests; and, from D041, a replica that goes silent with its connection up and one that answers keepalive pings while its searches hang.
 
 **Run.** One rate: half the headline rate of the cache-off sweep. 30 s warmup, 60 s healthy, 60 s with the fault, then the fault is removed and the run continues for 120 s. Three runs per fault. Noise baseline before and after.
 
@@ -169,6 +193,72 @@ Faults (D021), each in its own run: one shard replica killed; 50 ms of added lat
 - consumer pause only: consumer lag and the time to drain it after resuming; and whether every user history after the run equals the one built from all produced events (property 9)
 
 **Pass criteria** are added to this section and committed before the first fault run (M6). They are not changed after results exist.
+
+### Faults, setup and pass criteria (M6)
+
+Committed before the first fault run. A criterion found not to measure what it states is amended with its date and reason, and the runs it judges are repeated.
+
+**Setup.** As in Load tests (M6), with toxiproxy 2.13 between the gateway and each replica and between the gateway and Valkey (D021), in every phase, so the healthy phase is the comparison. Kafka is not proxied. Faults are set through toxiproxy's HTTP API and `docker`. The gateway has compose's flags, with the cache on. Shard 0 is annshard-0 and annshard-1, shard 1 annshard-2 and annshard-3. The workload is replay, except for F4.
+
+| Fault | Injected | Removed |
+|---|---|---|
+| F1 a replica killed | `docker kill annshard-1` | `docker start` |
+| F2 latency on one shard | toxiproxy `latency` of 50 ms on the replies of annshard-2 and annshard-3 | toxic deleted |
+| F3 Valkey unavailable | the gateway's proxy to Valkey disabled: open connections closed, new ones refused | enabled |
+| F4 consumer paused | `docker pause ingest`, with the writes scenario | `docker unpause` |
+| F5 a replica silent, its connection up | `docker pause annshard-1` | `docker unpause` |
+| F6 a replica that answers keepalive pings while its searches hang | annshard-1 runs `cmd/faultshard` for the whole run; `SIGUSR1` makes every search wait until its caller cancels it | `SIGUSR2` |
+
+**Phases.** From the first request's due time: warmup [0, 30 s), healthy [30, 90 s), fault [90, 150 s), recovery [150, 270 s). Errors are transport errors and HTTP 5xx, 503 included, on either endpoint. The gateway's `/metrics` is read at the four phase boundaries, giving each phase's hedges by result and failovers.
+
+**Valid run.** In the healthy phase: no error, p99 ≤ 50 ms, at most 1% degraded; at least 99% of the target requests sent; neither noise baseline flagged. An invalid run is rerun, at most twice, and is neither a pass nor a fail.
+
+**Recovery time.** The first second t after removal at which the window [t, t + 10 s) has a p99 within 1.2 times the healthy phase's and a degraded share within 1 percentage point of it, measured from removal; "not recovered" if none starts within the recovery phase.
+
+**A reason's excess** is its share of the fault phase's responses minus its share of the healthy phase's.
+
+**Pass criteria.** A fault passes if all three of its valid runs pass. In every run: no error in any phase, and p99 ≤ 50 ms in the fault phase. Further:
+
+- F1: every reason's excess at most 1 percentage point (failover answers the searches that the killed replica held); recovery within 10 s; annshard-1 uses CPU in the last 60 s of the run (its cgroup's counter), so searches reach it again.
+- F2: every reason other than `shards_partial` has an excess of at most 1 percentage point, so the other shard still answers; recovery within 5 s.
+- F3: every reason other than `history_unavailable` has an excess of at most 1 percentage point; recovery within 5 s.
+- F4: p99 ≤ 50 ms in every phase; every reason's excess at most 1 percentage point; the consumer's lag (events the gateway accepted minus records ingest applied, read every second) back at 0 within 30 s of removal; after the run, every user's history in Valkey equals the one built from the preloaded events and the events the gateway accepted (property 9).
+- F5: in [15, 60 s) after the pause, every reason's excess at most 1 percentage point, the keepalive having taken the replica out; recovery within 10 s; annshard-1 uses CPU in the last 60 s.
+- F6: recovery within 5 s. Its degraded share is reported, not judged: D041 Limits point 2 expects about 40% of the responses with `shards_partial` for as long as the fault lasts.
+
+**Also reported.** F5's share of responses with `shards_partial` in [0, 13 s), [13, 15 s) and [15, 60 s) after the pause; F6's over the fault phase.
+
+**Outlier detection (D041).** If F5's share in [0, 13 s) or F6's over the fault phase exceeds 1%, D041 records outlier detection as adopted, with a design (a replica taken out after a number of searches in a row end at the shard deadline, and asked again after a wait), and TASKS gets an item for it; it is not built in M6. Otherwise D041 records it as not needed at this rate.
+
+## Hedge delay (M6, D041)
+
+The gateway's `recserve_shard_search_seconds{shard}` observes every call to a replica, from its send until it returns, whatever the result. Three runs as in Load tests (M6): replay, cache off, half the headline rate, `-hedge-delay 0`, so that no call is cancelled by a hedge that won. Each run's p95 per shard comes from the histogram by linear interpolation within a bucket, as Prometheus's `histogram_quantile`. The default becomes the median over the runs of the larger shard's p95, rounded up to 0.5 ms: on healthy replicas about 5% of the searches then send a hedge, half of what the budget allows. Three more runs with that default report hedges per search and p99.
+
+## Bundle swaps under load (M6, D031)
+
+As in Load tests (M6): replay, cache off, half the headline rate, 10 s warmup, 150 s measured. Every 15 s from 15 s on, the admin API swaps to the other of b7ff0634dd7b and 5de55036a382, which have the same items, so nine swaps. The gateway runs with `GODEBUG=gctrace=1`.
+
+- Per run: the p99 and max over the 1 s windows that overlap a swap (from the admin request until its answer) and over the other windows; prepare and drain times from the swaps' answers; GC cycles and pauses in each group, from the trace; the CPU time of the gateway and of the replicas during each swap.
+- Three runs as is, three with `GOGC=off`.
+- If with `GOGC=off` the median over runs of the max over swap windows is at most 1.2 times the median of the max over the other windows, the largest values are attributed to GC. Otherwise the record says that turning GC off does not remove them, gives the CPU readings, and names no other cause.
+
+## Rollouts with SPEC §5's budgets (M6, D047)
+
+`make kind-check`'s rollouts and swap with the gateways' stage budgets at SPEC §5's values instead of 100 ms, three runs, each on a new cluster. Reported per 1 s window and per phase (before the first rollout, the gateways' rollout, the replicas', the swap, after): p50, p99 and max, failures, and the degraded share by reason. No pass or fail: the control plane shares the CPUs (D022).
+
+## Profiles and an optimization (M6)
+
+**Profiles.** As in Load tests (M6): replay, cache off, 400 requests/s; 30 s CPU profiles of the gateway (`/debug/pprof/profile` on the admin listener) and of annshard-0 (`-debug-addr`), with each container's CPU per request; and annbench's query on glove, M = 16, ef = 400, with a CPU profile. The top functions by flat and cumulative share are kept as text.
+
+**Target.** The function with the largest flat share in the process kind, gateway or replicas taken together, that uses the most CPU per request. If it is not `vec.Dot32`, the profile's conclusion is reported before any change.
+
+**Before and after**, on the same benchmarks: the function's `go test -bench`; annbench on glove, M = 16, one graph file, ef 120, 200, 400 and 800; the service at 200 and 400 requests/s, replay, cache off. Runs alternate before and after, three of each, with noise baselines. A difference is reported only if the three runs after are all better than the three before; otherwise as not resolved on this machine, with both ranges.
+
+**Unchanged results.** The optimized code returns what the code before it returns, or, where it changes the order of floating-point operations, what the definition it records in DECISIONS states, checked by tests; and on the same graph file, recall@100 before and after differs by at most 0.001 at each ef.
+
+## ANN in M6
+
+After the optimization, annbench as in M2 (single thread, recall@100 and p99 at ef 120, 200, 400 and 800): synth with M = 16, glove with M = 16 and 32, glove with M = 32 on two shards; faiss on the same machine for the same sets and settings. Graphs are built once with 4 goroutines; the shards mode records each graph's own M and efConstruction, read from its file. The sharded tier through annshard is measured on the real bundle by the hedge-delay runs, not on glove (D052).
 
 ## Kubernetes rollout check
 
