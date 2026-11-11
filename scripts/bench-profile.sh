@@ -21,7 +21,7 @@ wait %1
 wait "$LOADGEN" || true
 snapshot "$p" at1
 noise "$p" after
-bin/benchsum run -prefix "$p" -samples "$OUT/raw/$(basename "$p").csv.gz"
+bin/benchsum run -prefix "$p" -samples "$(samples "$p")"
 for c in gateway annshard-0; do
 	go tool pprof -top -nodecount=25 "$OUT/raw/$c.pprof" 2>/dev/null >"$OUT/profile-$c.txt"
 done

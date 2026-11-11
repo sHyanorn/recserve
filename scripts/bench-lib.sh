@@ -71,13 +71,16 @@ fresh() {
 
 down() { "${COMPOSE[@]}" --profile app --profile faults down -v >/dev/null 2>&1 || true; }
 
+# samples PREFIX: the run's raw samples, written by loadgen -samples.
+samples() { echo "$OUT/raw/$(basename "$1").csv.gz"; }
+
 # loadgen PREFIX RATE WARMUP DURATION [ARGS...]: loadgen on CPU 0 against
 # the gateway, in the background; its pid in LOADGEN.
 loadgen() {
 	local prefix=$1 rate=$2 warmup=$3 duration=$4
 	shift 4
 	taskset -c 0 bin/loadgen -addr "$(ip_of gateway):8080" -split "$DATA/Video_Games.test.csv.gz" -rate "$rate" \
-		-warmup "$warmup" -duration "$duration" -samples "$OUT/raw/$(basename "$prefix").csv.gz" -out "$prefix.json" "$@" \
+		-warmup "$warmup" -duration "$duration" -samples "$(samples "$prefix")" -out "$prefix.json" "$@" \
 		>"$prefix.loadgen.txt" 2>&1 &
 	LOADGEN=$!
 }
@@ -119,7 +122,7 @@ one_run() {
 		echo "$attempt" >"$p.attempt"
 		noisy "$p" || break
 	done
-	bin/benchsum run -prefix "$p" -samples "$OUT/raw/$(basename "$p").csv.gz"
+	bin/benchsum run -prefix "$p" -samples "$(samples "$p")"
 }
 
 # env_record: the environment of docs/BENCHMARKS.md, once per result directory.

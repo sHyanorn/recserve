@@ -15,7 +15,6 @@ source scripts/bench-lib.sh
 export CACHE_SIZE=0 GODEBUG=gctrace=1
 env_record
 
-
 # attempt PREFIX: one run's files.
 attempt() {
 	local p=$1 t0 k v admin s e a
@@ -52,7 +51,7 @@ for gogc in "" off; do
 			echo "$try" >"$p.attempt"
 			noisy "$p" || break
 		done
-		bin/benchsum swap -prefix "$p" -samples "$OUT/raw/$(basename "$p").csv.gz"
+		bin/benchsum swap -prefix "$p" -samples "$(samples "$p")"
 	done
 done
 bin/benchsum swaps -dir "$OUT" | tee "$OUT/swaps.md"

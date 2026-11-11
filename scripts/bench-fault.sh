@@ -96,17 +96,17 @@ attempt() {
 		at $((t0 + 300000)) # the lag file shows the drain; the histories need it done
 		kill "$lagpid"
 		bin/benchsum histories -valkey "$(ip_of valkey):6379" -preload "$DATA/Video_Games.train.csv.gz,$DATA/Video_Games.valid.csv.gz" \
-			-split "$DATA/Video_Games.test.csv.gz" -samples "$OUT/raw/$(basename "$p").csv.gz" >"$p.histories"
+			-split "$DATA/Video_Games.test.csv.gz" -samples "$(samples "$p")" >"$p.histories"
 	fi
 }
 
 for n in $(seq 1 "$RUNS"); do
+	p=$OUT/$FAULT-run$n
 	for try in 1 2 3; do
-		p=$OUT/$FAULT-run$n
 		log "$FAULT run $n attempt $try"
 		attempt "$p"
 		echo "$try" >"$p.attempt"
-		v=$(bin/benchsum fault -prefix "$p" -samples "$OUT/raw/$FAULT-run$n.csv.gz" -fault "$FAULT")
+		v=$(bin/benchsum fault -prefix "$p" -samples "$(samples "$p")" -fault "$FAULT")
 		log "$v"
 		[[ $v == *"valid true"* ]] && break
 	done

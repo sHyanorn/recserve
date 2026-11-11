@@ -22,12 +22,7 @@ func compareTable(w *strings.Builder, dir string) error {
 	}
 	fmt.Fprintln(w, "| Quantity | Before | After | Verdict |")
 	fmt.Fprintln(w, "|---|---|---|---|")
-	names := make([]string, 0, len(micro))
-	for k := range micro {
-		names = append(names, k)
-	}
-	slices.Sort(names)
-	for _, k := range names {
+	for _, k := range slices.Sorted(maps.Keys(micro)) {
 		row(w, k+" ns/op", micro[k]["before"], micro[k]["after"])
 	}
 	ann, err := annRanges(dir)
@@ -42,7 +37,7 @@ func compareTable(w *strings.Builder, dir string) error {
 		b, a := ann.recall[ef]["before"], ann.recall[ef]["after"]
 		fmt.Fprintf(w, "| annbench ef %d recall@100 | %s | %s | %s |\n", ef, recallSpan(b), recallSpan(a), recallVerdict(b, a))
 	}
-	runs, err := readSummaries(dir, func(runSummary) bool { return true })
+	runs, err := readSummaries(dir)
 	if err != nil {
 		return err
 	}

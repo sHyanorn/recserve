@@ -130,9 +130,9 @@ func (f *faultRun) readCounters(prefix string) error {
 	for i, p := range phaseNames {
 		f.Hedges[p], f.Failovers[p] = map[string]float64{}, map[string]float64{}
 		for _, x := range m[i+1]["recserve_shard_hedges_total"].GetMetric() {
-			key := label(x.GetLabel(), "shard") + "/" + label(x.GetLabel(), "result")
-			want := map[string]string{"shard": label(x.GetLabel(), "shard"), "result": label(x.GetLabel(), "result")}
-			f.Hedges[p][key] = x.GetCounter().GetValue() - m[i].sum("recserve_shard_hedges_total", want)
+			shard, result := label(x.GetLabel(), "shard"), label(x.GetLabel(), "result")
+			want := map[string]string{"shard": shard, "result": result}
+			f.Hedges[p][shard+"/"+result] = x.GetCounter().GetValue() - m[i].sum("recserve_shard_hedges_total", want)
 		}
 		before := m[i].by("recserve_shard_failovers_total", "replica")
 		for r, v := range m[i+1].by("recserve_shard_failovers_total", "replica") {

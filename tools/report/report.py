@@ -38,6 +38,7 @@ def style(t):
         "font.family": "sans-serif", "font.size": 9, "text.color": t["ink"],
         "axes.edgecolor": t["axis"], "axes.labelcolor": t["secondary"], "axes.titlesize": 9.5,
         "axes.titlecolor": t["ink"], "axes.titleweight": "bold", "axes.titlelocation": "left",
+        "figure.titlesize": 9.5, "figure.titleweight": "bold",
         "axes.spines.top": False, "axes.spines.right": False, "axes.grid": True, "axes.axisbelow": True,
         "grid.color": t["grid"], "grid.linewidth": 0.75, "grid.linestyle": "-",
         "xtick.color": t["muted"], "ytick.color": t["muted"], "xtick.labelcolor": t["secondary"],
@@ -108,8 +109,7 @@ def faults(res, out, t, mode):
     axes[0][1].set_title("degraded per second, % of responses")
     for ax in axes[-1]:
         ax.set_xlabel("seconds from the first request")
-    fig.suptitle("Faults at 275/s (third VM), three runs each; shaded: the fault, 90 to 150 s",
-                 x=0.01, ha="left", fontsize=9.5, fontweight="bold")
+    fig.suptitle("Faults at 275/s (third VM), three runs each; shaded: the fault, 90 to 150 s", x=0.01, ha="left")
     axes[0][1].plot([], [], color=t["series"][0], label="run that passed")
     axes[0][1].plot([], [], color=t["series"][1], label="run that failed")
     axes[0][1].legend(loc="upper right")
@@ -132,7 +132,7 @@ def swaps(res, out, t, mode):
         ax.grid(axis="x", visible=False)
         ax.set_title(title)
     axes[0].legend(loc="lower left")
-    fig.suptitle("Bundle swaps at 275/s (third VM): three runs each", x=0.01, ha="left", fontsize=9.5, fontweight="bold")
+    fig.suptitle("Bundle swaps at 275/s (third VM): three runs each", x=0.01, ha="left")
     save(fig, out, "swaps", mode)
 
 
@@ -191,7 +191,7 @@ def ann(res, out, t, mode):
     axes[0][0].legend(loc="upper left")
     axes[0][1].text(0.715, 5.4, "5 ms", color=t["secondary"], fontsize=8)
     fig.suptitle("ANN at k = 100, one thread (fourth VM): ef 120, 200, 400 and 800; lines at M2's 5 ms and recall 0.95",
-                 x=0.01, ha="left", fontsize=9.5, fontweight="bold")
+                 x=0.01, ha="left")
     save(fig, out, "ann", mode)
 
 

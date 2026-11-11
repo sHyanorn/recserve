@@ -1,7 +1,9 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
+	"maps"
 	"math"
 	"path/filepath"
 	"slices"
@@ -57,7 +59,7 @@ func summarizeRun(prefix, raw string) (runSummary, error) {
 	}
 	s := runSummary{
 		Name: filepath.Base(prefix), Rate: r.Target, Valid: r.Valid, Problems: r.Problems, Noisy: n, Achieved: r.Achieved,
-		stats: describe(samples, r.Warmup*1000, inf), CPUPerRequest: map[string]float64{},
+		stats: describe(samples, r.Warmup*1000, math.Inf(1)), CPUPerRequest: map[string]float64{},
 	}
 	delta := func(name string, want map[string]string) float64 { return m1.sum(name, want) - m0.sum(name, want) }
 	if requests := delta("recserve_http_requests_total", map[string]string{"route": "recommend"}); requests > 0 {
@@ -75,8 +77,6 @@ func summarizeRun(prefix, raw string) (runSummary, error) {
 	}
 	return s, nil
 }
-
-const inf = 1e300
 
 // verdict judges a rate by its runs: it meets the headline condition if
 // every run is valid, unflagged and has p99 ≤ 50 ms, and the sweep stops
@@ -111,19 +111,14 @@ func meetsAsWritten(runs []runSummary) bool {
 // sweepTable writes one row per rate: the run with the median p99
 // represents it, as docs/BENCHMARKS.md has it.
 func sweepTable(w *strings.Builder, byRate map[float64][]runSummary, containers []string) {
-	rates := make([]float64, 0, len(byRate))
-	for r := range byRate {
-		rates = append(rates, r)
-	}
-	slices.Sort(rates)
 	fmt.Fprintf(w, "| Rate | Verdict | D005 as written | p50 | p90 | p99 | p99.9 | max | p99 of each run | Degraded, each run | Past budget | Cache hits |")
 	for _, c := range containers {
 		fmt.Fprintf(w, " %s ms CPU |", c)
 	}
 	fmt.Fprintf(w, " Noisy |\n|%s\n", strings.Repeat("---|", 13+len(containers)))
-	for _, rate := range rates {
+	for _, rate := range slices.Sorted(maps.Keys(byRate)) {
 		runs := slices.Clone(byRate[rate])
-		slices.SortFunc(runs, func(a, b runSummary) int { return cmpFloat(a.P99, b.P99) })
+		slices.SortFunc(runs, func(a, b runSummary) int { return cmp.Compare(a.P99, b.P99) })
 		meets, stop, _ := verdict(runs)
 		word := map[bool]string{true: "meets", false: "misses"}
 		v := word[meets]
@@ -144,16 +139,6 @@ func sweepTable(w *strings.Builder, byRate map[float64][]runSummary, containers 
 		}
 		fmt.Fprintf(w, " %s |\n", strings.Join(flags, " / "))
 	}
-}
-
-func cmpFloat(a, b float64) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	}
-	return 0
 }
 
 // rateVerdict is a rate's verdict once its three runs are done.

@@ -60,13 +60,14 @@ func readHedgeRun(prefix string) (hedgeRun, error) {
 	if err != nil {
 		return h, err
 	}
+	delta := func(name string, want map[string]string) float64 { return at1.sum(name, want) - at0.sum(name, want) }
 	for s := range 2 {
-		shard := map[string]string{"shard": fmt.Sprint(s)}
+		id := fmt.Sprint(s)
+		shard := map[string]string{"shard": id}
 		h.P95[s] = 1000 * histogramQuantile(at1, at0, "recserve_shard_search_seconds", shard, 0.95)
-		delta := func(name string, want map[string]string) float64 { return at1.sum(name, want) - at0.sum(name, want) }
 		calls := delta("recserve_shard_search_seconds", shard)
-		hedges := delta("recserve_shard_hedges_total", map[string]string{"shard": fmt.Sprint(s), "result": "won"}) +
-			delta("recserve_shard_hedges_total", map[string]string{"shard": fmt.Sprint(s), "result": "lost"})
+		hedges := delta("recserve_shard_hedges_total", map[string]string{"shard": id, "result": "won"}) +
+			delta("recserve_shard_hedges_total", map[string]string{"shard": id, "result": "lost"})
 		// Every search makes one call, plus one per hedge and per failover.
 		if searches := calls - hedges - delta("recserve_shard_failovers_total", shard); searches > 0 {
 			h.PerSearch[s] = hedges / searches

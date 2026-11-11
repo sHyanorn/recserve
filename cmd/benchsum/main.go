@@ -10,7 +10,7 @@
 //	benchsum compare -dir D                      before and after an optimization (scripts/bench-compare.sh)
 //	benchsum quantile -after M [-before M0] -name N [-label k=v] -q Q
 //	                                             a quantile of a histogram in a /metrics scrape, or between two
-//	benchsum swap -prefix P -samples S             a run of bundle swaps under load: P.swap.json
+//	benchsum swap -prefix P -samples S           a run of bundle swaps under load: P.swap.json
 //	benchsum swaps -dir D                        the swap runs' table and what GOGC=off says of the largest latencies
 //	benchsum phases -dir D                       runs cut at their marks (D/*.marks, samples in D/raw): *.phases.json and a table
 //	benchsum hedge -dir D                        the hedge-delay runs' table, then default_ms=, the default delay
@@ -22,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -69,23 +70,20 @@ func run(args []string, out io.Writer) error {
 		}
 		return printf(out, "%s: valid %v, noisy %v, p99 %.2f ms, degraded %.2f%%\n", s.Name, s.Valid, s.Noisy, s.P99, 100*s.Degraded)
 	case "rate":
-		runs, err := readSummaries(*dir, func(s runSummary) bool { return s.Rate == *rate })
+		runs, err := readSummaries(*dir)
 		if err != nil {
 			return err
 		}
+		runs = slices.DeleteFunc(runs, func(s runSummary) bool { return s.Rate != *rate })
 		meets, stop, p99 := verdict(runs)
 		return printf(out, "meets=%v stop=%v runs=%d median_p99_ms=%.2f\n", meets, stop, len(runs), p99)
 	case "next":
-		runs, err := readSummaries(*dir, func(runSummary) bool { return true })
+		runs, err := readSummaries(*dir)
 		if err != nil {
 			return err
 		}
-		byRate := map[float64][]runSummary{}
-		for _, r := range runs {
-			byRate[r.Rate] = append(byRate[r.Rate], r)
-		}
 		verdicts := map[float64]rateVerdict{}
-		for rate, rs := range byRate {
+		for rate, rs := range byRate(runs) {
 			if len(rs) >= 3 {
 				meets, stop, _ := verdict(rs)
 				verdicts[rate] = rateVerdict{meets, stop}
@@ -97,25 +95,18 @@ func run(args []string, out io.Writer) error {
 		}
 		return printf(out, "%g\n", next)
 	case "sweep":
-		runs, err := readSummaries(*dir, func(runSummary) bool { return true })
+		runs, err := readSummaries(*dir)
 		if err != nil {
 			return err
 		}
-		byRate := map[float64][]runSummary{}
 		containers := map[string]bool{}
 		for _, r := range runs {
-			byRate[r.Rate] = append(byRate[r.Rate], r)
 			for c := range r.CPUPerRequest {
 				containers[c] = true
 			}
 		}
-		names := make([]string, 0, len(containers))
-		for c := range containers {
-			names = append(names, c)
-		}
-		slices.Sort(names)
 		var b strings.Builder
-		sweepTable(&b, byRate, names)
+		sweepTable(&b, byRate(runs), slices.Sorted(maps.Keys(containers)))
 		return printf(out, "%s", b.String())
 	case "fault":
 		f, err := summarizeFault(*prefix, *samples, *fault)
@@ -193,7 +184,7 @@ func run(args []string, out io.Writer) error {
 	}
 }
 
-func readSummaries(dir string, keep func(runSummary) bool) ([]runSummary, error) {
+func readSummaries(dir string) ([]runSummary, error) {
 	paths, err := filepath.Glob(filepath.Join(dir, "*.summary.json"))
 	if err != nil {
 		return nil, err
@@ -204,11 +195,17 @@ func readSummaries(dir string, keep func(runSummary) bool) ([]runSummary, error)
 		if err := readJSON(p, &s); err != nil {
 			return nil, err
 		}
-		if keep(s) {
-			out = append(out, s)
-		}
+		out = append(out, s)
 	}
 	return out, nil
+}
+
+func byRate(runs []runSummary) map[float64][]runSummary {
+	out := map[float64][]runSummary{}
+	for _, r := range runs {
+		out[r.Rate] = append(out[r.Rate], r)
+	}
+	return out
 }
 
 // faultTable writes a row per fault run, in name order.
