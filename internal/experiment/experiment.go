@@ -39,16 +39,16 @@ type Experiment struct {
 	Arms []Arm
 }
 
-// Default is the one arm without an experiment: every request is ranked.
-var Default = Arm{Name: "default", Mode: Ranker, upto: Buckets}
-
-// None returns no experiment: every user is in Default.
-func None() *Experiment { return &Experiment{Arms: []Arm{Default}} }
+// None returns no experiment: every user is in the arm "default", which
+// ranks.
+func None() *Experiment {
+	return &Experiment{Arms: []Arm{{Name: "default", Mode: Ranker, upto: Buckets}}}
+}
 
 // Parse returns the experiment named name with the arms given as
 // "name=mode:weight,...": weights are whole percentages summing to 100, and
 // the arms take consecutive buckets in the order listed. Without a name
-// and arms, every user is in Default.
+// and arms, it returns None.
 func Parse(name, arms string) (*Experiment, error) {
 	if name == "" && arms == "" {
 		return None(), nil
