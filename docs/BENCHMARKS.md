@@ -492,3 +492,17 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 
 `make bench-hedge RATE=275` (`hedge/`, the table in `hedge.md`), on the third VM, the cache off. With hedging off the p95 of a call is 2.12, 1.97 and 1.91 ms on shard 0 and 2.20, 2.05 and 1.99 ms on shard 1, so the default becomes 2.5 ms, the median of the larger shard's, 2.05 ms, rounded up (D041). With 2.5 ms, 1.0 to 1.3% of each shard's searches sent a hedge, fewer than the 5% the rule aims at: the rounding up puts the delay past most of the slowest 5% of calls. p99 is 5.84 to 6.56 ms with hedging off and 5.70 to 6.32 ms with 2.5 ms, ranges that overlap, so a difference in p99 is not resolved on this machine. No run is invalid or flagged.
 
+#### Bundle swaps: a higher p99 in the swap windows, with GC on or off, and no higher maximum
+
+`make bench-swap RATE=275` (`swap/`, the table in `swaps.md`), on the third VM with the 2.5 ms hedge delay, the cache off: nine swaps per run between b7ff0634dd7b and 5de55036a382, three runs with GC as configured and three with `GOGC=off`. No run is invalid or flagged.
+
+| GC | Swap windows p99, ms | Swap windows max | Other windows p99 | Other windows max |
+|---|---|---|---|---|
+| on | 6.90, 7.50, 6.73 | 18.65, 25.58, 11.88 | 5.99, 5.19, 5.18 | 25.79, 17.25, 19.85 |
+| off | 6.93, 11.33, 6.50 | 20.19, 23.39, 23.49 | 5.54, 6.34, 5.48 | 52.22, 31.16, 29.25 |
+
+- A swap's prepare took 65 to 864 ms and its drain at most 3.0 ms. During a swap the gateway used 87 to 462 ms of CPU and the four replicas 28 to 505 ms.
+- By the rule above, the median max over the swap windows with `GOGC=off`, 23.39 ms, is 0.75 times that over the other windows, 31.16 ms, which the rule reads as GC. The rule supposes that the swap windows hold the largest values. They do not, with GC on either (medians 18.65 against 19.85 ms), so there is no excess for GC to explain and this record attributes nothing to GC. The other windows' largest values, up to 52.22 ms, also occur with no GC at all.
+- p99 over the swap windows is above the other windows' in every run, with GC on (6.73 to 7.50 against 5.18 to 5.99 ms) and off (6.50 to 11.33 against 5.48 to 6.34 ms): turning GC off does not remove it. The CPU readings above are the only other figures; no cause is named.
+- With GC on, the swap windows hold 6 or 7 collections per run, 1.4 to 2.9 ms of pauses in all; the other windows 205 to 207, 72 to 78 ms.
+

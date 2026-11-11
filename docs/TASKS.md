@@ -79,7 +79,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] Shard search latency through annshard and the hedge delay's default, from measured latencies (D041): 2.5 ms, from a p95 of a call of about 2 ms
 - [ ] ANN and sharded recall and latency on glove-100 and synthetic vectors
 - [x] `annbench` in shards mode labels results with the `-m` and `-efc` flags even when it reuses graph files built with other values; record the graphs' own parameters: each shard reports its graph's, and shards that differ are an error
-- [ ] Latency during bundle swaps under load, and the cause of its largest values, GC or CPU contention with prepare (D031)
+- [x] Latency during bundle swaps under load, and the cause of its largest values, GC or CPU contention with prepare (D031): the seconds with a swap have a higher p99 and no higher maximum, with GC on or off; no cause named
 - [ ] Latency through rolling restarts and swaps with SPEC §5's budgets: in kind the first requests of a new gateway took longer than 15 ms, so the zero-error check runs the gateways at 100 ms (D047)
 - [x] Profiles and at least one optimization backed by before/after data: `vec.Dot`, 54% of a replica's CPU, in AVX2 (D053, BENCHMARKS M6)
 - [ ] `vec.Dot32` in SIMD, for the HNSW mode, only if annbench's profile on glove puts it first; on glove the p99 is 1.3 to 2.4 times faiss's at equal recall (BENCHMARKS, M2)
