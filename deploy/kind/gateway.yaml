@@ -1,0 +1,123 @@
+# The gateways. A swap is a rollout of this Deployment to another
+# BUNDLE_VERSION (make kind-swap, D048).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+spec:
+  replicas: 3
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gateway
+    spec:
+      terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: recserve/gateway:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: BUNDLE_VERSION
+              value: 5de55036a382
+          args:
+            - -bundle=/data/bundle/$(BUNDLE_VERSION)
+            - -test-split=/data/Video_Games.test.csv.gz
+            - -preload=/data/Video_Games.train.csv.gz,/data/Video_Games.valid.csv.gz
+            - -ort-lib=/usr/local/lib/libonnxruntime.so.1.31.1
+            - -shard-addrs=annshard-0.annshard:9090,annshard-1.annshard:9090;annshard-2.annshard:9090,annshard-3.annshard:9090
+            - -shutdown-delay=5s
+            - -drain=10s
+            # kind checks behavior, not latency (D022): one node's CPUs serve the
+            # control plane, the Pods and the load generator, and SPEC §5's
+            # budgets let about 1 response in 8,000 time out with no rollout
+            # (D047). With 1 s, a degraded response means a failure.
+            - -budget-history=100ms
+            - -budget-encoder=100ms
+            - -budget-retrieval=100ms
+            - -budget-shard=100ms
+            - -budget-ranker=100ms
+          ports:
+            - name: http
+              containerPort: 8080
+          # The listener opens once the bundle is loaded and prepared on the
+          # replicas, which may take -prepare-timeout (2 minutes).
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 1
+            failureThreshold: 150
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+          resources:
+            requests:
+              cpu: 250m
+              memory: 384Mi
+            limits:
+              cpu: "2"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: data
+            readOnly: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      nodePort: 30080
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gateway
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: gateway
+  minReplicas: 3
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

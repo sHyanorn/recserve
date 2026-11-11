@@ -7,7 +7,7 @@ VERSION ?=
 COMPOSE := docker compose -f deploy/compose.yaml
 
 .DEFAULT_GOAL := help
-.PHONY: help build test test-real e2e lint fmt proto data bundle images infra-up infra-down up down test-alerts
+.PHONY: help build test test-real e2e lint fmt proto data bundle images infra-up infra-down up down test-alerts kind-up kind-swap kind-check kind-down
 
 help: ## Show available targets
 	@awk -F':.*## ' '/^[a-z0-9-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -57,3 +57,15 @@ down: ## Stop what make up started and delete its data
 
 test-alerts: ## Unit-test the Prometheus alert rules with promtool
 	$(COMPOSE) run --rm --no-deps --entrypoint promtool -w /etc/prometheus prometheus test rules alerts_test.yml
+
+kind-up: ## Create the kind cluster "recserve" and deploy deploy/kind on the images of make images and DATA's bundles (needs kind, kubectl)
+	scripts/kind-up.sh $(DATA)
+
+kind-swap: ## Swap the gateways in kind to bundle VERSION, once the previous swap has ended
+	scripts/kind-swap.sh $(VERSION)
+
+kind-check: ## Under load in kind, roll the gateways, then the replicas, then swap to VERSION: no error and nothing degraded
+	scripts/kind-check.sh $(DATA) $(VERSION)
+
+kind-down: ## Delete the kind cluster
+	kind delete cluster --name recserve

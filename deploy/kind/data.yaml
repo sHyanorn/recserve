@@ -1,0 +1,31 @@
+# Every bundle version, by its directory under bundle/, and the splits the
+# gateway preloads, read-only for the gateways and the replicas. A version is
+# published by writing its directory here before a swap (D048). In kind this is
+# the node's /data, the host's DATA.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: recserve-data
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes: [ReadOnlyMany]
+  storageClassName: ""
+  claimRef:
+    namespace: recserve
+    name: data
+  hostPath:
+    path: /data
+    type: Directory
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data
+spec:
+  accessModes: [ReadOnlyMany]
+  storageClassName: ""
+  volumeName: recserve-data
+  resources:
+    requests:
+      storage: 1Gi

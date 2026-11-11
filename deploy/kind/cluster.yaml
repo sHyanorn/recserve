@@ -1,0 +1,30 @@
+# One-node kind cluster for deploy/kind (make kind-up). make kind-up replaces
+# DATA with the absolute path of the directory of make data and make bundle,
+# which the node mounts read-only at /data. The gateway's NodePort is published
+# on the host's loopback.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: recserve
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    extraMounts:
+      - hostPath: DATA
+        containerPath: /data
+        readOnly: true
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 30080
+        listenAddress: 127.0.0.1
+    kubeadmConfigPatches:
+      - |
+        kind: KubeletConfiguration
+        # Lets the kubelet start on a cgroup v1 host; no effect on cgroup v2.
+        failCgroupV1: false
+containerdConfigPatches:
+  - |
+    # Lets Pods start where containers lack CAP_SYS_RESOURCE and cannot lower
+    # oom_score_adj; elsewhere containerd runs at -999, below every Pod's value,
+    # and this has no effect.
+    [plugins."io.containerd.grpc.v1.cri"]
+      restrict_oom_score_adj = true
