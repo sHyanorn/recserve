@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,7 +65,13 @@ func TestFailureIsNotHiddenByTimeout(t *testing.T) {
 	r := rand.New(rand.NewPCG(15, 15))
 	root := t.TempDir()
 	version := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2))
-	failing := annshardtest.Start(t, root, grpc.UnaryInterceptor(failSearches))
+	var asked atomic.Int32 // searches that reached the failing replica
+	failing := annshardtest.Start(t, root, grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if _, ok := req.(*annshardpb.SearchRequest); ok {
+			asked.Add(1)
+		}
+		return failSearches(ctx, req, info, handler)
+	}))
 	silent := infratest.NewProxy(t, annshardtest.Start(t, root))
 	c := annshardtest.Dial(t, [][]string{{failing, silent.Addr()}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}})
 	s, err := c.Prepare(context.Background(), version, 50)
@@ -72,26 +79,32 @@ func TestFailureIsNotHiddenByTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	silent.Blackhole()
-	// Both connections are ready, so the two searches lead with one replica each.
+	// The ready replicas lead in turn, and gRPC may report a connection
+	// ready a moment after Prepare's call on it returned, so the searches
+	// go on until each replica has led one. A search that reached the
+	// failing replica led with it.
 	var failures, timeouts int
-	for range 2 {
+	for range 4 {
+		before := asked.Load()
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		_, err := s.Search(ctx, 0, []float32{1, 1}, 5, nil)
 		cancel()
+		ledFailing := asked.Load() > before
 		switch {
 		case err == nil:
 			t.Fatal("a search succeeded with no replica that answers")
-		case errors.Is(err, context.DeadlineExceeded):
-			timeouts++
-		case status.Code(err) == codes.Internal:
+		case ledFailing && status.Code(err) == codes.Internal:
 			failures++
+		case !ledFailing && errors.Is(err, context.DeadlineExceeded):
+			timeouts++
 		default:
-			t.Fatal(err)
+			t.Fatalf("search that asked the failing replica first %t: %v", ledFailing, err)
+		}
+		if failures > 0 && timeouts > 0 {
+			return
 		}
 	}
-	if failures != 1 || timeouts != 1 {
-		t.Fatalf("%d failures and %d timeouts, want one of each", failures, timeouts)
-	}
+	t.Fatalf("%d failures and %d timeouts, want one of each", failures, timeouts)
 }
 
 // A replica that returns an item the gateway's bundle does not hold, as a
@@ -154,13 +167,20 @@ func TestReplicaDiesDuringSearches(t *testing.T) {
 	root := t.TempDir()
 	version := annshardtest.WriteVectors(t, root, m)
 	cfg := shard.Config{Shards: 1, Mode: shard.Exact}
-	// The replica that dies holds every search it gets until it is gone.
+	// The replica that dies, once holding, holds every search it gets until
+	// it is gone.
 	const searches = 8
 	held := make(chan struct{}, 2*searches)
+	var holding atomic.Bool
+	var answered atomic.Int32
 	hold := grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if _, ok := req.(*annshardpb.SearchRequest); ok {
-			held <- struct{}{}
-			<-ctx.Done()
+			if holding.Load() {
+				held <- struct{}{}
+				<-ctx.Done()
+			} else {
+				answered.Add(1)
+			}
 		}
 		return handler(ctx, req)
 	})
@@ -176,6 +196,15 @@ func TestReplicaDiesDuringSearches(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	// Only a replica whose connection gRPC reports ready leads a search,
+	// and it may report one ready a moment after Prepare's call on it
+	// returned: search until the dying one has led one.
+	for answered.Load() == 0 {
+		if _, err := s.Search(ctx, 0, []float32{1, 1}, 20, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	holding.Store(true)
 	got, errs := make([][]vec.Hit, searches), make([]error, searches)
 	var wg sync.WaitGroup
 	for j := range searches {
