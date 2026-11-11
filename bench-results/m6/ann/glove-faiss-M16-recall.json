@@ -1,0 +1,350 @@
+{
+  "env": {
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "date": "2026-11-11T21:54:13Z",
+    "go": "go1.27.3",
+    "gomaxprocs": "4",
+    "index": "faiss",
+    "kernel": "6.18.44-fc-v378",
+    "numcpu": "4",
+    "set": "glove"
+  },
+  "points": [
+    {
+      "index": "faiss",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 10,
+      "k": 10,
+      "recall": 0.4757900000000005,
+      "latency": {
+        "n": 0,
+        "p50_us": 0,
+        "p90_us": 0,
+        "p99_us": 0,
+        "p999_us": 0,
+        "max_us": 0
+      },
+      "qps": 0,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0
+      },
+      "noise": {
+        "reference_ns": 0,
+        "before_ns": 0,
+        "after_ns": 0,
+        "attempt": 0,
+        "noisy": false
+      }
+    },
+    {
+      "index": "faiss",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 20,
+      "k": 10,
+      "recall": 0.6006800000000003,
+      "latency": {
+        "n": 0,
+        "p50_us": 0,
+        "p90_us": 0,
+        "p99_us": 0,
+        "p999_us": 0,
+        "max_us": 0
+      },
+      "qps": 0,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0
+      },
+      "noise": {
+        "reference_ns": 0,
+        "before_ns": 0,
+        "after_ns": 0,
+        "attempt": 0,
+        "noisy": false
+      }
+    },
+    {
+      "index": "faiss",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 40,
+      "k": 10,
+      "recall": 0.706149999999993,
+      "latency": {
+        "n": 0,
+        "p50_us": 0,
+        "p90_us": 0,
+        "p99_us": 0,
+        "p999_us": 0,
+        "max_us": 0
+      },
+      "qps": 0,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0
+      },
+      "noise": {
+        "reference_ns": 0,
+        "before_ns": 0,
+        "after_ns": 0,
+        "attempt": 0,
+        "noisy": false
+      }
+    },
+    {
+      "index": "faiss",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 80,
+      "k": 10,
+      "recall": 0.78825999999999,
+      "latency": {
+        "n": 0,
+        "p50_us": 0,
+        "p90_us": 0,
+        "p99_us": 0,
+        "p999_us": 0,
+        "max_us": 0
+      },
+      "qps": 0,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0
+      },
+      "noise": {
+        "reference_ns": 0,
+        "before_ns": 0,
+        "after_ns": 0,
+        "attempt": 0,
+        "noisy": false
+      }
+    },
+    {
+      "index": "faiss",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 120,
+      "k": 10,
+      "recall": 0.8259199999999877,
+      "latency": {
+        "n": 0,
+        "p50_us": 0,
+        "p90_us": 0,
+        "p99_us": 0,
+        "p999_us": 0,
+        "max_us": 0
+      },
+      "qps": 0,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0
+      },
+      "noise": {
+        "reference_ns": 0,
+        "before_ns": 0,
+        "after_ns": 0,
+        "attempt": 0,
+        "noisy": false
+      }
+    },
+    {
+      "index": "faiss",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 200,
+      "k": 10,
+      "recall": 0.8651899999999852,
+      "latency": {
+        "n": 0,
+        "p50_us": 0,
+        "p90_us": 0,
+        "p99_us": 0,
+        "p999_us": 0,
+        "max_us": 0
+      },
+      "qps": 0,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0
+      },
+      "noise": {
+        "reference_ns": 0,
+        "before_ns": 0,
+        "after_ns": 0,
+        "attempt": 0,
+        "noisy": false
+      }
+    },
+    {
+      "index": "faiss",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 400,
+      "k": 10,
+      "recall": 0.9084599999999833,
+      "latency": {
+        "n": 0,
+        "p50_us": 0,
+        "p90_us": 0,
+        "p99_us": 0,
+        "p999_us": 0,
+        "max_us": 0
+      },
+      "qps": 0,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0
+      },
+      "noise": {
+        "reference_ns": 0,
+        "before_ns": 0,
+        "after_ns": 0,
+        "attempt": 0,
+        "noisy": false
+      }
+    },
+    {
+      "index": "faiss",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 800,
+      "k": 10,
+      "recall": 0.9414399999999837,
+      "latency": {
+        "n": 0,
+        "p50_us": 0,
+        "p90_us": 0,
+        "p99_us": 0,
+        "p999_us": 0,
+        "max_us": 0
+      },
+      "qps": 0,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0
+      },
+      "noise": {
+        "reference_ns": 0,
+        "before_ns": 0,
+        "after_ns": 0,
+        "attempt": 0,
+        "noisy": false
+      }
+    },
+    {
+      "index": "faiss",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 120,
+      "k": 100,
+      "recall": 0.7184989999999845,
+      "latency": {
+        "n": 0,
+        "p50_us": 0,
+        "p90_us": 0,
+        "p99_us": 0,
+        "p999_us": 0,
+        "max_us": 0
+      },
+      "qps": 0,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0
+      },
+      "noise": {
+        "reference_ns": 0,
+        "before_ns": 0,
+        "after_ns": 0,
+        "attempt": 0,
+        "noisy": false
+      }
+    },
+    {
+      "index": "faiss",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 200,
+      "k": 100,
+      "recall": 0.7779979999999773,
+      "latency": {
+        "n": 0,
+        "p50_us": 0,
+        "p90_us": 0,
+        "p99_us": 0,
+        "p999_us": 0,
+        "max_us": 0
+      },
+      "qps": 0,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0
+      },
+      "noise": {
+        "reference_ns": 0,
+        "before_ns": 0,
+        "after_ns": 0,
+        "attempt": 0,
+        "noisy": false
+      }
+    },
+    {
+      "index": "faiss",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 400,
+      "k": 100,
+      "recall": 0.8437859999999773,
+      "latency": {
+        "n": 0,
+        "p50_us": 0,
+        "p90_us": 0,
+        "p99_us": 0,
+        "p999_us": 0,
+        "max_us": 0
+      },
+      "qps": 0,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0
+      },
+      "noise": {
+        "reference_ns": 0,
+        "before_ns": 0,
+        "after_ns": 0,
+        "attempt": 0,
+        "noisy": false
+      }
+    },
+    {
+      "index": "faiss",
+      "M": 16,
+      "ef_construction": 200,
+      "ef": 800,
+      "k": 100,
+      "recall": 0.8960829999999731,
+      "latency": {
+        "n": 0,
+        "p50_us": 0,
+        "p90_us": 0,
+        "p99_us": 0,
+        "p999_us": 0,
+        "max_us": 0
+      },
+      "qps": 0,
+      "gc": {
+        "num_gc": 0,
+        "max_pause_upper_ms": 0
+      },
+      "noise": {
+        "reference_ns": 0,
+        "before_ns": 0,
+        "after_ns": 0,
+        "attempt": 0,
+        "noisy": false
+      }
+    }
+  ]
+}

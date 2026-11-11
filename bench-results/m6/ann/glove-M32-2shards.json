@@ -1,0 +1,160 @@
+{
+  "env": {
+    "commit": "20a83633d5e08b2f80ea943cc783879084c73d59",
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "cpu_affinity": "0,1,2,3",
+    "cpu_flags": "sse4_2 avx avx2 fma avx512f avx512_vnni avx512_bf16 amx_tile amx_bf16 amx_int8",
+    "date": "2026-11-11T21:21:10Z",
+    "executable_sha256": "1abf2bbca3c3fc62e4c805549ad12167a6fcda457ce6355f6e0454e32a94016a",
+    "go": "go1.27.3",
+    "gomaxprocs": "4",
+    "kernel": "6.18.44-fc-v378",
+    "memory": "16472084 kB",
+    "noisebase": "bin/noisebase",
+    "noisebase_sha256": "50b44eb3f8504a3a2072c3e89748c261036bcefd839c62c73f54c04d905c9df3",
+    "numcpu": "4",
+    "uncommitted_changes": "true"
+  },
+  "set": "glove",
+  "queries": 10000,
+  "M": 32,
+  "ef_construction": 400,
+  "shards": [
+    {
+      "nodes": 591905,
+      "unreachable_layer0": 1,
+      "build_seconds": 540.223615405,
+      "M": 32,
+      "ef_construction": 400
+    },
+    {
+      "nodes": 591609,
+      "unreachable_layer0": 1,
+      "build_seconds": 538.011342795,
+      "M": 32,
+      "ef_construction": 400
+    }
+  ],
+  "points": [
+    {
+      "index": "recserve/hnsw, 2 shards",
+      "M": 32,
+      "ef_construction": 400,
+      "ef": 120,
+      "k": 100,
+      "recall": 0.8505599999999763,
+      "latency": {
+        "n": 10000,
+        "p50_us": 933.166,
+        "p90_us": 1275.434,
+        "p99_us": 1780.949,
+        "p999_us": 3155.228,
+        "max_us": 6752.943
+      },
+      "qps": 1036.383190773844,
+      "gc": {
+        "num_gc": 0,
+        "pauses": 0,
+        "max_pause_lower_ms": 0,
+        "max_pause_upper_ms": 0
+      },
+      "noise": {
+        "reference_ns": 779904.8075,
+        "before_ns": 768338.58,
+        "after_ns": 785013.4475,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "recserve/hnsw, 2 shards",
+      "M": 32,
+      "ef_construction": 400,
+      "ef": 200,
+      "k": 100,
+      "recall": 0.8999399999999715,
+      "latency": {
+        "n": 10000,
+        "p50_us": 1465.272,
+        "p90_us": 2054.289,
+        "p99_us": 2734.155,
+        "p999_us": 4299.342,
+        "max_us": 11931.061
+      },
+      "qps": 661.9675316680937,
+      "gc": {
+        "num_gc": 0,
+        "pauses": 0,
+        "max_pause_lower_ms": 0,
+        "max_pause_upper_ms": 0
+      },
+      "noise": {
+        "reference_ns": 779904.8075,
+        "before_ns": 743663.8225,
+        "after_ns": 777990.3325,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "recserve/hnsw, 2 shards",
+      "M": 32,
+      "ef_construction": 400,
+      "ef": 400,
+      "k": 100,
+      "recall": 0.949971999999964,
+      "latency": {
+        "n": 10000,
+        "p50_us": 2520.807,
+        "p90_us": 3339.163,
+        "p99_us": 4583.309,
+        "p999_us": 7586.79,
+        "max_us": 23392.897
+      },
+      "qps": 392.4262706590281,
+      "gc": {
+        "num_gc": 1,
+        "pauses": 2,
+        "max_pause_lower_ms": 0.032768000000000005,
+        "max_pause_upper_ms": 0.04096
+      },
+      "noise": {
+        "reference_ns": 779904.8075,
+        "before_ns": 762967.8525,
+        "after_ns": 756736.305,
+        "attempt": 1,
+        "noisy": false
+      }
+    },
+    {
+      "index": "recserve/hnsw, 2 shards",
+      "M": 32,
+      "ef_construction": 400,
+      "ef": 800,
+      "k": 100,
+      "recall": 0.9804869999999594,
+      "latency": {
+        "n": 10000,
+        "p50_us": 4638.823,
+        "p90_us": 6099.407,
+        "p99_us": 8634.033,
+        "p999_us": 15095.614,
+        "max_us": 30019.775
+      },
+      "qps": 214.53215469348666,
+      "gc": {
+        "num_gc": 0,
+        "pauses": 0,
+        "max_pause_lower_ms": 0,
+        "max_pause_upper_ms": 0
+      },
+      "noise": {
+        "reference_ns": 779904.8075,
+        "before_ns": 753292.8425,
+        "after_ns": 776823.7,
+        "attempt": 1,
+        "noisy": false
+      }
+    }
+  ]
+}

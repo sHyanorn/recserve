@@ -419,6 +419,8 @@ The fault runs and those after them ran on a third: Intel Xeon @ 2.10GHz, 4 vCPU
 
 The ANN runs and the comparison for `vec.Dot32` ran on a fourth: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, the same kernel, Go and Docker. Its reference is 779,905 ns (`bench-results/m6/noise-reference.json`, ten runs from 745,013 to 845,862 ns, on an idle machine). Figures from different VMs are not compared with one another.
 
+Every `make bench-*` target rebuilds `bin/`, so the `cmd/noisebase` binary that took a session's reference and the ones that took its baselines differ in the commit stamped into them, and their SHA-256 with it (`env.txt`); the code of `cmd/noisebase` and `internal/bench`'s noise baseline did not change in M6 (last changed in fa06dde).
+
 #### Kafka's health check
 
 An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute readings: its health check started a JVM every 2 s. Checked every 2 s only until healthy and every 10 minutes after, it used 24 ms (Environment record, D039). The profile run below was first taken with the old check, unrecorded: p99 was 10.97 ms there against 6.41 ms with the new one.
@@ -543,3 +545,21 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 - The inner product takes 2.7 to 3.3 times less time, and annbench's p99 on glove after is 0.50 to 0.61 times the p99 before at every ef. Recall@100 is equal to the last digit at every ef: on this graph the search returns the same neighbors.
 - In the service `Dot32` runs only in MMR: 3.1% of the gateway's samples in the profile at 400 requests/s, taken on the first VM before `vec.Dot`'s change. Exact search, the default, uses `vec.Dot`. The gateway's CPU per request is not resolved at either rate. p99 at 400/s meets the rule for lower after by 0.01 ms, the after runs' largest against the before runs' smallest; with no difference resolved in CPU, this record does not attribute it to `Dot32`.
 - Results: the tests and the 32-lane definition hold (D055); golden cases use `vec.Dot`, and no committed file changed.
+
+#### ANN: synth passes M2's criterion and glove fails it on latency, as in M2; p99 1.0 to 1.3 times faiss's on glove
+
+`make bench-ann STEP=table PY=...` (`ann/`), on the fourth VM with `vec.Dot32` in AVX: annbench as in M2, single thread, graphs built with 4 goroutines (2 per shard), faiss 1.15.1 with one thread on the same sets. `checkgt` verified the ground truth of 100 queries per set. Every query point is a first attempt with no baseline flagged, and no build or faiss run is flagged.
+
+| Set | Index | M / efC | recall@100 at ef = 120 / 200 / 400 / 800 | p99 ms at ef = 120 / 200 / 400 / 800 | Build | Unreachable |
+|---|---|---|---|---|---|---|
+| synth | recserve/hnsw | 16 / 200 | 0.9956 / 0.9995 / 1.0000 / 1.0000 | 0.43 / 0.60 / 0.79 / 1.20 | 75 s | 90 |
+| synth | faiss | 16 / 200 | 0.9963 / 0.9996 / 0.9999 / 1.0000 | 0.41 / 0.59 / 0.80 / 1.50 | 350 s | |
+| glove | recserve/hnsw | 16 / 200 | 0.7119 / 0.7738 / 0.8423 / 0.8978 | 0.83 / 1.22 / 2.52 / 4.83 | 205 s | 26 |
+| glove | faiss | 16 / 200 | 0.7185 / 0.7780 / 0.8438 / 0.8961 | 0.74 / 1.21 / 2.03 / 3.71 | 753 s | |
+| glove | recserve/hnsw | 32 / 400 | 0.7946 / 0.8522 / 0.9140 / 0.9575 | 1.50 / 2.08 / 4.09 / 7.66 | 587 s | 2 |
+| glove | faiss | 32 / 400 | 0.8008 / 0.8588 / 0.9196 / 0.9610 | 1.12 / 1.72 / 3.26 / 6.21 | 2,135 s | |
+| glove | recserve/hnsw, 2 shards | 32 / 400 | 0.8506 / 0.8999 / 0.94997 / 0.9805 | 1.78 / 2.73 / 4.58 / 8.63 | 540 s per shard | 1 + 1 |
+
+- At the same ef, recserve's p99 is 0.80 to 1.05 times faiss's on synth and 1.01 to 1.33 times on glove; recall agrees within 0.007 at every point.
+- By M2's criterion (Hand-written HNSW above): synth meets it at ef 120 (0.9956, 0.43 ms). On glove recall@100 reaches 0.95 only with M = 32 at ef 800 (0.9575), with p99 7.66 ms, above 5 ms, so glove still fails on latency alone; faiss reaches 0.9610 there at 6.21 ms. Two shards reach 0.94997 at ef 400, again just under 0.95, so their lowest qualifying ef is 800, at 8.63 ms. The longest GC pause in any query phase is at most 0.13 ms.
+- The graphs are new builds with the new `Dot32`; recall on glove agrees with M2's graphs to the digits M2 shows.

@@ -27,6 +27,18 @@ if [[ ! -s $ANN_DATA/glove_gt.i32 ]]; then
 	"$PY" -I experiments/m0/ann/prep.py "$ANN_DATA/glove-100-angular.hdf5" "$ANN_DATA"
 fi
 ann() { bin/annbench -data "$ANN_DATA" -noise bin/noisebase -ref "$REF" "$@"; }
+[[ -s $OUT/env.txt ]] || {
+	echo "date: $(date -u +%FT%TZ)"
+	echo "commit: $(git rev-parse HEAD) (uncommitted changes: $([[ -n $(git status --porcelain -- cmd internal scripts experiments) ]] && echo yes || echo no))"
+	echo "cpu: $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs), $(nproc) vCPU"
+	echo "memory: $(grep MemTotal /proc/meminfo | xargs)"
+	echo "kernel: $(uname -r)"
+	echo "go: $(go version | cut -d' ' -f3)"
+	echo "python: $("$PY" -m pip freeze | grep -E '^(faiss-cpu|numpy|h5py)==' | paste -sd' ')"
+	echo "cpus: annbench and faiss not pinned, noise baselines on CPU 0"
+	echo "noise reference ns: $REF"
+	echo "noisebase sha256: $(sha256sum bin/noisebase | cut -d' ' -f1)"
+} >"$OUT/env.txt"
 
 # graph NAME SET M EFC: the graph NAME, built once with 4 goroutines.
 graph() {
