@@ -8,6 +8,8 @@ Every result directory under `bench-results/` holds an `env.txt` with: CPU model
 
 In compose, Kafka's health check starts a JVM. Every 2 s, as compose.yaml had it until M6, an idle broker used 639 to 686 ms of CPU per second on the M6 VM (five one-minute readings); with checks 2 s apart only until it is healthy and 10 minutes apart after, 24 ms. Figures taken in compose before M6 carry the first load (D039).
 
+The VM that ran M6's sweeps and later runs is noisier than the earlier ones: on the idle machine its reference's ten runs spread from 0.56 to 0.87 ms per pass (median 0.658 ms), three of them at 0.81 ms or more. A baseline more than 10% above the reference, 0.724 ms, flags its run, which is rerun: 52 of the 88 attempts of the headline sweep were flagged. The protocol is unchanged; a rate that misses the headline condition on flags alone is reported as such.
+
 ## Noise baseline
 
 `experiments/m0/cmd/noise` (later `cmd/noisebase`) runs a fixed single-core workload: a dot product of a 64-dimensional float32 query against 16,384 float32 vectors, repeated for 200 passes, timed 30 times; the result is the median time of one pass.
@@ -437,3 +439,30 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 - The inner product takes 4.5 to 5 times less time; the replicas use about 37% less CPU per request, and p99 falls by about a quarter at 200/s and a third at 400/s.
 - The after runs of BenchmarkDot ran from ed28e3b's working tree with the benchmark moved to its own file (the next commit); `vec.Dot` itself was ed28e3b's.
 - Results: the tests, both bundles' golden cases (5de55036a382 checked by starting a gateway on it, b7ff0634dd7b by the after runs) and the sixteen-lane definition hold (D053). No committed file changed.
+
+#### Load sweep, replay with the cache off: headline 550 requests/s
+
+`make bench-sweep SCENARIO=replay CACHE=off` (`sweep-replay-cache-off/`, the table in `sweep.md`), on the second VM. The figures are this VM's and this topology's, with every service on the same three CPUs.
+
+- **Headline, 550 requests/s** (D005 as amended by D054): p99 4.61, 4.59 and 5.07 ms in the three runs, 0.04, 0.02 and 0.07% of the responses degraded. 500/s meets the condition; 600/s does not, with one run 1.69% degraded and two flagged.
+- **Under D005 as written** the grid meets it at every rate run up to 550/s, at 800/s and at 1,600, 2,000, 2,400 and 3,200/s; 600, 1,200, 2,800, 3,600 and 4,000/s miss it on flagged noise baselines alone, with p99 between 5 and 17 ms. The grid stopped at 4,400/s by the amendment; its stop rule never acted. From 1,200/s on p99 stays between 11 and 17 ms while the degraded share grows: 12 to 19% of the responses at 1,200/s, 55 to 69% at 1,600, 84 to 90% at 2,000, 94 to 96% at 2,400 and 98 to 99% from 3,600 on.
+- Nearly every degraded response is `history_unavailable`: the history read through Valkey ran past its 3 ms budget. A request without a history has no user vector and skips vector retrieval, so the four replicas' CPU per request falls from 1.01 ms at 550/s to 0.02 ms or less from 3,200/s on, and the gateway's from 1.10 to 0.23 to 0.24 ms. At 1,200/s the degraded responses come in whole seconds: in run 1, 45 of the 60 seconds have under 10% and 7 have 70% or more. That matches the circuit breaker on the gateway's Valkey calls, which after five failures in a row leaves Valkey alone for a second (D037); the gateway exports no metric of the breaker's state that could confirm it.
+- CPU per request at 550/s in the run with the median p99: the gateway 1.10 ms, the four replicas together 1.01 ms, Valkey 0.11 ms.
+- **Capacity and admission limits** (D050): c = 1.098 ms (1.098 to 1.199 ms in the three runs), so a gateway on 2 CPUs is estimated at 2/c = 1,821 requests/s. `-max-rate` becomes 1,450 and `-max-inflight` 152 (`deploy/kind/gateway.yaml`). This is an estimate from one quantity, measured while the gateway shared its CPUs with the rest of the service.
+
+#### The other five scenarios, 100 to 800 requests/s
+
+`make bench-sweep SCENARIO=... CACHE=... RATES="100 200 400 800"` (`sweep-<scenario>-cache-<on|off>/`): the headline sweep's grid up to its first rate that misses the amended condition (D054). p99 is between 3.7 and 5.3 ms at every rate to 400/s in every scenario, and between 4.4 and 7.9 ms at 800/s. Where a rate misses, it is on a run with more than 1% degraded or on flagged baselines.
+
+| Scenario | Cache hits, 100 / 200 / 400 / 800 per s | Most degraded run, 400 and 800/s | `/v1/events` p99, ms |
+|---|---|---|---|
+| replay, cache on | 47 / 55 / 65 / 78% | 1.67%, 3.79% | |
+| writes, cache on | 42 / 49 / 58 / 69% | 1.69%, 3.41% | 2.2 to 2.9 |
+| writes, cache off | | 0.03%, 5.09% | 2.1 to 3.7 |
+| repeats, cache on | 58 / 63 / 71 / 80% | 1.70%, 5.03% | |
+| repeats, cache off | | 0.05%, 1.77% | |
+
+- Replaying the test split hits the cache here, where M3's runs had no hit: compose preloads only the train and valid splits, so a user's later test events have the history of the first and the same key (D030); M3's Valkey also held the test split. Repeated requests add 6 to 11 points of hit rate at each rate.
+- With the cache on, the gateway's CPU per request falls with the hit rate, from 1.42 ms at 100/s to 0.62 ms at 800/s in replay.
+- **History budget (D039).** In replay with the cache on, the share of requests past the 3 ms budget is at most 0.03% at 100 and 200/s, but one run of 400/s has 1.74% (0.02% in the other two), so the rule runs the headline rate, 550/s, with 5 ms and 8 ms (`budget-history-5ms/`, `budget-history-8ms/`). With 5 ms the share is 0.02, 0.00 and 0.00% in three unflagged runs, with 8 ms 0.00% in all three (two of them flagged), so SPEC §5's budget for the history read and cache lookup becomes 5 ms. The headline itself was measured with 3 ms.
+- **Cross-check** (`make bench-vegeta RATE=275`, `vegeta/`): at half the headline, loadgen's p99 is 3.89, 3.92 and 4.14 ms and vegeta's 3.35, 3.26 and 3.38 ms, every one of vegeta's 16,500 requests per run answered 200. vegeta times a request from its send and loadgen from its due time, so loadgen's figure also holds any wait before the send.

@@ -70,10 +70,10 @@ Check off each item when it is done. All tests must pass at the end of every mil
 
 ## M6 Benchmarks and fault injection
 - [x] Fault-injection pass criteria committed to docs/BENCHMARKS.md before any fault run
-- [ ] Load sweeps per docs/BENCHMARKS.md
+- [x] Load sweeps per docs/BENCHMARKS.md: headline 550 requests/s on this VM (D054), six scenarios, vegeta cross-check
 - [x] From the sweeps, a gateway's capacity, and `-max-rate` and `-max-inflight` set from it in place of the one measurement of D050: about 1,800 requests/s on 2 CPUs (an estimate), 1,450 and 152 in kind
-- [ ] Per rate of the sweep, the share of requests whose history read or cache call runs past `-budget-history`; decide on the budget or the per-user history version left open in D039
-- [ ] A cache-on workload with repeated requests: replaying the test split never hits (BENCHMARKS, M3)
+- [x] Per rate of the sweep, the share of requests whose history read or cache call runs past `-budget-history`; decide on the budget or the per-user history version left open in D039: the budget becomes 5 ms, no history version (D039)
+- [x] A cache-on workload with repeated requests: replaying the test split never hits (BENCHMARKS, M3); in M6 replay hits 47 to 78%, repeats 58 to 80%
 - [ ] Fault runs with toxiproxy and container control (D021)
 - [ ] In the fault runs, a replica that goes silent with its connection up, and one that answers keepalive pings while its searches hang: the share of responses with `shards_partial` during the 13 s before the keepalive acts, and for as long as the second lasts; decide on outlier detection (D041)
 - [ ] Shard search latency through annshard and the hedge delay's default, from measured latencies (D041)

@@ -1,0 +1,35 @@
+{
+  "name": "loadgen-run3",
+  "rate": 275,
+  "valid": true,
+  "noisy": true,
+  "achieved_rate": 275,
+  "answers": 16500,
+  "p50_ms": 2.311,
+  "p90_ms": 3.156,
+  "p99_ms": 4.14,
+  "p99_9_ms": 6.389,
+  "max_ms": 36.764,
+  "errors": 0,
+  "busy": 0,
+  "degraded_share": 0.00012121212121212121,
+  "degraded_by_reason": {
+    "history_unavailable": 0.000060606060606060605,
+    "ranker_timeout": 0.000060606060606060605
+  },
+  "mean_coverage": 1,
+  "events": 0,
+  "events_p99_ms": 0,
+  "past_budget_share": 0.00006055468087683178,
+  "cache_hit_rate": 0,
+  "cpu_ms_per_request": {
+    "annshard-0": 0.30798174036363635,
+    "annshard-1": 0.31019314133333337,
+    "annshard-2": 0.32190689375757575,
+    "annshard-3": 0.32208055890909093,
+    "gateway": 1.3938975735151515,
+    "ingest": 0.004631886242424243,
+    "kafka": 0.04962281587878788,
+    "valkey": 0.16857634072727273
+  }
+}
