@@ -8,7 +8,7 @@ COMPOSE := docker compose -f deploy/compose.yaml
 
 .DEFAULT_GOAL := help
 BENCH   := DATA=$(abspath $(DATA)) VERSION=$(VERSION)
-.PHONY: bench-ref bench-sweep bench-profile bench-compare bench-fault bench-hedge bench-swap bench-kind bench-vegeta
+.PHONY: bench-ref bench-sweep bench-profile bench-compare bench-fault bench-hedge bench-swap bench-kind bench-vegeta bench-ann
 .PHONY: help build test test-real e2e lint fmt proto data bundle images infra-up infra-down up down test-alerts kind-up kind-swap kind-check kind-netpol kind-down
 
 help: ## Show available targets
@@ -95,6 +95,9 @@ bench-kind: build ## kind-check's rollouts and swap to VERSION with SPEC §5's b
 
 bench-vegeta: build ## loadgen and vegeta at RATE, half the headline rate, three runs each (docs/BENCHMARKS.md); needs vegeta v12.12.0; DATA, VERSION
 	$(BENCH) scripts/bench-vegeta.sh $(RATE)
+
+bench-ann: build ## ANN in docs/BENCHMARKS.md, STEP profile or table: annbench and faiss on glove and synth in ANN_DATA (DATA/ann); PY, a Python with faiss-cpu 1.15.1, h5py and numpy
+	$(BENCH) ANN_DATA=$(ANN_DATA) PY=$(PY) scripts/bench-ann.sh $(STEP)
 
 bench-profile: build ## CPU profiles of the gateway and a replica under load in compose (docs/BENCHMARKS.md); DATA, VERSION
 	$(BENCH) scripts/bench-profile.sh
