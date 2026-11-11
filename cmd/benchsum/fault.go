@@ -218,34 +218,27 @@ func label(ls []*dto.LabelPair, name string) string {
 
 // readMarks reads the script's lines "inject <unix ms>" and "remove <unix ms>".
 func readMarks(path string) (map[string]float64, error) {
-	data, err := os.ReadFile(path)
+	list, err := readMarkList(path)
 	if err != nil {
 		return nil, err
 	}
 	out := map[string]float64{}
-	for line := range strings.Lines(string(data)) {
-		f := strings.Fields(line)
-		if len(f) != 2 {
-			continue
-		}
-		v, err := strconv.ParseFloat(f[1], 64)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
-		}
-		out[f[0]] = v
+	for _, m := range list {
+		out[m.name] = m.ms
 	}
-	if _, ok := out["inject"]; !ok {
-		return nil, fmt.Errorf("%s: no inject mark", path)
-	}
-	if _, ok := out["remove"]; !ok {
-		return nil, fmt.Errorf("%s: no remove mark", path)
+	for _, n := range []string{"inject", "remove"} {
+		if _, ok := out[n]; !ok {
+			return nil, fmt.Errorf("%s: no %s mark", path, n)
+		}
 	}
 	return out, nil
 }
 
 // lagDrained reads lines of "<unix ms> <events accepted> <records applied>"
 // and returns the seconds from removal until the first reading at or after
-// it with nothing left to apply; nil if none.
+// it with nothing left to apply; nil if none. The two counts are read one
+// after the other, the gateway's first, so a consumer that has caught up
+// may read as having applied more than was accepted.
 func lagDrained(path string, removal float64) (*float64, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -262,7 +255,7 @@ func lagDrained(path string, removal float64) (*float64, error) {
 				return nil, fmt.Errorf("%s: %w", path, err)
 			}
 		}
-		if v[0] >= removal && v[1] == v[2] {
+		if v[0] >= removal && v[1] <= v[2] {
 			s := (v[0] - removal) / 1000
 			return &s, nil
 		}

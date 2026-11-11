@@ -8,7 +8,7 @@ COMPOSE := docker compose -f deploy/compose.yaml
 
 .DEFAULT_GOAL := help
 BENCH   := DATA=$(abspath $(DATA)) VERSION=$(VERSION)
-.PHONY: bench-ref bench-sweep bench-profile bench-compare
+.PHONY: bench-ref bench-sweep bench-profile bench-compare bench-fault bench-hedge bench-swap bench-kind
 .PHONY: help build test test-real e2e lint fmt proto data bundle images infra-up infra-down up down test-alerts kind-up kind-swap kind-check kind-netpol kind-down
 
 help: ## Show available targets
@@ -80,6 +80,18 @@ bench-ref: build ## Take the session's noise reference on an idle machine (docs/
 
 bench-sweep: build ## Load sweep in compose (docs/BENCHMARKS.md): SCENARIO replay, writes or repeats, CACHE on or off, RATES (empty: the grid); DATA, VERSION
 	$(BENCH) scripts/bench-sweep.sh $(SCENARIO) $(CACHE) $(RATES)
+
+bench-fault: build ## Fault runs in compose (docs/BENCHMARKS.md): FAULT F1 to F6, RATE half the headline rate; DATA, VERSION
+	$(BENCH) scripts/bench-fault.sh $(FAULT) $(RATE)
+
+bench-hedge: build ## The hedge delay's default from shard call latencies in compose (docs/BENCHMARKS.md): RATE half the headline rate; DATA, VERSION
+	$(BENCH) scripts/bench-hedge.sh $(RATE)
+
+bench-swap: build ## Bundle swaps under load in compose, with GC on and off (docs/BENCHMARKS.md): RATE half the headline rate; DATA, VERSION
+	$(BENCH) scripts/bench-swap.sh $(RATE)
+
+bench-kind: build ## kind-check's rollouts and swap to VERSION with SPEC §5's budgets, three new clusters (docs/BENCHMARKS.md); DATA, VERSION
+	$(BENCH) scripts/bench-kind.sh
 
 bench-profile: build ## CPU profiles of the gateway and a replica under load in compose (docs/BENCHMARKS.md); DATA, VERSION
 	$(BENCH) scripts/bench-profile.sh

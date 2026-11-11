@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -129,12 +130,13 @@ func readMetrics(path string) (metrics, error) {
 	return p.TextToMetricFamilies(f)
 }
 
-// sum adds the values of name's counters whose labels include want.
+// sum adds the values of name's counters, or the observations of its
+// histograms, whose labels include want.
 func (m metrics) sum(name string, want map[string]string) float64 {
 	var total float64
 	for _, x := range m[name].GetMetric() {
 		if has(x, want) {
-			total += x.GetCounter().GetValue()
+			total += x.GetCounter().GetValue() + float64(x.GetHistogram().GetSampleCount())
 		}
 	}
 	return total
@@ -194,6 +196,9 @@ func histogramQuantile(after, before metrics, name string, want map[string]strin
 	lower, below := 0.0, 0.0
 	for i, c := range counts {
 		if c >= rank {
+			if math.IsInf(bounds[i], 1) {
+				return lower // past the highest finite bound, as in Prometheus
+			}
 			return lower + (bounds[i]-lower)*(rank-below)/(c-below)
 		}
 		lower, below = bounds[i], c

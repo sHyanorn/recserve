@@ -16,20 +16,31 @@ now_ms() { date +%s%3N; }
 
 ip_of() { docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "recserve-$1-1"; }
 
-# cpu_snapshot FILE: each container's CPU time in ns, from its cgroup.
-cpu_snapshot() {
+# cgroups: each container's CPU counter file, into CGROUPS; fresh calls it.
+cgroups() {
 	local c id f
+	CGROUPS=()
 	for c in "${CONTAINERS[@]}" ${EXTRA_CONTAINERS:-}; do
 		id=$(docker inspect -f '{{.Id}}' "recserve-$c-1" 2>/dev/null) || continue
 		for f in /sys/fs/cgroup/cpuacct/docker/$id/cpuacct.usage /sys/fs/cgroup/system.slice/docker-$id.scope/cpu.stat /sys/fs/cgroup/docker/$id/cpu.stat; do
-			[[ -r $f ]] || continue
-			if [[ $f == *cpu.stat ]]; then
-				echo "$c $(awk '$1 == "usage_usec" {print $2 * 1000}' "$f")"
-			else
-				echo "$c $(cat "$f")"
-			fi
-			break
+			[[ -r $f ]] && CGROUPS+=("$c $f") && break
 		done
+	done
+	return 0
+}
+
+# cpu_snapshot FILE: each container's CPU time in ns, from its cgroup; a
+# stopped container is left out.
+cpu_snapshot() {
+	local e c f
+	for e in "${CGROUPS[@]}"; do
+		c=${e%% *} f=${e#* }
+		[[ -r $f ]] || continue
+		if [[ $f == *cpu.stat ]]; then
+			echo "$c $(awk '$1 == "usage_usec" {print $2 * 1000}' "$f")"
+		else
+			echo "$c $(<"$f")"
+		fi
 	done >"$1"
 }
 
@@ -55,6 +66,7 @@ fresh() {
 		((SECONDS < deadline)) || { log "the gateway is not ready after 300 s"; "${COMPOSE[@]}" logs --tail 20 gateway >&2; return 1; }
 		sleep 1
 	done
+	cgroups
 }
 
 down() { "${COMPOSE[@]}" --profile app --profile faults down -v >/dev/null 2>&1 || true; }
@@ -68,6 +80,24 @@ loadgen() {
 		-warmup "$warmup" -duration "$duration" -samples "$OUT/raw/$(basename "$prefix").csv.gz" -out "$prefix.json" "$@" \
 		>"$prefix.loadgen.txt" 2>&1 &
 	LOADGEN=$!
+}
+
+# at MS: sleep until the Unix time MS in milliseconds.
+at() {
+	local d=$(($1 - $(now_ms)))
+	((d > 0)) && sleep "$((d / 1000)).$(printf %03d $((d % 1000)))"
+	return 0
+}
+
+# started PREFIX: once loadgen has printed it, the due time of its first
+# request in Unix ms.
+started() {
+	local t0
+	until t0=$(sed -n 's/^start \([0-9]*\)$/\1/p' "$1.loadgen.txt" 2>/dev/null) && [[ -n $t0 ]]; do
+		kill -0 "$LOADGEN" 2>/dev/null || { log "loadgen exited"; cat "$1.loadgen.txt" >&2; return 1; }
+		sleep 0.1
+	done
+	echo "$t0"
 }
 
 # one_run PREFIX RATE [LOADGEN ARGS...]: a sweep run on fresh services, 10 s

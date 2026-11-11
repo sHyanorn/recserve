@@ -157,6 +157,19 @@ h_count{shard="0"} 110
 	if want := 0.001 + 0.001*(95.0-60)/40; math.Abs(got-want) > 1e-12 {
 		t.Fatalf("p95 %g, want %g", got, want)
 	}
+	// A tenth of the calls past the highest finite bound: ranks count them,
+	// and a quantile among them is that bound, as in Prometheus.
+	slow := write("s", head+`h_bucket{shard="0",le="0.001"} 50
+h_bucket{shard="0",le="0.002"} 90
+h_bucket{shard="0",le="+Inf"} 100
+h_sum{shard="0"} 1
+h_count{shard="0"} 100
+`)
+	for q, want := range map[float64]float64{0.5: 0.001, 0.95: 0.002} {
+		if got := histogramQuantile(slow, nil, "h", map[string]string{"shard": "0"}, q); math.Abs(got-want) > 1e-12 {
+			t.Errorf("q %g: %g, want %g", q, got, want)
+		}
+	}
 }
 
 func TestSamplesRoundTrip(t *testing.T) {
@@ -202,5 +215,21 @@ func TestLower(t *testing.T) {
 	m := benchLine.FindStringSubmatch("BenchmarkDot/64-4   \t 51234567\t        23.45 ns/op")
 	if m == nil || m[1] != "BenchmarkDot/64" || m[2] != "23.45" {
 		t.Fatalf("parsed %q", m)
+	}
+}
+
+func TestLagDrained(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lag")
+	// Removal at 1.5 s. The gateway is read before ingest, so with writes
+	// going on a drained consumer reads as having applied more than was accepted.
+	if err := os.WriteFile(path, []byte("1000 50 0\n2000 60 30\n3000 70 71\n4000 80 80\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := lagDrained(path, 1500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || *got != 1.5 {
+		t.Fatalf("drained after %v s, want 1.5", got)
 	}
 }

@@ -9,6 +9,10 @@
 //	benchsum compare -dir D                      before and after an optimization (scripts/bench-compare.sh)
 //	benchsum quantile -after M [-before M0] -name N [-label k=v] -q Q
 //	                                             a quantile of a histogram in a /metrics scrape, or between two
+//	benchsum swap -prefix P -samples S             a run of bundle swaps under load: P.swap.json
+//	benchsum swaps -dir D                        the swap runs' table and what GOGC=off says of the largest latencies
+//	benchsum phases -dir D                       runs cut at their marks (D/*.marks, samples in D/raw): *.phases.json and a table
+//	benchsum hedge -dir D                        the hedge-delay runs' table, then default_ms=, the default delay
 //	benchsum histories -valkey A -preload P1,P2 -split S -samples S
 //	                                             property 9 after a run with writes: "ok" or what differs
 package main
@@ -32,7 +36,7 @@ func main() {
 
 func run(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("a subcommand is required: run, rate, sweep, fault, faults, quantile or histories")
+		return fmt.Errorf("a subcommand is required: run, rate, sweep, fault, faults, swap, swaps, phases, quantile, hedge or histories")
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	prefix := fs.String("prefix", "", "path of the run's files without their suffixes")
@@ -126,6 +130,34 @@ func run(args []string, out io.Writer) error {
 			want[k] = v
 		}
 		return printf(out, "%g\n", histogramQuantile(a, b, *name, want, *q))
+	case "swap":
+		s, err := summarizeSwap(*prefix, *samples)
+		if err != nil {
+			return err
+		}
+		if err := writeJSON(*prefix+".swap.json", s); err != nil {
+			return err
+		}
+		return printf(out, "%s: valid %v, noisy %v, swap windows p99 %.2f max %.2f ms, others p99 %.2f max %.2f ms\n", s.Name, s.Valid, s.Noisy, s.Swap.P99, s.Swap.Max, s.Others.P99, s.Others.Max)
+	case "swaps":
+		var b strings.Builder
+		if err := swapTable(&b, *dir); err != nil {
+			return err
+		}
+		return printf(out, "%s", b.String())
+	case "phases":
+		var b strings.Builder
+		if err := phaseTable(&b, *dir); err != nil {
+			return err
+		}
+		return printf(out, "%s", b.String())
+	case "hedge":
+		var b strings.Builder
+		d, err := hedgeTable(&b, *dir)
+		if err != nil {
+			return err
+		}
+		return printf(out, "%sdefault_ms=%g\n", b.String(), d)
 	case "histories":
 		got, err := histories(*valkeyAddr, *preload, *split, *samples)
 		if err != nil {
