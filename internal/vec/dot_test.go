@@ -10,9 +10,10 @@ import (
 
 // sixteenLanes is the definition Dot follows (docs/DECISIONS.md D053),
 // written out element by element: element k of each full block of 16 goes
-// to partial sum k mod 16, those of a last block of 4 to sums 0 to 3; the
-// sums are added as (s_l + s_4+l) + (s_8+l + s_12+l) for each lane l, the
-// lanes as (l0 + l2) + (l1 + l3), and the last elements one at a time.
+// to partial sum k mod 16, those of the remaining blocks of 4 to sums 0 to
+// 3; the sums are added as (s_l + s_4+l) + (s_8+l + s_12+l) for each lane
+// l, the lanes as (l0 + l2) + (l1 + l3), and the last elements one at a
+// time.
 func sixteenLanes(a, b []float32) float64 {
 	var s [16]float64
 	n16 := len(a) / 16 * 16

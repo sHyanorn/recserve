@@ -238,6 +238,7 @@ Committed before the first fault run. A criterion found not to measure what it s
 - F4: p99 ≤ 50 ms in every phase; every reason's excess at most 1 percentage point; the consumer's lag (events the gateway accepted minus records ingest applied, read every second) back at 0 within 30 s of removal; after the run, every user's history in Valkey equals the one built from the preloaded events and the events the gateway accepted (property 9).
 - F5: in [15, 60 s) after the pause, every reason's excess at most 1 percentage point, the keepalive having taken the replica out; recovery within 10 s; annshard-1 uses CPU in the last 60 s.
 - F6: recovery within 5 s. Its degraded share is reported, not judged: D041 Limits point 2 expects about 40% of the responses with `shards_partial` for as long as the fault lasts.
+- Defects, found 2026-11-11 after the M6 runs, criteria not changed and nothing rerun: (1) "annshard-1 uses CPU in the last 60 s" is judged as more than zero, which a replica that only answers health checks and keepalive pings may also use, so it does not show that searches reach the replica again. (2) Recovery is judged on all responses, and the cache answers most of them in the recovery phase, so a replica fault's recovery rests on few searches. (3) `cmd/benchsum` checks "no error in any phase" and F4's p99 from 30 s on, leaving out the warmup, and the recovery window's degraded share only from above. Results, M6, gives what each defect changes.
 
 **Also reported.** F5's share of responses with `shards_partial` in [0, 13 s), [13, 15 s) and [15, 60 s) after the pause; F6's over the fault phase.
 
@@ -448,7 +449,7 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 | 400/s: the replicas' CPU per request, ms | 1.80 to 1.87 | 1.10 to 1.16 | lower after |
 | 400/s: the gateway's CPU per request, ms | 1.29 to 1.33 | 1.26 to 1.32 | not resolved on this machine |
 
-- The inner product takes 4.5 to 5 times less time; the replicas use about 37% less CPU per request, and p99 falls by about a quarter at 200/s and a third at 400/s.
+- The inner product takes 4.2 to 5.4 times less time; the replicas use about 37% less CPU per request, and p99 falls by about a quarter at 200/s and a third at 400/s.
 - The after runs of BenchmarkDot ran from ed28e3b's working tree with the benchmark moved to its own file (the next commit); `vec.Dot` itself was ed28e3b's.
 - Results: the tests, both bundles' golden cases (5de55036a382 checked by starting a gateway on it, b7ff0634dd7b by the after runs) and the sixteen-lane definition hold (D053). No committed file changed.
 
@@ -458,7 +459,7 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 
 - **Headline, 550 requests/s** (D005 as amended by D054): p99 4.61, 4.59 and 5.07 ms in the three runs, 0.04, 0.02 and 0.07% of the responses degraded. 500/s meets the condition; 600/s does not, with one run 1.69% degraded and two flagged.
 - **Under D005 as written** the grid meets it at every rate run up to 550/s, at 800/s and at 1,600, 2,000, 2,400 and 3,200/s; 600, 1,200, 2,800, 3,600 and 4,000/s miss it on flagged noise baselines alone, with p99 between 5 and 17 ms. The grid ran in full to 4,000/s and once at 4,400/s, 98.79% degraded, and was stopped there; its stop rule never acted (`GRID_MAX=4000` repeats it). From 1,200/s on p99 stays between 11 and 17 ms while the degraded share grows: 12 to 19% of the responses at 1,200/s, 55 to 69% at 1,600, 84 to 90% at 2,000, 94 to 96% at 2,400 and 98 to 99% from 3,600 on.
-- Nearly every degraded response is `history_unavailable`: the history read through Valkey ran past its 3 ms budget. A request without a history has no user vector and skips vector retrieval, so the four replicas' CPU per request falls from 1.01 ms at 550/s to 0.02 ms or less from 3,200/s on, and the gateway's from 1.10 to 0.23 to 0.24 ms. At 1,200/s the degraded responses come in whole seconds: in run 1, 45 of the 60 seconds have under 10% and 7 have 70% or more. That matches the circuit breaker on the gateway's Valkey calls, which after five failures in a row leaves Valkey alone for a second (D037); the gateway exports no metric of the breaker's state that could confirm it.
+- Nearly every degraded response is `history_unavailable`: the history read through Valkey failed, ran past its 3 ms budget, or was not tried while the circuit breaker was open. A request without a history has no user vector and skips vector retrieval, so the four replicas' CPU per request falls from 1.01 ms at 550/s to 0.02 ms or less from 3,200/s on, and the gateway's from 1.10 to 0.23 to 0.24 ms. At 1,200/s the degraded responses come in whole seconds: in run 1, 45 of the 60 seconds have under 10% and 7 have 70% or more. That matches the circuit breaker on the gateway's Valkey calls, which after five failures in a row leaves Valkey alone for a second (D037); the gateway exports no metric of the breaker's state that could confirm it.
 - CPU per request at 550/s in the run with the median p99: the gateway 1.10 ms, the four replicas together 1.01 ms, Valkey 0.11 ms.
 - **Capacity and admission limits** (D050): c = 1.098 ms (1.098 to 1.199 ms in the three runs), so a gateway on 2 CPUs is estimated at 2/c = 1,821 requests/s. `-max-rate` becomes 1,450 and `-max-inflight` 152 (`deploy/kind/gateway.yaml`). This is an estimate from one quantity, measured while the gateway shared its CPUs with the rest of the service.
 
@@ -474,14 +475,14 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 | repeats, cache on | 58 / 63 / 71 / 80% | 1.70%, 5.03% | |
 | repeats, cache off | | 0.05%, 1.77% | |
 
-- Replaying the test split hits the cache here, where M3's runs had no hit: compose preloads only the train and valid splits, so a user's later test events have the history of the first and the same key (D030); M3's Valkey also held the test split. Repeated requests add 6 to 11 points of hit rate at each rate.
-- With the cache on, the gateway's CPU per request falls with the hit rate, from 1.42 ms at 100/s to 0.62 ms at 800/s in replay.
+- Replaying the test split hits the cache here, where M3's runs had no hit: compose preloads only the train and valid splits, so a user's later test events have the history of the first and the same key (D030); M3's Valkey also held the test split. Repeated requests add 2 to 11 points of hit rate, fewer at higher rates (11 at 100/s, 2 at 800/s).
+- In replay the gateway's CPU per request falls from 1.42 ms at 100/s to 0.62 ms at 800/s with the cache on, and from 1.80 to 1.02 ms with it off.
 - **History budget (D039).** In replay with the cache on, the share of requests past the 3 ms budget is at most 0.03% at 100 and 200/s, but one run of 400/s has 1.74% (0.02% in the other two), so the rule runs the headline rate, 550/s, with 5 ms and 8 ms (`budget-history-5ms/`, `budget-history-8ms/`). With 5 ms the share is 0.02, 0.00 and 0.00% in three unflagged runs, with 8 ms 0.00% in all three (two of them flagged), so SPEC §5's budget for the history read and cache lookup becomes 5 ms. The headline itself was measured with 3 ms.
-- **Cross-check** (`make bench-vegeta RATE=275`, `vegeta/`): at half the headline, loadgen's p99 is 3.89, 3.92 and 4.14 ms and vegeta's 3.35, 3.26 and 3.38 ms, every one of vegeta's 16,500 requests per run answered 200. vegeta times a request from its send and loadgen from its due time, so loadgen's figure also holds any wait before the send.
+- **Cross-check** (`make bench-vegeta RATE=275`, `vegeta/`, at 05d909c with uncommitted changes): at half the headline, loadgen's p99 is 3.89, 3.92 and 4.14 ms, the last two runs noisy after three attempts, and vegeta's 3.35, 3.26 and 3.38 ms, every one of vegeta's 16,500 requests per run answered 200. vegeta times a request from its send and loadgen from its due time, so loadgen's figure also holds any wait before the send.
 
 #### Fault runs: F1, F2, F3 and F6 pass; F4 and F5 fail
 
-`make bench-fault FAULT=F1 ... F6 RATE=275` (`faults/`, the table in `faults.md`), on the third VM, with the 5 ms history budget and the cache on. Every fault has three valid runs; 9 of the 27 attempts were invalid, 3 on flagged baselines and 6 with 1.73 to 3.47% of the healthy phase degraded (their files were replaced by the reruns). No valid run has an error in any phase, and every fault phase has p99 ≤ 50 ms.
+`make bench-fault FAULT=F1 ... F6 RATE=275` (`faults/`, the table in `faults.md`), on the third VM, with the 5 ms history budget, the hedge delay then the default, 5 ms (2.5 ms came after these runs), and the cache on. Every fault has three valid runs; 9 of the 27 attempts were invalid, 3 on flagged baselines and 6 with 1.73 to 3.47% of the healthy phase degraded (their files were replaced by the reruns). No valid run has an error in any phase, and every fault phase has p99 ≤ 50 ms.
 
 | Fault | Result | Fault phase p99, ms | Degraded in the fault phase | Recovery, s | Also |
 |---|---|---|---|---|---|
@@ -493,15 +494,16 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 | F6 searches hang | pass | 20.49, 20.10, 19.58 | 11.44, 11.18, 11.51% `shards_partial` | 0, 0, 0 | mean coverage 0.91; shard 0's hedges 1,521 to 1,559 denied and 385 to 390 won per run |
 
 - **F4 and F5 fail on one second each, in which the gateway's Valkey circuit breaker was open.** In every valid run, each second outside F3's fault in which more than 20% of the responses report `history_unavailable` starts with a change of the breaker from closed to open in the gateway's log (`*.breaker`), and the breaker closes 1.0 s later on its first trial call: 15 openings in the 18 runs, 11 of them in the first 30 s, 2 in fault phases (F4 run 3 at 112.7 s, F5 run 3 at 145.5 s) and 2 in recovery phases. The breaker opens after five failed Valkey calls in a row (D037); what made those calls fail is not established.
+- **By the criteria's defects (above).** F1's last criterion is met by CPU alone: in the last 60 s annshard-1 used 7.0, 5.4 and 28.2 ms and the replicas never killed 4.3 to 26.6 ms, and a replica's CPU without searches was not measured, so that the restarted replica serves searches again is not shown. No run had an error in the warmup, F4's warmup p99 per second is at most 20.1 ms, and every recovery took 0 or 1 s, so the other two defects change no result.
 - **The cache serves most of the late traffic.** 59 to 67% of the lookups hit in the healthy phases, 63 to 75% in the fault phases (none in F3's) and 86 to 99% in the recovery phases, since replay repeats keys as the run goes on. Shard 0 gets 73 to 79 calls per second while healthy and 2 to 25 in the recovery phases, so the recovery times of the replica faults rest on that much search traffic, and the shares above are of all responses: in F6's fault phase, with 71% hits, about 39% of the responses that searched were partial.
 - **Outlier detection (D041).** F5's share in [0, 13 s) and F6's over its fault phase are above 1%, so D041 records outlier detection as adopted, and TASKS has it; it is not built in M6.
-- The healthy phases' p99 is 8.2 to 13.1 ms, against 3.9 to 4.1 ms for loadgen at the same rate in the cross-check: here toxiproxy is on every call to the replicas and Valkey, the cache is on, and the VM is another. Which of these accounts for the difference was not measured.
+- The healthy phases' p99 is 8.2 to 13.1 ms, with toxiproxy on every call to the replicas and Valkey and the cache on.
 
 #### Hedge delay: 2.5 ms
 
 `make bench-hedge RATE=275` (`hedge/`, the table in `hedge.md`), on the third VM, the cache off. With hedging off the p95 of a call is 2.12, 1.97 and 1.91 ms on shard 0 and 2.20, 2.05 and 1.99 ms on shard 1, so the default becomes 2.5 ms, the median of the larger shard's, 2.05 ms, rounded up (D041). With 2.5 ms, 1.0 to 1.3% of each shard's searches sent a hedge, fewer than the 5% the rule aims at: the rounding up puts the delay past most of the slowest 5% of calls. p99 is 5.84 to 6.56 ms with hedging off and 5.70 to 6.32 ms with 2.5 ms, ranges that overlap, so a difference in p99 is not resolved on this machine. No run is invalid or flagged.
 
-#### Bundle swaps: a higher p99 in the swap windows, with GC on or off, and no higher maximum
+#### Bundle swaps: a higher p99 in the swap windows, with GC on or off; a lower maximum with GC off
 
 `make bench-swap RATE=275` (`swap/`, the table in `swaps.md`), on the third VM with the 2.5 ms hedge delay, the cache off: nine swaps per run between b7ff0634dd7b and 5de55036a382, three runs with GC as configured and three with `GOGC=off`. No run is invalid or flagged.
 
@@ -511,7 +513,7 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 | off | 6.93, 11.33, 6.50 | 20.19, 23.39, 23.49 | 5.54, 6.34, 5.48 | 52.22, 31.16, 29.25 |
 
 - A swap's prepare took 65 to 864 ms and its drain at most 3.0 ms. During a swap the gateway used 87 to 462 ms of CPU and the four replicas 28 to 505 ms.
-- By the rule above, the median max over the swap windows with `GOGC=off`, 23.39 ms, is 0.75 times that over the other windows, 31.16 ms: read as written, the rule attributes the largest values to GC. That reading does not hold here, by the rule's defect noted above: the swap windows do not hold the largest values with GC on either (medians 18.65 against 19.85 ms), so there is no excess for GC to explain and this record attributes nothing to GC. The other windows' largest values, up to 52.22 ms, also occur with no GC at all.
+- By the rule above, the median max over the swap windows with `GOGC=off`, 23.39 ms, is 0.75 times that over the other windows, 31.16 ms: read as written, the rule attributes the largest values to GC. That reading does not hold here, by the rule's defect noted above: with GC on, the swap windows' maximum is above the other windows' in one run (25.58 against 17.25 ms) and below in two, medians 18.65 against 19.85 ms, ranges that overlap, so no excess is established for GC to explain and this record attributes nothing to GC. With `GOGC=off` it is below in every run (20.19 to 23.49 against 29.25 to 52.22 ms). The other windows' largest values, up to 52.22 ms, also occur with no GC at all.
 - p99 over the swap windows is above the other windows' in every run, with GC on (6.73 to 7.50 against 5.18 to 5.99 ms) and off (6.50 to 11.33 against 5.48 to 6.34 ms): turning GC off does not remove it. The CPU readings above are the only other figures; no cause is named.
 - With GC on, the swap windows hold 6 or 7 collections per run, 1.4 to 2.9 ms of pauses in all; the other windows 205 to 207, 72 to 78 ms.
 
@@ -546,7 +548,7 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 | 400/s: the replicas' CPU per request, ms | 1.43 to 1.52 | 1.39 to 1.47 | not resolved on this machine |
 | 400/s: the gateway's CPU per request, ms | 1.48 to 1.53 | 1.44 to 1.50 | not resolved on this machine |
 
-- The inner product takes 2.7 to 3.3 times less time, and annbench's p99 on glove after is 0.50 to 0.61 times the p99 before at every ef. Recall@100 is equal to the last digit at every ef: on this graph the search returns the same neighbors.
+- The inner product takes 2.7 to 3.3 times less time, and annbench's p99 on glove after is 0.50 to 0.61 times the p99 before at every ef. Recall@100 is the same to its last digit, 10^-6, at every ef.
 - In the service `Dot32` runs only in MMR: 3.1% of the gateway's samples in the profile at 400 requests/s, taken on the first VM before `vec.Dot`'s change. Exact search, the default, uses `vec.Dot`. The gateway's CPU per request is not resolved at either rate. p99 at 400/s meets the rule for lower after by 0.01 ms, the after runs' largest against the before runs' smallest; with no difference resolved in CPU, this record does not attribute it to `Dot32`.
 - Results: the tests and the 32-lane definition hold (D055); golden cases use `vec.Dot`, and no committed file changed.
 
@@ -567,3 +569,11 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 - At the same ef, recserve's p99 is 0.80 to 1.05 times faiss's on synth and 1.01 to 1.33 times on glove; recall agrees within 0.007 at every point.
 - By M2's criterion (Hand-written HNSW above): synth meets it at ef 120 (0.9956, 0.43 ms). On glove recall@100 reaches 0.95 only with M = 32 at ef 800 (0.9575), with p99 7.66 ms, above 5 ms, so glove still fails on latency alone; faiss reaches 0.9610 there at 6.21 ms. Two shards reach 0.94997 at ef 400, again just under 0.95, so their lowest qualifying ef is 800, at 8.63 ms. The longest GC pause in any query phase is at most 0.13 ms.
 - The graphs are new builds with the new `Dot32`; recall on glove agrees with M2's graphs to the digits M2 shows.
+
+#### What the committed files cannot show
+
+Found 2026-11-11 on review; nothing was rerun.
+
+- The figures of invalid fault attempts (6 with 1.73 to 3.47% of the healthy phase degraded) are gone: `scripts/bench-fault.sh` removes an attempt's files before its rerun.
+- The degraded seconds at 1,200 requests/s (45 of 60 under 10%, 7 at 70% or more) come from raw samples, which are not committed; so does the first, unrecorded profile run's p99.
+- `kind/` has no `env.txt`; its VM, the third, and its images, of 89fac9f, are stated in the text only.

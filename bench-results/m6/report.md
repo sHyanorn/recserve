@@ -4,7 +4,7 @@ What M6 measured, with charts. The protocols, pass criteria and full tables are 
 
 **Read first.**
 
-- M6 ran on four cloud VMs of the same kind (4 vCPU, shared hosts): the profiles and `vec.Dot`'s optimization on the first, the load sweeps and the runs that follow from them on the second, the fault, hedge, swap and kind runs on the third, the ANN runs and `vec.Dot32`'s comparison on the fourth. Their speeds differ (at 275 requests/s with the cache off, p99 was near 6 ms on the third and 3.9 to 4.1 ms on the second), so figures from different VMs are not compared with one another.
+- M6 ran on four cloud VMs of the same kind (4 vCPU, shared hosts): the profiles and `vec.Dot`'s optimization on the first, the load sweeps and the runs that follow from them on the second, the fault, hedge, swap and kind runs on the third, the ANN runs and `vec.Dot32`'s comparison on the fourth. Their speeds differ, so figures from different VMs are not compared with one another.
 - Every service ran on the same three CPUs, with the load generator on the fourth. The headline and capacity are this machine's and this topology's figures; a gateway's capacity is an estimate.
 - The headline sweep ran with the history budget at its old value, 3 ms. From the fault runs on, every run uses 5 ms, the value the sweeps led to (D039).
 
@@ -22,7 +22,7 @@ Replay with the cache off, three runs per rate, on the second VM. The headline i
 
 ## Profiles and two optimizations
 
-`vec.Dot`, the float64 inner product of exact search, had 54% of a replica's CPU at 400 requests/s on the first VM. In AVX2 (D053) it takes 4.5 to 5 times less time; the replicas use about 37% less CPU per request, and p99 falls by about a quarter at 200/s and a third at 400/s. The gateway's CPU per request at 400/s is not resolved.
+`vec.Dot`, the float64 inner product of exact search, had 54% of a replica's CPU at 400 requests/s on the first VM. In AVX2 (D053) it takes 4.2 to 5.4 times less time; the replicas use about 37% less CPU per request, and p99 falls by about a quarter at 200/s and a third at 400/s. The gateway's CPU per request at 400/s is not resolved.
 
 `vec.Dot32`, the float32 inner product of the HNSW index, had 76% of annbench's CPU on glove on the fourth VM. In AVX (D055) it takes 2.7 to 3.3 times less time, and annbench's p99 on glove after is 0.50 to 0.61 times the p99 before at every ef, with the same recall@100. In the service it runs only in MMR, and the gateway's CPU per request is not resolved.
 
@@ -37,7 +37,7 @@ At 275 requests/s on the third VM, cache on, three valid runs per fault, each ju
 
 | Fault | Result | Fault phase p99, ms | Degraded in the fault phase |
 |---|---|---|---|
-| F1 replica killed | pass | 8.7 to 10.1 | 0.0% |
+| F1 replica killed | pass (see below) | 8.7 to 10.1 | 0.0% |
 | F2 50 ms on shard 1's replicas | pass | 21.1 to 21.2 | 34.5 to 35.0%, all `shards_partial` |
 | F3 Valkey unavailable | pass | 2.6 to 3.1 | 99.9%, `history_unavailable` |
 | F4 ingest's consumer paused | fail | 9.1 to 10.6 | 0.0 to 1.7% |
@@ -47,7 +47,8 @@ At 275 requests/s on the third VM, cache on, three valid runs per fault, each ju
 - **Why F4 and F5 fail.** Each fails on one second of one run in which the gateway's circuit breaker on Valkey was open: `history_unavailable` rose 1.67 points above the healthy phase in F4's run 3 and 2.22 points in F5's run 3 (from 15 s after the pause on), past the 1-point limit. The breaker opens after five failed Valkey calls in a row and tries again a second later (D037); what made those five calls fail is not established.
 - **Degraded responses in whole seconds** come from the breaker being open for a second: in the fault runs, every second outside F3's fault with more than 20% `history_unavailable` starts with the breaker opening in the gateway's log. The sweep at 1,200/s shows the same pattern, with no log taken to confirm it. What triggers the openings is not established, and the gateway exports no metric of the breaker's state.
 - **Recovery times rest on little search traffic.** The cache answers 86 to 99% of the lookups in the recovery phases, so shard 0 gets 2 to 25 calls per second there, against 73 to 79 while healthy. The recovery times of the replica faults (0 s for F1, F2, F5 and F6) are measured on that much traffic.
-- F5 and F6 hold 11 to 12% of the responses partial while the replica is silent; by the rule committed beforehand, outlier detection on the replicas is adopted (D041) and left to M7.
+- F5 holds 11.8 to 12.1% of the responses partial in the 13 s before the keepalive takes the paused replica out (2.6 to 4.4% over its whole fault phase), and F6 11.2 to 11.5% for as long as the searches hang; by the rule committed beforehand, outlier detection on the replicas is adopted (D041) and left to M7.
+- **F1's pass is by its criteria as written.** Its check that the restarted replica serves again is CPU above zero in the last 60 s, and with the cache answering most requests every replica was nearly idle then (4 to 28 ms of CPU in 60 s), so it does not show that searches reach the replica; this and two smaller defects of the judging are dated in BENCHMARKS. The fault runs used the hedge delay of the time, 5 ms.
 
 ## Hedge delay: 2.5 ms
 
@@ -57,10 +58,10 @@ With hedging off, a call to a replica has a p95 of 1.91 to 2.20 ms; the default 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="figures/swaps-dark.png">
-  <img alt="In every run the seconds with a swap have a higher p99 than the other seconds, with GC on or off, while their maximum is no higher" src="figures/swaps.png">
+  <img alt="In every run the seconds with a swap have a higher p99 than the other seconds, with GC on or off; their maximum is lower in every run with GC off and mixed with GC on" src="figures/swaps.png">
 </picture>
 
-Nine swaps per run at 275 requests/s on the third VM. The seconds with a swap have a higher p99 than the others in every run, with GC on or off, and no higher maximum. A swap's prepare took 65 to 864 ms. No cause is named: the rule committed beforehand reads the ratio of maxima with `GOGC=off` as GC, but it takes for granted that the swap seconds hold the largest values with GC on, and here they do not, so there is nothing for GC to explain (a dated defect of the rule, in BENCHMARKS).
+Nine swaps per run at 275 requests/s on the third VM. The seconds with a swap have a higher p99 than the others in every run, with GC on or off. Their maximum is lower in every run with GC off; with GC on it is higher in one run and lower in two, which does not resolve. A swap's prepare took 65 to 864 ms. No cause is named: the rule committed beforehand reads the ratio of maxima with `GOGC=off` as GC, but it takes for granted that the swap seconds hold the largest values with GC on, which these runs do not establish, so there is nothing shown for GC to explain (a dated defect of the rule, in BENCHMARKS).
 
 ## Rollouts and a swap in kind with SPEC §5's budgets
 

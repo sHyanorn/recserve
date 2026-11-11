@@ -3,8 +3,8 @@ package vec
 // Dot is the inner product, accumulated in float64. len(b) must be at
 // least len(a). The additions follow one fixed order, the one AVX2 runs
 // fastest in (D053): 16 partial sums over the full blocks of 16 elements,
-// the first 4 of them also over a last block of 4, then the lanes, then the
-// last elements one at a time. On amd64 with AVX2 and FMA it runs in
+// the first 4 of them also over the remaining blocks of 4, then the lanes,
+// then the last elements one at a time. On amd64 with AVX2 and FMA it runs in
 // assembly, elsewhere in Go, with the same result to the bit: a product of
 // two float32 values is exact in float64, so fusing it with the addition
 // changes nothing.
