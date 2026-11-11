@@ -286,7 +286,8 @@ func TestLoadRejectsRanker(t *testing.T) {
 		"features reordered": {[]editFunc{withRanker(t, "linear_ranker.onnx"), features(reordered)}, "ranker_features"},
 		"feature extra":      {[]editFunc{withRanker(t, "linear_ranker.onnx"), features(append(RankerFeatures[:6:6], "x"))}, "ranker_features"},
 		"features alone":     {[]editFunc{features(RankerFeatures)}, "ranker_features without ranker.onnx"},
-		"rows mixed":         {[]editFunc{withRanker(t, "cross_row_ranker.onnx")}, "depends on row 0"},
+		"rows mixed":         {[]editFunc{withRanker(t, "cross_row_ranker.onnx")}, "changes with rows [0]"},
+		"next row added":     {[]editFunc{withRanker(t, "next_row_ranker.onnx")}, "changes with rows [1 256 511]"},
 		"column output":      {[]editFunc{withRanker(t, "column_ranker.onnx")}, "Invalid rank for output: score"},
 		"other model":        {[]editFunc{withRanker(t, "mean.onnx")}, "Invalid input name: features"},
 	}

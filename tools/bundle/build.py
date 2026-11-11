@@ -120,21 +120,32 @@ def linear_ranker(w, b):
         init))
 
 
+# The rows the load check changes, one set at a time from all-zero rows;
+# the other rows' scores must not move.
+CHECK_ROWS = [[0], [1, RANKER_ROWS // 2, RANKER_ROWS - 1]]
+
+
 def check_ranker(sess, n_features):
     """Run the service's load check on a ranker: RANKER_ROWS rows of zeros,
-    then the same with row 0 set to fixed values; the scores must be finite,
-    one per row, and rows 1 and up must not change, bit for bit. Returns an
-    error message or None."""
-    x = np.zeros((RANKER_ROWS, n_features), dtype=np.float32)
-    zero = sess.run(["score"], {"features": x})[0]
-    x[0] = np.arange(1, n_features + 1, dtype=np.float32) / 4
-    one = sess.run(["score"], {"features": x})[0]
-    if zero.shape != (RANKER_ROWS,) or one.shape != (RANKER_ROWS,) or zero.dtype != np.float32:
-        return f"ranker output {zero.dtype} {zero.shape}, want float32 ({RANKER_ROWS},)"
-    if not (np.isfinite(zero).all() and np.isfinite(one).all()):
-        return "ranker output is not finite"
-    if zero[1:].tobytes() != one[1:].tobytes():
-        return "ranker scores depend on other rows"
+    then the same with each set of CHECK_ROWS given fixed values; the scores
+    must be finite, one per row, and the rows outside the set must not
+    change, bit for bit. Returns an error message or None."""
+    def score(x):
+        return sess.run(["score"], {"features": x})[0]
+
+    zero = score(np.zeros((RANKER_ROWS, n_features), dtype=np.float32))
+    for rows in CHECK_ROWS:
+        x = np.zeros((RANKER_ROWS, n_features), dtype=np.float32)
+        for k, r in enumerate(rows):
+            x[r] = (np.arange(1, n_features + 1, dtype=np.float32) + k) / 4
+        got = score(x)
+        if zero.shape != (RANKER_ROWS,) or got.shape != (RANKER_ROWS,) or zero.dtype != np.float32:
+            return f"ranker output {zero.dtype} {zero.shape}, want float32 ({RANKER_ROWS},)"
+        if not (np.isfinite(zero).all() and np.isfinite(got).all()):
+            return "ranker output is not finite"
+        others = np.setdiff1d(np.arange(RANKER_ROWS), rows)
+        if zero[others].tobytes() != got[others].tobytes():
+            return f"ranker scores change with rows {rows}"
     return None
 
 

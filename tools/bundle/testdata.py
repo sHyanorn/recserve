@@ -11,7 +11,8 @@ lasts long enough to be terminated.
 The rankers take features float32 [C, 6]. linear_ranker.onnx is build.py's
 linear ranker with LINEAR_W and LINEAR_B (onnxtest.LinearW, LinearB);
 cross_row_ranker.onnx subtracts the mean score of all rows from each, so a
-row's score depends on the others; column_ranker.onnx outputs [C, 1];
+row's score depends on the others; next_row_ranker.onnx adds the next row's
+score to each, which a change of row 0 alone does not show; column_ranker.onnx outputs [C, 1];
 slow_ranker.onnx applies Sin 300 times to the features and sums each row.
 The same inputs give the same bytes.
 """
@@ -67,6 +68,17 @@ def cross_row_ranker():
     ], ["C"])
 
 
+def next_row_ranker():
+    """Each row's score adds the next row's: changing row 0 alone moves no
+    other row, so only a check that changes later rows sees it."""
+    return with_nodes(linear_ranker(LINEAR_W, LINEAR_B), "next_row_ranker", [
+        helper.make_node("Slice", ["linear", "one", "end"], ["next"]),
+        helper.make_node("Pad", ["next", "pad"], ["padded"]),
+        helper.make_node("Add", ["linear", "padded"], ["score"]),
+    ], ["C"], [numpy_helper.from_array(np.array(v, dtype=np.int64), n)
+               for n, v in (("one", [1]), ("end", [np.iinfo(np.int64).max]), ("pad", [0, 1]))])
+
+
 def column_ranker():
     return with_nodes(linear_ranker(LINEAR_W, LINEAR_B), "column_ranker", [
         helper.make_node("Unsqueeze", ["linear", "axis1"], ["score"]),
@@ -92,6 +104,7 @@ def main(d):
         "slow.onnx": slow(),
         "linear_ranker.onnx": linear_ranker(LINEAR_W, LINEAR_B),
         "cross_row_ranker.onnx": cross_row_ranker(),
+        "next_row_ranker.onnx": next_row_ranker(),
         "column_ranker.onnx": column_ranker(),
         "slow_ranker.onnx": slow_ranker(),
     }

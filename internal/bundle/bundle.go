@@ -318,12 +318,16 @@ func (b *Bundle) load(opt Options) error {
 	return b.checkGolden(golden)
 }
 
+// checkRows are the rows the ranker check changes, one set at a time from
+// all-zero rows: the first row, then rows past it.
+var checkRows = [][]int{{0}, {1, RankerRows / 2, RankerRows - 1}}
+
 // loadRanker loads ranker.onnx, if listed, and checks that it scores
 // RankerRows rows, finitely, each row independently of the others: the
 // service pads with zero rows, so a ranker that mixes rows would score a
 // candidate differently with different padding. The check scores all-zero
-// rows, then the same with row 0 set to fixed values; the other rows'
-// scores must not change, bit for bit.
+// rows, then the same with each set of checkRows given fixed values; the
+// other rows' scores must not change, bit for bit.
 func (b *Bundle) loadRanker(model []byte) error {
 	if model == nil {
 		if len(b.RankerFeatures) != 0 {
@@ -338,21 +342,26 @@ func (b *Bundle) loadRanker(model []byte) error {
 	if b.Ranker, err = onnx.NewRanker(model, len(RankerFeatures), RankerRows); err != nil {
 		return fmt.Errorf("ranker.onnx: %w", err)
 	}
-	x := make([]float32, RankerRows*len(RankerFeatures))
-	zero, err := b.Ranker.Rank(context.Background(), x)
+	nf := len(RankerFeatures)
+	zero, err := b.Ranker.Rank(context.Background(), make([]float32, RankerRows*nf))
 	if err != nil {
 		return fmt.Errorf("ranker.onnx: %w", err)
 	}
-	for j := range RankerFeatures {
-		x[j] = float32(j+1) / 4
-	}
-	one, err := b.Ranker.Rank(context.Background(), x)
-	if err != nil {
-		return fmt.Errorf("ranker.onnx: %w", err)
-	}
-	for i := 1; i < RankerRows; i++ {
-		if math.Float32bits(zero[i]) != math.Float32bits(one[i]) {
-			return fmt.Errorf("ranker.onnx: the score of row %d depends on row 0", i)
+	for _, rows := range checkRows {
+		x := make([]float32, RankerRows*nf)
+		for k, r := range rows {
+			for j := range nf {
+				x[r*nf+j] = float32(j+1+k) / 4
+			}
+		}
+		got, err := b.Ranker.Rank(context.Background(), x)
+		if err != nil {
+			return fmt.Errorf("ranker.onnx: %w", err)
+		}
+		for i := range RankerRows {
+			if !slices.Contains(rows, i) && math.Float32bits(zero[i]) != math.Float32bits(got[i]) {
+				return fmt.Errorf("ranker.onnx: the score of row %d changes with rows %v", i, rows)
+			}
 		}
 	}
 	return nil
