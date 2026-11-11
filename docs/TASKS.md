@@ -69,7 +69,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] An ONNX Runtime error that coincides with the end of the stage's context is reported as a timeout, since the call wraps the context's error; classify it by the error the run returned
 
 ## M6 Benchmarks and fault injection
-- [ ] Fault-injection pass criteria committed to docs/BENCHMARKS.md before any fault run
+- [x] Fault-injection pass criteria committed to docs/BENCHMARKS.md before any fault run
 - [ ] Load sweeps per docs/BENCHMARKS.md
 - [ ] From the sweeps, a gateway's capacity, and `-max-rate` and `-max-inflight` set from it in place of the one measurement of D050
 - [ ] Per rate of the sweep, the share of requests whose history read or cache call runs past `-budget-history`; decide on the budget or the per-user history version left open in D039
@@ -81,8 +81,8 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] `annbench` in shards mode labels results with the `-m` and `-efc` flags even when it reuses graph files built with other values; record the graphs' own parameters
 - [ ] Latency during bundle swaps under load, and the cause of its largest values, GC or CPU contention with prepare (D031)
 - [ ] Latency through rolling restarts and swaps with SPEC §5's budgets: in kind the first requests of a new gateway took longer than 15 ms, so the zero-error check runs the gateways at 100 ms (D047)
-- [ ] Profiles and at least one optimization backed by before/after data
-  - Candidate: SIMD inner product in the HNSW search; on glove the p99 is 1.3 to 2.4 times faiss's at equal recall on the same machine (BENCHMARKS, M2), and `vec.Dot32` is scalar Go
+- [x] Profiles and at least one optimization backed by before/after data: `vec.Dot`, 54% of a replica's CPU, in AVX2 (D053, BENCHMARKS M6)
+- [ ] `vec.Dot32` in SIMD, for the HNSW mode, only if annbench's profile on glove puts it first; on glove the p99 is 1.3 to 2.4 times faiss's at equal recall (BENCHMARKS, M2)
 - [ ] Report with charts
 
 ## M7 Integration and evaluation

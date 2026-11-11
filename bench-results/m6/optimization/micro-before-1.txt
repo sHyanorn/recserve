@@ -1,0 +1,7 @@
+goos: linux
+goarch: amd64
+pkg: github.com/sHyanorn/recserve/internal/vec
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkDot/64         	47304916	        50.21 ns/op
+BenchmarkDot/100        	31083877	        75.08 ns/op
+PASS

@@ -396,3 +396,34 @@ One rate, cache on, no writes; not the headline, which M6 measures with the swee
 - No request hit the cache: the histories hold the test events, each request is at its event's time, and 14,000 events of the split do not repeat a user with an unchanged history. In this workload the cache costs every request a read and a write and saves none; a workload with repeats is M6's cache-on scenario to define.
 - Service time p99 is 11.25, 10.35 and 10.28 ms; the send lag p99 is 1.08 to 1.09 ms and the worst pause of the generator 8.4 to 12.8 ms.
 
+
+### M6 (2026-11-11)
+
+The VM of M3's description: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.3, Docker 29.9.2 with cgroup v1 (`bench-results/m6/*/env.txt`). Session reference 698,757 ns (`bench-results/m6/noise-reference.json`, ten runs from 676,015 to 748,753 ns). Bundle b7ff0634dd7b, services in compose by `deploy/bench.compose.yaml`.
+
+#### Kafka's health check
+
+An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute readings: its health check started a JVM every 2 s. Checked every 2 s only until healthy and every 10 minutes after, it used 24 ms (Environment record, D039). The profile run below was first taken with the old check, unrecorded: p99 was 10.97 ms there against 6.41 ms with the new one.
+
+#### Profiles at 400 requests/s
+
+`make bench-profile` at d49b06e (`profile/`): replay, cache off, valid and unflagged, p99 6.41 ms. CPU per request: the four replicas 0.45 to 0.46 ms each, 1.82 ms together; the gateway 1.31 ms; Valkey 0.13 ms; Kafka 0.07 ms. In a replica's profile `vec.Dot` has 54.2% of the samples, the system calls 9.6%, the top-k heap 4.1%; in the gateway's, the system calls 13.8%, ONNX Runtime's cgo calls 11.3%, `vec.Dot` 8.6%, `vec.Dot32` 3.1%, MMR 8.8% cumulative. The replicas taken together use the most CPU per request, and `vec.Dot` leads their profile, so it is the target (D053), not `vec.Dot32`, which only the HNSW mode calls.
+
+#### vec.Dot in AVX2: lower after on every quantity but the gateway's CPU at 400/s
+
+`make bench-compare BEFORE=a3f48ae` (`optimization/`): before a3f48ae, after ed28e3b; BenchmarkDot on CPU 1 and the service, replay, cache off, before and after alternating, three runs each. All 18 runs are first attempts, valid, with no noise baseline flagged.
+
+| Quantity | Before | After | Verdict |
+|---|---|---|---|
+| BenchmarkDot, 64 dims, ns | 47.5 to 50.6 | 10.5 to 11.4 | lower after |
+| BenchmarkDot, 100 dims, ns | 74.2 to 80.2 | 14.9 to 15.9 | lower after |
+| 200/s: p99, ms | 5.14 to 5.32 | 3.93 to 4.39 | lower after |
+| 200/s: the replicas' CPU per request, ms | 1.94 to 1.98 | 1.23 to 1.29 | lower after |
+| 200/s: the gateway's CPU per request, ms | 1.52 to 1.57 | 1.46 to 1.52 | lower after |
+| 400/s: p99, ms | 6.90 to 7.79 | 4.27 to 4.64 | lower after |
+| 400/s: the replicas' CPU per request, ms | 1.80 to 1.87 | 1.10 to 1.16 | lower after |
+| 400/s: the gateway's CPU per request, ms | 1.29 to 1.33 | 1.26 to 1.32 | not resolved on this machine |
+
+- The inner product takes 4.5 to 5 times less time; the replicas use about 37% less CPU per request, and p99 falls by about a quarter at 200/s and a third at 400/s.
+- The after runs of BenchmarkDot ran from ed28e3b's working tree with the benchmark moved to its own file (the next commit); `vec.Dot` itself was ed28e3b's.
+- Results: the tests, both bundles' golden cases (5de55036a382 checked by starting a gateway on it, b7ff0634dd7b by the after runs) and the sixteen-lane definition hold (D053). No committed file changed.
