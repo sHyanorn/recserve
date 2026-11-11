@@ -35,3 +35,13 @@ ENTRYPOINT ["/usr/local/bin/annshard"]
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329 AS ingest
 COPY --from=build /out/ingest /usr/local/bin/
 ENTRYPOINT ["/usr/local/bin/ingest"]
+
+# The faulty replica of the fault runs (docs/BENCHMARKS.md, F6), built only
+# when this target is named; make images does not.
+FROM build AS faultshard-build
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    go build -trimpath -ldflags='-s -w' -o /out/ ./cmd/faultshard
+
+FROM gcr.io/distroless/base-debian13:nonroot@sha256:7fe4df6a4413adf5889960d345a28b4574aea0872ea47684c7244c8d88027dca AS faultshard
+COPY --from=faultshard-build /out/faultshard /usr/local/bin/
+ENTRYPOINT ["/usr/local/bin/faultshard"]
