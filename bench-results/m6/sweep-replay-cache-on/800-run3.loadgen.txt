@@ -1,0 +1,9 @@
+start 1794386239497
+target 800/s, achieved 800/s over 60s after 10s warmup, 64 connections
+recommend_degraded 1818, recommend_ok 46182
+latency (µs)         count      p50      p90      p99    p99.9   p99.99      max
+due to reply         48000     1090     2716     4506     8827    15526    19715
+service time         48000      480     2184     3906     8059    15216    19445
+send lag             48000      488      934     1056     2424     6116     9236
+loadgen hiccup       42639      404      858     1088     2499     5717     8499
+valid
