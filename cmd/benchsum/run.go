@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -140,4 +141,69 @@ func cmpFloat(a, b float64) int {
 		return 1
 	}
 	return 0
+}
+
+// rateVerdict is a rate's verdict once its three runs are done.
+type rateVerdict struct{ meets, stop bool }
+
+// nextRate returns the next rate of a sweep from the verdicts of the rates
+// run so far (docs/BENCHMARKS.md, Load tests): the grid 100, 200, 400, 800,
+// then steps of 400, up to the first rate that stops it; then, with bisect,
+// halving between the highest grid rate that meets the headline condition
+// and the next grid rate until the two are 50 apart. done comes with the
+// headline, the lower of the two, when bisecting (0 if no rate meets).
+func nextRate(verdicts map[float64]rateVerdict, bisect bool) (next float64, done bool, headline float64) {
+	var grid []float64
+	for g := 100.0; ; {
+		grid = append(grid, g)
+		v, ok := verdicts[g]
+		if !ok {
+			return g, false, 0
+		}
+		if v.stop {
+			break
+		}
+		if g < 800 {
+			g *= 2
+		} else {
+			g += 400
+		}
+	}
+	if !bisect {
+		return 0, true, 0
+	}
+	// The last grid rate stopped the sweep, so it does not meet the condition
+	// and every rate that does has a next one.
+	var lo, hi float64
+	for i, g := range grid {
+		if verdicts[g].meets {
+			lo, hi = g, grid[i+1]
+		}
+	}
+	if lo == 0 {
+		v, ok := verdicts[50]
+		if !ok {
+			return 50, false, 0
+		}
+		if v.meets {
+			return 0, true, 50
+		}
+		return 0, true, 0
+	}
+	for hi-lo > 50 {
+		mid := math.Floor((lo+hi)/2/50) * 50
+		if mid == lo {
+			mid = lo + 50
+		}
+		v, ok := verdicts[mid]
+		if !ok {
+			return mid, false, 0
+		}
+		if v.meets {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	return 0, true, lo
 }

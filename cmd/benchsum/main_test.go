@@ -233,3 +233,37 @@ func TestLagDrained(t *testing.T) {
 		t.Fatalf("drained after %v s, want 1.5", got)
 	}
 }
+
+func TestNextRate(t *testing.T) {
+	m, miss, stop := rateVerdict{meets: true}, rateVerdict{}, rateVerdict{stop: true}
+	v := map[float64]rateVerdict{}
+	step := func(bisect bool, wantNext float64, wantDone bool, wantHeadline float64) {
+		t.Helper()
+		next, done, headline := nextRate(v, bisect)
+		if next != wantNext || done != wantDone || headline != wantHeadline {
+			t.Fatalf("got %g %v %g, want %g %v %g", next, done, headline, wantNext, wantDone, wantHeadline)
+		}
+	}
+	step(true, 100, false, 0)
+	v[100], v[200], v[400], v[800] = m, m, m, m
+	step(true, 1200, false, 0)
+	// 1200 misses, 1600 meets: the bisection starts from 1600, the highest grid
+	// rate that meets, not below the first miss.
+	v[1200], v[1600] = miss, m
+	step(true, 2000, false, 0)
+	v[2000] = stop
+	step(false, 0, true, 0)
+	step(true, 1800, false, 0)
+	v[1800] = m
+	step(true, 1900, false, 0)
+	v[1900] = miss
+	step(true, 1850, false, 0)
+	v[1850] = m
+	step(true, 0, true, 1850)
+
+	// Nothing meets: 50 runs as well.
+	v = map[float64]rateVerdict{100: miss, 200: stop}
+	step(true, 50, false, 0)
+	v[50] = m
+	step(true, 0, true, 50)
+}

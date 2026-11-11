@@ -3,6 +3,7 @@
 //
 //	benchsum run -prefix P -samples S            a sweep run: P.summary.json
 //	benchsum rate -dir D -rate R                 whether rate R meets the headline condition, and whether the sweep stops
+//	benchsum next -dir D [-bisect]               the sweep's next rate, or "done headline=H" (H with -bisect)
 //	benchsum sweep -dir D                        a sweep's table, from its run summaries
 //	benchsum fault -prefix P -samples S -fault F a fault run judged: P.fault.json
 //	benchsum faults -dir D                       the fault runs' table
@@ -36,7 +37,7 @@ func main() {
 
 func run(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("a subcommand is required: run, rate, sweep, fault, faults, swap, swaps, phases, quantile, hedge or histories")
+		return fmt.Errorf("a subcommand is required: run, rate, next, sweep, fault, faults, swap, swaps, phases, quantile, hedge or histories")
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	prefix := fs.String("prefix", "", "path of the run's files without their suffixes")
@@ -49,6 +50,7 @@ func run(args []string, out io.Writer) error {
 	name := fs.String("name", "", "histogram name")
 	lbl := fs.String("label", "", "k=v: only the series with that label")
 	q := fs.Float64("q", 0.95, "quantile")
+	bisect := fs.Bool("bisect", false, "next: bisect after the grid, as the headline sweep does")
 	preload := fs.String("preload", "", "histories: comma-separated splits the gateway preloaded")
 	split := fs.String("split", "", "histories: the split loadgen replayed")
 	valkeyAddr := fs.String("valkey", "", "histories: the Valkey server that holds the histories")
@@ -72,6 +74,27 @@ func run(args []string, out io.Writer) error {
 		}
 		meets, stop, p99 := verdict(runs)
 		return printf(out, "meets=%v stop=%v runs=%d median_p99_ms=%.2f\n", meets, stop, len(runs), p99)
+	case "next":
+		runs, err := readSummaries(*dir, func(runSummary) bool { return true })
+		if err != nil {
+			return err
+		}
+		byRate := map[float64][]runSummary{}
+		for _, r := range runs {
+			byRate[r.Rate] = append(byRate[r.Rate], r)
+		}
+		verdicts := map[float64]rateVerdict{}
+		for rate, rs := range byRate {
+			if len(rs) >= 3 {
+				meets, stop, _ := verdict(rs)
+				verdicts[rate] = rateVerdict{meets, stop}
+			}
+		}
+		next, done, headline := nextRate(verdicts, *bisect)
+		if done {
+			return printf(out, "done headline=%g\n", headline)
+		}
+		return printf(out, "%g\n", next)
 	case "sweep":
 		runs, err := readSummaries(*dir, func(runSummary) bool { return true })
 		if err != nil {
