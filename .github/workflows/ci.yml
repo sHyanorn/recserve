@@ -82,3 +82,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: make images
       - run: make test-alerts
+      - name: kind v0.33.0 and kubectl v1.37.2
+        run: |
+          curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/kind" \
+            https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+          curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/kubectl" \
+            https://dl.k8s.io/release/v1.37.2/bin/linux/amd64/kubectl
+          sha256sum -c <<SUMS
+          aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  $RUNNER_TEMP/kind
+          c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4  $RUNNER_TEMP/kubectl
+          SUMS
+          chmod +x "$RUNNER_TEMP/kind" "$RUNNER_TEMP/kubectl"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      # The replicas need no bundle to listen, so an empty data directory will do.
+      - name: NetworkPolicy enforced in kind
+        run: |
+          mkdir -p "$RUNNER_TEMP/data/bundle"
+          scripts/kind-cluster.sh "$RUNNER_TEMP/data"
+          scripts/kind-netpol.sh

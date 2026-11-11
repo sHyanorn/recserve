@@ -6,3 +6,4 @@ resources:
   - data.yaml
   - annshard.yaml
   - gateway.yaml
+  - networkpolicy.yaml

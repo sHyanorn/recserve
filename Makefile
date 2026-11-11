@@ -7,7 +7,7 @@ VERSION ?=
 COMPOSE := docker compose -f deploy/compose.yaml
 
 .DEFAULT_GOAL := help
-.PHONY: help build test test-real e2e lint fmt proto data bundle images infra-up infra-down up down test-alerts kind-up kind-swap kind-check kind-down
+.PHONY: help build test test-real e2e lint fmt proto data bundle images infra-up infra-down up down test-alerts kind-up kind-swap kind-check kind-netpol kind-down
 
 help: ## Show available targets
 	@awk -F':.*## ' '/^[a-z0-9-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -66,6 +66,9 @@ kind-swap: ## Swap the gateways in kind to bundle VERSION, once the previous swa
 
 kind-check: ## Under load in kind, roll the gateways, then the replicas, then swap to VERSION: no error and nothing degraded
 	scripts/kind-check.sh $(DATA) $(VERSION)
+
+kind-netpol: ## Check in kind that only the gateways reach the replicas' port; fails where NetworkPolicy is not enforced
+	scripts/kind-netpol.sh
 
 kind-down: ## Delete the kind cluster
 	kind delete cluster --name recserve

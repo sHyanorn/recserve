@@ -1,0 +1,20 @@
+# The replicas' port has no TLS and no authentication (D040): only the gateway
+# Pods of this namespace may reach it. Probes come from the node, which a
+# NetworkPolicy always allows.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: annshard-from-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: annshard
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: gateway
+      ports:
+        - port: 9090
+          protocol: TCP
