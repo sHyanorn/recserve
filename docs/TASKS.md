@@ -71,7 +71,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 ## M6 Benchmarks and fault injection
 - [x] Fault-injection pass criteria committed to docs/BENCHMARKS.md before any fault run
 - [ ] Load sweeps per docs/BENCHMARKS.md
-- [ ] From the sweeps, a gateway's capacity, and `-max-rate` and `-max-inflight` set from it in place of the one measurement of D050
+- [x] From the sweeps, a gateway's capacity, and `-max-rate` and `-max-inflight` set from it in place of the one measurement of D050: about 1,800 requests/s on 2 CPUs (an estimate), 1,450 and 152 in kind
 - [ ] Per rate of the sweep, the share of requests whose history read or cache call runs past `-budget-history`; decide on the budget or the per-user history version left open in D039
 - [ ] A cache-on workload with repeated requests: replaying the test split never hits (BENCHMARKS, M3)
 - [ ] Fault runs with toxiproxy and container control (D021)
