@@ -91,6 +91,6 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] Quality evaluation with each degradation forced (BENCHMARKS, M7)
 - [x] Replica fault criteria that measure what they state (BENCHMARKS, M6, the dated defects): a call count per replica, or the runs with the cache off, and the amended criteria committed before any run; then F1, F2, F5 and F6 again. Not compared side by side with M6's F3 and F4, from another VM
 - [x] Outlier detection on the replicas, adopted in M6 (D041): a replica whose calls end at the shard deadline a number of times in a row leaves the selection until a trial search is answered; F2, F5 and F6 again with it (BENCHMARKS, M7)
-- [x] The Valkey circuit breaker's state and calls as metrics; its openings in five runs without a fault, attributed by a rule committed before them (D037; BENCHMARKS, M7)
-- [ ] The breaker's openings at 275 requests/s with no fault come from calls that ran out of their budget (BENCHMARKS, M7): keep D037 point 3, count only errors, or open on a looser condition
+- [x] The Valkey circuit breaker's state and calls as metrics; its openings in five runs without a fault, those that could be attributed by a rule committed before them (D037; BENCHMARKS, M7)
+- [ ] Of the breaker's 6 openings at 275 requests/s with no fault, the 2 that could be attributed came after calls that ran out of their budget (BENCHMARKS, M7): keep D037 point 3, count only errors, or open on a looser condition
 - [x] README
