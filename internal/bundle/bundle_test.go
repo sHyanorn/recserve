@@ -148,6 +148,15 @@ func TestLoadRejectsUnlistedFile(t *testing.T) {
 	}
 }
 
+// withVector sets one value of item 3's vector in items.npy.
+func withVector(v float32) editFunc {
+	return func(f map[string][]byte, _ map[string]any) {
+		vs := testVectors()
+		vs[3*2+1] = v
+		f["items.npy"] = npy.Encode([]int{testItems + 1, 2}, vs, nil)
+	}
+}
+
 func TestLoadRejects(t *testing.T) {
 	cases := map[string]struct {
 		edit editFunc
@@ -181,7 +190,29 @@ func TestLoadRejects(t *testing.T) {
 			v[0] = 1
 			f["items.npy"] = npy.Encode([]int{testItems + 1, 2}, v, nil)
 		}, Options{}, "padding"},
-		"shape": {func(_ map[string][]byte, m map[string]any) { m["item_count"] = 3 }, Options{}, "lines"},
+		"item count":  {func(_ map[string][]byte, m map[string]any) { m["item_count"] = 3 }, Options{}, "lines"},
+		"vector nan":  {withVector(float32(math.NaN())), Options{}, "items.npy: non-finite"},
+		"vector inf":  {withVector(float32(math.Inf(1))), Options{}, "items.npy: non-finite"},
+		"vector -inf": {withVector(float32(math.Inf(-1))), Options{}, "items.npy: non-finite"},
+		"vector dim": {func(f map[string][]byte, _ map[string]any) {
+			f["items.npy"] = npy.Encode([]int{testItems + 1, 3}, make([]float32, (testItems+1)*3), nil)
+		}, Options{}, "items.npy: shape [13 3], want [13 2]"},
+		"manifest dim": {func(_ map[string][]byte, m map[string]any) { m["dim"] = 3 }, Options{}, "items.npy: shape [13 2], want [13 3]"},
+		"vector dtype": {func(f map[string][]byte, _ map[string]any) {
+			f["items.npy"] = npy.Encode([]int{testItems + 1, 2}, nil, make([]int64, (testItems+1)*2))
+		}, Options{}, "items.npy: shape [13 2], want [13 2] float32"},
+		"cooc width": {func(f map[string][]byte, _ map[string]any) {
+			f["cooc_ids.npy"] = npy.Encode([]int{testItems + 1, CoocWidth - 1}, nil, make([]int64, (testItems+1)*(CoocWidth-1)))
+		}, Options{}, "cooc_ids.npy: shape"},
+		"cooc rows": {func(f map[string][]byte, _ map[string]any) {
+			f["cooc_ids.npy"] = npy.Encode([]int{testItems + 2, CoocWidth}, nil, make([]int64, (testItems+2)*CoocWidth))
+		}, Options{}, "cooc_ids.npy: shape"},
+		"cooc flat": {func(f map[string][]byte, _ map[string]any) {
+			f["cooc_ids.npy"] = npy.Encode([]int{(testItems + 1) * CoocWidth}, nil, make([]int64, (testItems+1)*CoocWidth))
+		}, Options{}, "cooc_ids.npy: shape"},
+		"popular shape": {func(f map[string][]byte, _ map[string]any) {
+			f["popular.npy"] = npy.Encode([]int{1, 2}, nil, []int64{3, 1})
+		}, Options{}, "popular.npy: shape"},
 		"duplicate id": {func(f map[string][]byte, _ map[string]any) {
 			f["items.ids"] = []byte(strings.Replace(string(f["items.ids"]), "item2\n", "item1\n", 1))
 		}, Options{}, "repeats"},
