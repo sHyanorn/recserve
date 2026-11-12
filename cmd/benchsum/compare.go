@@ -90,9 +90,12 @@ func span(v []float64) string {
 	return fmt.Sprintf("%.3g to %.3g", slices.Min(v), slices.Max(v))
 }
 
+// lower compares the runs before and after a change: one side is lower
+// only if each of its runs is below each of the other's, with three runs a
+// side (BENCHMARKS, Profiles and an optimization).
 func lower(before, after []float64) string {
 	switch {
-	case len(before) == 0 || len(after) == 0:
+	case len(before) < 3 || len(after) < 3:
 		return "missing runs"
 	case slices.Max(after) < slices.Min(before):
 		return "lower after"

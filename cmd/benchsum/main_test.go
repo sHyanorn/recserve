@@ -232,6 +232,12 @@ func TestLower(t *testing.T) {
 		{[]float64{3, 4, 5}, []float64{1, 2, 2.9}, "lower after"},
 		{[]float64{3, 4, 5}, []float64{1, 2, 3}, "not resolved on this machine"},
 		{[]float64{1, 1, 1}, []float64{2, 3, 4}, "lower before"},
+		// three runs a side are needed for either conclusion
+		{[]float64{5}, []float64{1}, "missing runs"},
+		{[]float64{5, 6}, []float64{1, 2}, "missing runs"},
+		{[]float64{5, 6, 7}, []float64{1}, "missing runs"},
+		{[]float64{1}, []float64{5, 6, 7}, "missing runs"},
+		{nil, []float64{1, 2, 3}, "missing runs"},
 	} {
 		if got := lower(c.before, c.after); got != c.want {
 			t.Errorf("%v %v: %s, want %s", c.before, c.after, got, c.want)

@@ -628,6 +628,7 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 - The inner product takes 2.7 to 3.3 times less time, and annbench's p99 on glove after is 0.50 to 0.61 times the p99 before at every ef. Recall@100 is the same to its last digit, 10^-6, at every ef.
 - In the service `Dot32` runs only in MMR: 3.1% of the gateway's samples in the profile at 400 requests/s, taken on the first VM before `vec.Dot`'s change. Exact search, the default, uses `vec.Dot`. The gateway's CPU per request is not resolved at either rate. p99 at 400/s meets the rule for lower after by 0.01 ms, the after runs' largest against the before runs' smallest; with no difference resolved in CPU, this record does not attribute it to `Dot32`.
 - Results: the tests and the 32-lane definition hold (D055); golden cases use `vec.Dot`, and no committed file changed.
+- **A defect of `cmd/benchsum compare`**, found 2026-11-13, criteria not changed, nothing rerun: it gave "lower after" or "lower before" with fewer than three runs on a side, where the rule of Before and after asks for three. Fixed 2026-11-13: with fewer than three runs on either side the verdict is "missing runs" (`TestLower`). Run on the committed files, the fixed tool writes `optimization/compare.md` and `optimization-dot32/compare.md` byte for byte as committed.
 
 #### ANN: synth passes M2's criterion and glove fails it on latency, as in M2; p99 1.0 to 1.3 times faiss's on glove
 
