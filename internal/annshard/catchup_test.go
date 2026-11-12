@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -242,4 +243,38 @@ func TestReplicaFollowsTheVersionServed(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitReady(t, addr)
+}
+
+// The watch sends a replica the version served again when only the time
+// it started changes, as after a swap away and back between two of its
+// looks (D057 point 2).
+func TestReplicaFollowsTheTimeOfTheVersionServed(t *testing.T) {
+	r := rand.New(rand.NewPCG(13, 13))
+	root := t.TempDir()
+	v := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 100, 2))
+	var sent sync.Map // the times of the Prepares that named v served
+	note := grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if p, ok := req.(*annshardpb.PrepareRequest); ok && p.GetServingVersion() == v {
+			sent.Store(p.GetServingSinceUnixNano(), true)
+		}
+		return handler(ctx, req)
+	})
+	addr := annshardtest.Start(t, root, note)
+	var since atomic.Int64
+	since.Store(time.Now().UnixNano())
+	c := annshardtest.Dial(t, [][]string{{addr}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, Serving: func() (string, time.Time) { return v, time.Unix(0, since.Load()) }})
+	if _, err := c.Prepare(context.Background(), v, 100); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1500 * time.Millisecond) // the watch has looked since
+	t2 := since.Load() + int64(time.Second)
+	since.Store(t2)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, ok := sent.Load(t2); ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no Prepare named the version served with its new time within 5 s")
+		}
+	}
 }

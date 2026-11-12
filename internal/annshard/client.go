@@ -135,15 +135,12 @@ type Client struct {
 	results   *prometheus.CounterVec
 	ejections *prometheus.CounterVec
 
-	// The calls to the replicas that run for no request: catch-up, the
-	// watch of the connections and the calls of a Prepare that has
-	// returned. catching counts the catch-ups and Prepare's calls in flight
-	// by replica and index.
+	// Replicas that are preparing an index a search found them to lack.
 	ctx      context.Context // ends at Close
 	cancel   context.CancelFunc
 	mu       sync.Mutex
 	closed   bool
-	catching map[lacking]int
+	catching map[lacking]bool
 	wg       sync.WaitGroup
 }
 
@@ -219,7 +216,7 @@ func Dial(addrs [][]string, opt Options) (*Client, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
-		opt: opt, ctx: ctx, cancel: cancel, catching: map[lacking]int{},
+		opt: opt, ctx: ctx, cancel: cancel, catching: map[lacking]bool{},
 		hedges: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "recserve_shard_hedges_total",
 			Help: "Shard searches that were slow enough for a second replica to be asked, by shard and result: won (the second replica answered first), lost, or denied (not asked: the shard's hedge budget was spent).",
@@ -371,80 +368,48 @@ type Shards struct {
 }
 
 // Prepare has every replica load version, a bundle of items items, and
-// build its shard, and returns the version's shards once every shard has a
-// replica that holds it (D057). The calls to the other replicas go on for
-// no request, within PrepareTimeout and until Close, and a replica that
-// failed is logged; it is sent the request again when a search finds that
-// it lacks the index (catchUp). If a shard has no replica that holds the
-// version, or ctx ends first, Prepare fails.
+// build its shard, and returns the version's shards once every replica's
+// call has returned, if every shard has a replica that holds it. A replica
+// that failed is logged; it is sent the request again when a search finds
+// that it lacks the index (catchUp). If a shard has no replica that holds
+// the version, Prepare fails.
 func (c *Client) Prepare(ctx context.Context, version string, items int) (*Shards, error) {
 	s := &Shards{c: c, items: items, indexes: make([]*annshardpb.Index, len(c.shards))}
-	keys := make([]index, len(c.shards))
-	for i := range c.shards {
-		s.indexes[i] = c.index(version, i)
-		ix, err := parseIndex(s.indexes[i])
-		if err != nil {
-			return nil, fmt.Errorf("prepare %s: %w", version, err)
-		}
-		keys[i] = ix
-	}
 	sv := c.serving()
 	if sv.version == "" { // the first version, which the gateway serves next
 		sv = serving{version, time.Now().UnixNano()}
 	}
-	type result struct {
-		shard int
-		err   error
-	}
-	calls := 0
-	for _, g := range c.shards {
-		calls += len(g.replicas)
-	}
-	results := make(chan result, calls) // never blocks a call that ends after Prepare has returned
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return nil, fmt.Errorf("prepare %s: the client is closed", version)
-	}
+	errs := make([][]error, len(c.shards)) // by shard, then replica
+	var wg sync.WaitGroup
 	for i, g := range c.shards {
-		for _, r := range g.replicas {
-			key := lacking{r, keys[i]}
-			c.catching[key]++
-			c.wg.Go(func() {
-				err := c.prepareOn(r, s.indexes[i], sv)
-				if err != nil && c.ctx.Err() == nil {
-					c.opt.Log.Warn("a replica did not prepare the version", "replica", r.addr, "version", version, "shard", i, "err", err)
-				}
-				c.mu.Lock()
-				if c.catching[key]--; c.catching[key] == 0 {
-					delete(c.catching, key)
-				}
-				c.mu.Unlock()
-				results <- result{i, err}
+		ix := c.index(version, i)
+		s.indexes[i] = ix
+		errs[i] = make([]error, len(g.replicas))
+		for j, r := range g.replicas {
+			wg.Go(func() {
+				_, errs[i][j] = r.rpc.Prepare(ctx, &annshardpb.PrepareRequest{Index: ix, ServingVersion: sv.version, ServingSinceUnixNano: sv.since})
 			})
 		}
 	}
-	c.mu.Unlock()
-	held := make([]bool, len(c.shards))
-	failed := make([][]error, len(c.shards))
-	for left := len(c.shards); left > 0; {
-		select {
-		case res := <-results:
-			i := res.shard
-			switch {
-			case held[i]:
-			case res.err == nil:
-				held[i] = true
-				left--
-			default:
-				failed[i] = append(failed[i], res.err)
-				if len(failed[i]) == len(c.shards[i].replicas) {
-					return nil, fmt.Errorf("prepare %s: no replica of shard %d holds it: %w", version, i, errors.Join(failed[i]...))
-				}
+	wg.Wait()
+	var failed []error
+	for i, g := range c.shards {
+		var lacks []error
+		for j, err := range errs[i] {
+			if err != nil {
+				lacks = append(lacks, fmt.Errorf("shard %d, replica %s: %w", i, g.replicas[j].addr, err))
 			}
-		case <-ctx.Done():
-			return nil, fmt.Errorf("prepare %s: %w", version, ctx.Err())
 		}
+		if len(lacks) == len(g.replicas) {
+			failed = append(failed, lacks...)
+			continue
+		}
+		for _, err := range lacks {
+			c.opt.Log.Warn("a replica did not prepare the version; the shard's other replicas serve it", "version", version, "err", err)
+		}
+	}
+	if len(failed) > 0 {
+		return nil, fmt.Errorf("prepare %s: no replica of a shard holds it: %w", version, errors.Join(failed...))
 	}
 	return s, nil
 }
@@ -460,11 +425,11 @@ func (c *Client) catchUp(r *replica, x *annshardpb.Index) {
 	}
 	key := lacking{r, ix}
 	c.mu.Lock()
-	if c.closed || c.catching[key] > 0 {
+	if c.closed || c.catching[key] {
 		c.mu.Unlock()
 		return
 	}
-	c.catching[key]++
+	c.catching[key] = true
 	c.wg.Add(1)
 	c.mu.Unlock()
 	go func() {
@@ -479,9 +444,7 @@ func (c *Client) catchUp(r *replica, x *annshardpb.Index) {
 			}
 		}
 		c.mu.Lock()
-		if c.catching[key]--; c.catching[key] == 0 {
-			delete(c.catching, key)
-		}
+		delete(c.catching, key)
 		c.mu.Unlock()
 	}()
 }

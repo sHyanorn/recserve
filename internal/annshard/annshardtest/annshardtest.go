@@ -12,8 +12,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"slices"
-	"sync"
 	"testing"
 	"time"
 
@@ -22,7 +20,6 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/sHyanorn/recserve/internal/annshard"
-	"github.com/sHyanorn/recserve/internal/annshard/annshardpb"
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/npy"
 	"github.com/sHyanorn/recserve/internal/shard"
@@ -115,75 +112,16 @@ func Ready(t testing.TB, addr string) bool {
 // Dial returns a client of the replicas at addrs, closed when the test ends.
 func Dial(t testing.TB, addrs [][]string, opt annshard.Options) *annshard.Client {
 	t.Helper()
-	p := &prepares{done: map[[2]string]bool{}}
-	for _, replicas := range addrs {
-		p.addrs = append(p.addrs, replicas...)
-	}
-	opt.Dial = append(slices.Clip(opt.Dial), grpc.WithChainUnaryInterceptor(p.note))
 	c, err := annshard.Dial(addrs, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	clients.Store(c, p)
 	t.Cleanup(func() {
-		clients.Delete(c)
 		if err := c.Close(); err != nil {
 			t.Error(err)
 		}
 	})
 	return c
-}
-
-// clients holds the prepares of each client Dial returned.
-var clients sync.Map
-
-// prepares notes, by replica address and version, the Prepare calls of a
-// client that have succeeded.
-type prepares struct {
-	addrs []string
-	mu    sync.Mutex
-	done  map[[2]string]bool
-}
-
-func (p *prepares) note(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-	err := invoker(ctx, method, req, reply, cc, opts...)
-	if r, ok := req.(*annshardpb.PrepareRequest); ok && err == nil {
-		p.mu.Lock()
-		p.done[[2]string{cc.Target(), r.GetIndex().GetVersion()}] = true
-		p.mu.Unlock()
-	}
-	return err
-}
-
-// PrepareAll is c.Prepare, for a client from Dial, followed by a wait until
-// every replica's Prepare of version has succeeded, so that each holds it
-// and has its connection up. Prepare itself returns once each shard has a
-// replica that holds the version (D057); a test that needs every replica
-// prepared calls PrepareAll, and only where every replica can prepare it.
-func PrepareAll(t testing.TB, c *annshard.Client, version string, items int) (*annshard.Shards, error) {
-	t.Helper()
-	s, err := c.Prepare(context.Background(), version, items)
-	if err != nil {
-		return nil, err
-	}
-	v, _ := clients.Load(c)
-	p := v.(*prepares)
-	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(time.Millisecond) {
-		p.mu.Lock()
-		missing := ""
-		for _, a := range p.addrs {
-			if !p.done[[2]string{a, version}] {
-				missing = a
-			}
-		}
-		p.mu.Unlock()
-		if missing == "" {
-			return s, nil
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("replica %s has not prepared %s after 10 s", missing, version)
-		}
-	}
 }
 
 // Remote returns a function that puts a catalog on annshard replicas: it
