@@ -122,8 +122,12 @@ attempt() {
 		lagpid=$!
 	fi
 	at $((t0 + 30000)) && metrics "$p" b0
-	at $((t0 + 90000)) && echo "inject $(now_ms)" >"$p.marks" && inject && metrics "$p" b1
-	at $((t0 + 150000)) && echo "remove $(now_ms)" >>"$p.marks" && remove && metrics "$p" b2
+	# b1 and b2 end the healthy and fault phases' counters, so they are read
+	# before the injection and the removal
+	at $((t0 + 90000)) && metrics "$p" b1
+	echo "inject $(now_ms)" >"$p.marks" && inject
+	at $((t0 + 150000)) && metrics "$p" b2
+	echo "remove $(now_ms)" >>"$p.marks" && remove
 	wait "$LOADGEN" || true
 	wait "$pollpid"
 	metrics "$p" b3
