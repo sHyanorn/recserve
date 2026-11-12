@@ -301,8 +301,11 @@ func faultTable(w *strings.Builder, dir string) error {
 		}
 		slices.Sort(ex)
 		pass := fmt.Sprint(f.Pass)
-		if f.Fault == "none" {
+		switch {
+		case f.Fault == "none":
 			pass = "not judged"
+		case !f.Valid:
+			pass = "" // neither a pass nor a fail
 		}
 		window, back, share, rec := "not recovered", "", "", "not recovered"
 		if f.WindowRecovery != nil {

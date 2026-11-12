@@ -649,3 +649,26 @@ func TestChosenAttempts(t *testing.T) {
 		t.Fatalf("verdict %q", v)
 	}
 }
+
+// An invalid attempt is neither a pass nor a fail: its Pass cell is empty.
+func TestFaultTableLeavesInvalidPassBlank(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []faultRun{
+		{Name: "F4-run1-a1", Fault: "F4", Invalid: []string{"noise baseline flagged"}},
+		{Name: "F4-run2-a1", Fault: "F4", Valid: true, Pass: true},
+		{Name: "F4-run3-a1", Fault: "F4", Valid: true, Failures: []string{"p99 80.00 ms in the fault phase"}},
+	} {
+		if err := writeJSON(filepath.Join(dir, f.Name+".fault.json"), f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var b strings.Builder
+	if err := faultTable(&b, dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"\n| F4-run1-a1 | false |  | ", "\n| F4-run2-a1 | true | true | ", "\n| F4-run3-a1 | true | false | "} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("no row starting %q in\n%s", want[1:], b.String())
+		}
+	}
+}
