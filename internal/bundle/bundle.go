@@ -414,9 +414,13 @@ func idArray(data []byte, itemCount int, shape []int) ([]int32, error) {
 }
 
 type goldenCase struct {
-	History []int32   `json:"history"`
-	UserEmb []float32 `json:"user_emb"`
-	Top10   []int32   `json:"top10"`
+	History []int32 `json:"history"`
+	// HistoryRaw, if present, is History in raw item IDs: items.ids must map
+	// each to the internal ID in its place, which the other fields cannot
+	// check, since they hold internal IDs only.
+	HistoryRaw []string  `json:"history_raw,omitempty"`
+	UserEmb    []float32 `json:"user_emb"`
+	Top10      []int32   `json:"top10"`
 	// With a ranker: the case's candidates and their features, one row
 	// each, as the bundle's trainer computed them.
 	Candidates []int32     `json:"candidates,omitempty"`
@@ -445,6 +449,9 @@ func (b *Bundle) checkGolden(data []byte) error {
 			if id <= 0 || int(id) > b.ItemCount {
 				return fmt.Errorf("golden %d: history ID %d out of range", n, id)
 			}
+		}
+		if err := b.checkRaw(c); err != nil {
+			return fmt.Errorf("golden %d: %w", n, err)
 		}
 		uv, err := b.UserVector(context.Background(), c.History)
 		if err != nil {
@@ -480,6 +487,23 @@ func (b *Bundle) checkGolden(data []byte) error {
 	}
 	if n == 0 {
 		return errors.New("golden.jsonl has no cases")
+	}
+	return nil
+}
+
+// checkRaw requires a golden case's raw history, if it has one, to name its
+// history's items through items.ids.
+func (b *Bundle) checkRaw(c goldenCase) error {
+	if c.HistoryRaw == nil {
+		return nil
+	}
+	if len(c.HistoryRaw) != len(c.History) {
+		return fmt.Errorf("history_raw has %d items, history %d", len(c.HistoryRaw), len(c.History))
+	}
+	for i, raw := range c.HistoryRaw {
+		if id, ok := b.Lookup(raw); !ok || id != c.History[i] {
+			return fmt.Errorf("history_raw %q is internal ID %d in items.ids, history has %d", raw, id, c.History[i])
+		}
 	}
 	return nil
 }

@@ -85,9 +85,13 @@ def main(d):
         cases = [json.loads(line, parse_constant=reject) for line in f]
     cooc_ids = np.load(f"{d}/cooc_ids.npy") if "cooc_ids.npy" in m["sha256"] else np.zeros((len(vecs), 1), np.int64)
     popular = np.load(f"{d}/popular.npy") if "popular.npy" in m["sha256"] else np.zeros(0, np.int64)
+    index = {raw: i + 1 for i, raw in enumerate(ids)}
     for n, c in enumerate(cases):
         if not c["history"] or min(c["history"]) < 1 or max(c["history"]) > m["item_count"]:
             sys.exit(f"golden {n}: history IDs out of range")
+        # Raw IDs, if given, check items.ids, which the internal IDs cannot.
+        if "history_raw" in c and [index.get(raw) for raw in c["history_raw"]] != c["history"]:
+            sys.exit(f"golden {n}: history_raw does not map to history through items.ids")
         if m["user_encoder"] == "onnx":
             uv = encode(sess, c["history"], m["max_seq_len"])
         else:

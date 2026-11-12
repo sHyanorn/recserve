@@ -372,6 +372,32 @@ func editGolden(t testing.TB, edit func(map[string]any)) []byte {
 	return append(marshal(t, c), '\n')
 }
 
+// TestLoadHistoryRaw checks a golden case's raw history against items.ids.
+// Without it a bundle whose items.ids has two lines swapped loads, since
+// every other golden field holds internal IDs.
+func TestLoadHistoryRaw(t *testing.T) {
+	withRaw := func(raw ...any) editFunc {
+		return func(f map[string][]byte, _ map[string]any) {
+			var c map[string]any
+			if err := json.Unmarshal([]byte(goldenLine(t, testVectors(), 50, []int32{1, 4})), &c); err != nil {
+				t.Fatal(err)
+			}
+			if raw != nil {
+				c["history_raw"] = raw
+			}
+			f["golden.jsonl"] = append(marshal(t, c), '\n')
+		}
+	}
+	swap := func(f map[string][]byte, _ map[string]any) {
+		f["items.ids"] = []byte(strings.Replace(string(f["items.ids"]), "item1\nitem2\n", "item2\nitem1\n", 1))
+	}
+	load(t, writeBundle(t, withRaw("item1", "item4")), Options{})
+	load(t, writeBundle(t, withRaw(), swap), Options{})
+	checkRejected(t, writeBundle(t, withRaw("item1", "item4"), swap), Options{}, "history_raw \"item1\" is internal ID 2")
+	checkRejected(t, writeBundle(t, withRaw("item1")), Options{}, "history_raw has 1 items")
+	checkRejected(t, writeBundle(t, withRaw("item1", "nosuch")), Options{}, "history_raw \"nosuch\"")
+}
+
 func TestLoadRejectsTamperedFile(t *testing.T) {
 	dir := writeBundle(t)
 	if err := os.WriteFile(filepath.Join(dir, "items.ids"), []byte("tampered\n"), 0o644); err != nil {
