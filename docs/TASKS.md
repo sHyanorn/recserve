@@ -94,3 +94,4 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] The Valkey circuit breaker's state and calls as metrics; its openings in five runs without a fault, those that could be attributed by a rule committed before them (D037; BENCHMARKS, M7)
 - [x] Of the breaker's 6 openings at 275 requests/s with no fault, the 2 that could be attributed came after calls that ran out of their budget (BENCHMARKS, M7): keep D037 point 3, count only errors, or open on a looser condition. It opens on a failure rate in a window of 1 s, timeouts still failures (D037, revised in M7); in five runs without a fault it did not open (BENCHMARKS, M7, second set)
 - [x] README
+- [ ] `cmd/benchsum`: read the healthy phase's ejections at the last read before 90 s, count F4's lag drain from 150 s, and give the breaker table's phases by 90 and 150 s, as reading 1 of Second M7 set says (BENCHMARKS, M7, second set, defects of benchsum)
