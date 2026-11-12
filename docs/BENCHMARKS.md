@@ -670,3 +670,19 @@ Every M7 run was on one VM: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, kernel 6.18.
 
 - Without co-occurrence or without the ranker every metric is lower than healthy, with intervals below 0; the two conditions' intervals for each metric do not overlap.
 - Without the encoder, with shard 1 missing, and with HNSW, every difference is within 0.0004 of 0; some intervals exclude 0 by up to 0.0001.
+
+#### Outlier detection: F5 passes; F6 fails on one run's recovery and F2 on one breaker opening; no replica was taken out in a healthy phase
+
+`OUT=bench-results/m7/faults-outlier make bench-fault FAULT=F2, F5, F6 RATE=275` (`faults-outlier/`, the table in `faults.md`), on the same VM, the setup of the runs above, with images built from 03bb156, which adds outlier detection (D041). 9 runs took 11 attempts; 3 were invalid, all on flagged baselines, the three of F2's run 2, which so has no valid attempt.
+
+| Fault | Result | Fault phase p99, ms | Degraded in the fault phase | Recovery, s | Taken out |
+|---|---|---|---|---|---|
+| F2 50 ms on shard 1 | fail, run 3; run 2 not valid | 19.10, 18.79 (runs 1 and 3) | 62.4, 62.9%, `shards_partial` 62.4 and 61.2 points above the healthy phase | 0, 0 | annshard-3 once per run, in the second after the fault's removal |
+| F5 replica paused | pass | 5.10, 5.47, 5.48 | 0.1, 0.0, 0.0% | 4.0, 3.0, 2.0 | annshard-1 once per run, in the fault phase |
+| F6 searches hang | fail, run 3 | 6.37, 5.71, 5.95 | 0.1, 0.1, 1.8% | 1.0, 1.0, 13.0 | annshard-1 once per run, in the fault phase |
+
+- **The criteria of outlier detection.** F5's `shards_partial` share in [0, 13 s) after the pause is 0.17, 0.17 and 0.14%, and F6's over the fault phase 0.02 to 0.04 points above the healthy phase's: both within 1 point in every run. `recserve_shard_ejections_total` is 0 at 30 and at 90 s in every run. F2 fails its criteria, so the third condition is not met.
+- **Against the runs before it** (the table above, 3 runs each, at c3679be): F5's fault phase p99 5.10 to 5.48 ms against 17.45 to 17.70, its `shards_partial` share in [0, 13 s) 0.14 to 0.17% against 25.09 to 25.15%; F6's p99 5.71 to 6.37 ms against 18.17 to 18.39, its `shards_partial` share over the fault phase 0.02 to 0.04 points above the healthy phase's against 24.9 to 25.0 points. The two sets of runs do not overlap on any of these.
+- **The failures.** F2's run 3 had the breaker open at 90.7 s, in the fault phase, attributed to timeouts, and `history_unavailable` 1.68 points above the healthy phase. F6's run 3 recovered after 13 s: the windows' p99 stayed above 1.2 times the healthy phase's 5.08 ms, with seconds of 7 to 12.7 ms in the first 10 s after removal, while annshard-1 was back after 1.0 s; its fault phase also had the breaker open at 144.1 s, attributed to timeouts. Neither involves a replica taken out in its healthy phase. What raised F6's p99 after the removal was not established.
+- **F2's ejection.** With both replicas of shard 1 slow, none was taken out during the fault. The script deletes the toxics of annshard-2 and then annshard-3, one request after the other, and annshard-3 was taken out between the reads at 149.9 and 150.9 s, which fits annshard-2 answering again while annshard-3 still had the latency; the order of the two was not measured.
+- F1, F3 and F4 were not run with it (Faults, amended for M7); their results above are of c3679be.

@@ -1,0 +1,5 @@
+| Run | Valid | Opened at s | Phase | Reads s | Timeouts | Errors | Other failed | Attribution | GC pause ms (median) | CPU ms (median) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| F2-run3 | true | 90.676 | fault | 89.004 to 91.005 | 6 | 0 | refused 92 | timeouts | 0.73 (0.48) | annshard-0 164 (173), annshard-1 166 (172), annshard-2 163 (172), annshard-3 170 (174), gateway 738 (750), ingest 1 (2), kafka 26 (24), toxiproxy 313 (334), valkey 86 (93) |
+| F5-run1 | true | 238.668 | recovery | 237.004 to 239.006 | 6 | 0 | refused 95 | timeouts | 0.41 (0.57) | annshard-0 160 (154), annshard-1 178 (155), annshard-2 167 (153), annshard-3 170 (155), gateway 745 (720), ingest 2 (2), kafka 26 (41), toxiproxy 314 (317), valkey 101 (90) |
+| F6-run3 | true | 144.066 | fault | 143.004 to 145.003 | 5 | 0 | refused 260 | timeouts | 0.13 (0.39) | annshard-0 143 (151), annshard-1 0 (151), annshard-2 76 (153), annshard-3 73 (153), gateway 504 (707), ingest 3 (2), kafka 28 (23), toxiproxy 148 (312), valkey 74 (90) |
