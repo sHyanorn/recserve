@@ -139,12 +139,12 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 	}
 	// The shard client reads the version served from its own goroutines.
 	var active atomic.Pointer[recommend.Live]
-	serving := func() (string, time.Time) {
+	serving := func() string {
 		live := active.Load()
 		if live == nil { // the first bundle is being prepared
-			return "", time.Time{}
+			return ""
 		}
-		return live.Serving()
+		return live.Version()
 	}
 	index, shardMetrics, closeShards, err := openShards(replicas, shards, hedgeDelay, prepareTimeout, serving, log)
 	if err != nil {
@@ -313,8 +313,8 @@ func openProducer(brokers string, store history.Store, timeout time.Duration) (e
 // it holds: the shards are built in this process or, given replicas,
 // prepared on the annshard replicas of every shard, each call within
 // timeout, and searched with hedgeDelay. serving returns the version the
-// gateway serves and when it started, which the replicas are told to keep.
-func openShards(replicas [][]string, cfg shard.Config, hedgeDelay, timeout time.Duration, serving func() (string, time.Time), log *slog.Logger) (func(*bundle.Bundle) (recommend.Shards, error), []prometheus.Collector, func(), error) {
+// gateway serves, which the replicas are told to keep.
+func openShards(replicas [][]string, cfg shard.Config, hedgeDelay, timeout time.Duration, serving func() string, log *slog.Logger) (func(*bundle.Bundle) (recommend.Shards, error), []prometheus.Collector, func(), error) {
 	if replicas == nil {
 		return func(b *bundle.Bundle) (recommend.Shards, error) {
 			s, err := shard.Build(b.Vectors, cfg)

@@ -479,45 +479,6 @@ func TestSwapRejects(t *testing.T) {
 	}
 }
 
-// Serving gives the active version and the time it was activated, after
-// its prepare ended, so each swap gives a later time, a swap back to a
-// version included; a rejected swap leaves both as they were (D057).
-func TestServingTime(t *testing.T) {
-	st := newSwapTest(t, nil, "")
-	check := func(want string, after ...time.Time) time.Time {
-		t.Helper()
-		v, since := st.live.Serving()
-		for _, a := range after {
-			if v != want || !since.After(a) {
-				t.Fatalf("Serving() = %s, %v; want %s after %v", v, since, want, a)
-			}
-		}
-		return since
-	}
-	swap := func(v string) time.Time {
-		t.Helper()
-		var prepared time.Time
-		prepare := st.prepare(v)
-		if _, err := st.live.Swap(func() (*Pipeline, error) {
-			p, err := prepare()
-			prepared = time.Now()
-			return p, err
-		}); err != nil {
-			t.Fatal(err)
-		}
-		return prepared
-	}
-	since := check("a", time.Time{})
-	since = check("b", since, swap("b"))
-	if _, err := st.live.Swap(st.prepare("b")); !errors.Is(err, ErrActive) {
-		t.Fatalf("err = %v, want %v", err, ErrActive)
-	}
-	if v, s := st.live.Serving(); v != "b" || !s.Equal(since) {
-		t.Fatalf("after a rejected swap, Serving() = %s, %v; want b, %v", v, s, since)
-	}
-	check("a", since, swap("a"))
-}
-
 // A swap waits for a request that holds the previous version as long as
 // it takes, logging while it waits, and closes the bundle once it returns.
 func TestSwapWaitsForRequests(t *testing.T) {

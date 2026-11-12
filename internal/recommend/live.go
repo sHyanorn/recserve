@@ -44,14 +44,13 @@ type Live struct {
 // version is one pipeline and the references to it: one per request that
 // holds it, plus one while it is active.
 type version struct {
-	p      *Pipeline
-	active time.Time // when it was activated
-	refs   atomic.Int64
-	free   chan struct{} // closed when refs reaches zero
+	p    *Pipeline
+	refs atomic.Int64
+	free chan struct{} // closed when refs reaches zero
 }
 
 func newVersion(p *Pipeline) *version {
-	v := &version{p: p, active: time.Now(), free: make(chan struct{})}
+	v := &version{p: p, free: make(chan struct{})}
 	v.refs.Store(1)
 	return v
 }
@@ -107,16 +106,6 @@ func (l *Live) Version() string {
 		return v.p.Bundle.ModelVersion
 	}
 	return ""
-}
-
-// Serving returns the active bundle's version and the time it was
-// activated, which the shard replicas order the versions served by
-// (D057), or "" after Close.
-func (l *Live) Serving() (string, time.Time) {
-	if v := l.cur.Load(); v != nil {
-		return v.p.Bundle.ModelVersion, v.active
-	}
-	return "", time.Time{}
 }
 
 // SwapResult describes a completed swap.

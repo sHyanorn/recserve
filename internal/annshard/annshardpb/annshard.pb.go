@@ -312,14 +312,8 @@ type PrepareRequest struct {
 	// none, the version it prepares. The replica keeps that version, and is
 	// ready while it holds it; empty leaves the replica's as it was.
 	ServingVersion string `protobuf:"bytes,2,opt,name=serving_version,json=servingVersion,proto3" json:"serving_version,omitempty"`
-	// When the caller started serving serving_version, in nanoseconds since
-	// the Unix epoch; while it serves none, when it started this Prepare. A
-	// replica takes serving_version only if this time is not before that of
-	// the version it has, so a Prepare that arrives late does not undo a
-	// later one; 0 takes it whatever the time.
-	ServingSinceUnixNano int64 `protobuf:"varint,3,opt,name=serving_since_unix_nano,json=servingSinceUnixNano,proto3" json:"serving_since_unix_nano,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *PrepareRequest) Reset() {
@@ -364,13 +358,6 @@ func (x *PrepareRequest) GetServingVersion() string {
 		return x.ServingVersion
 	}
 	return ""
-}
-
-func (x *PrepareRequest) GetServingSinceUnixNano() int64 {
-	if x != nil {
-		return x.ServingSinceUnixNano
-	}
-	return 0
 }
 
 type PrepareResponse struct {
@@ -430,11 +417,10 @@ const file_recserve_annshard_v1_annshard_proto_rawDesc = "" +
 	"\x02ef\x18\x05 \x01(\x05R\x02ef\":\n" +
 	"\x0eSearchResponse\x12\x10\n" +
 	"\x03ids\x18\x01 \x03(\x05R\x03ids\x12\x16\n" +
-	"\x06scores\x18\x02 \x03(\x01R\x06scores\"\xa3\x01\n" +
+	"\x06scores\x18\x02 \x03(\x01R\x06scores\"l\n" +
 	"\x0ePrepareRequest\x121\n" +
 	"\x05index\x18\x01 \x01(\v2\x1b.recserve.annshard.v1.IndexR\x05index\x12'\n" +
-	"\x0fserving_version\x18\x02 \x01(\tR\x0eservingVersion\x125\n" +
-	"\x17serving_since_unix_nano\x18\x03 \x01(\x03R\x14servingSinceUnixNano\"\x11\n" +
+	"\x0fserving_version\x18\x02 \x01(\tR\x0eservingVersion\"\x11\n" +
 	"\x0fPrepareResponse*;\n" +
 	"\x04Mode\x12\x14\n" +
 	"\x10MODE_UNSPECIFIED\x10\x00\x12\x0e\n" +

@@ -67,12 +67,6 @@ message PrepareRequest {
   // none, the version it prepares. The replica keeps that version, and is
   // ready while it holds it; empty leaves the replica's as it was.
   string serving_version = 2;
-  // When the caller started serving serving_version, in nanoseconds since
-  // the Unix epoch; while it serves none, when it started this Prepare. A
-  // replica takes serving_version only if this time is not before that of
-  // the version it has, so a Prepare that arrives late does not undo a
-  // later one; 0 takes it whatever the time.
-  int64 serving_since_unix_nano = 3;
 }
 
 message PrepareResponse {}

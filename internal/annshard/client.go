@@ -53,11 +53,10 @@ type Options struct {
 	// finds that it lacks the index; 0 for no bound.
 	PrepareTimeout time.Duration
 	// Serving returns the bundle version the gateway serves at the moment,
-	// "" if none yet, and the time it started serving it. Every Prepare
-	// tells the replica both, which then does not drop that version to make
-	// room (D043) and is ready while it holds it (D044), unless it has had a
-	// version served from a later time (D057). nil is none.
-	Serving func() (string, time.Time)
+	// "" if none yet. Every Prepare tells the replica, which then does not
+	// drop that version to make room (D043) and is ready while it holds it
+	// (D044). nil is none.
+	Serving func() string
 	Log     *slog.Logger // nil logs nothing
 	// Dial holds options added to DialOptions, such as tracing's.
 	Dial []grpc.DialOption
@@ -212,7 +211,7 @@ func Dial(addrs [][]string, opt Options) (*Client, error) {
 		opt.Log = slog.New(slog.DiscardHandler)
 	}
 	if opt.Serving == nil {
-		opt.Serving = func() (string, time.Time) { return "", time.Time{} }
+		opt.Serving = func() string { return "" }
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
@@ -282,22 +281,22 @@ const followEvery = time.Second
 // prepare or could not prepare becomes ready without a search finding it
 // lacking, and every replica learns of a swap once it is active (D044).
 func (c *Client) watch(r *replica, i int) {
-	var held serving    // the version served that r was prepared with on this connection
+	var held string     // the version served that r was prepared with on this connection
 	var retry time.Time // after a failure, the time to ask again
 	for {
 		st := r.conn.GetState()
 		if st != connectivity.Ready {
-			held = serving{}
+			held = ""
 		}
 		switch st {
 		case connectivity.Idle:
 			r.conn.Connect()
 		case connectivity.Ready:
-			if v := c.serving(); v.version != "" && v != held && !time.Now().Before(retry) {
-				if err := c.prepareOn(r, c.index(v.version, i), v); err == nil {
+			if v := c.opt.Serving(); v != "" && v != held && !time.Now().Before(retry) {
+				if err := c.prepareOn(r, c.index(v, i), v); err == nil {
 					held = v
 				} else if c.ctx.Err() == nil {
-					c.opt.Log.Warn("a replica could not prepare the version served", "replica", r.addr, "version", v.version, "shard", i, "err", err)
+					c.opt.Log.Warn("a replica could not prepare the version served", "replica", r.addr, "version", v, "shard", i, "err", err)
 					retry = time.Now().Add(catchUpWait)
 				}
 			}
@@ -309,26 +308,6 @@ func (c *Client) watch(r *replica, i int) {
 			return
 		}
 	}
-}
-
-// serving is a version the gateway serves and the time it started serving
-// it, in Unix nanoseconds; 0 if not known.
-type serving struct {
-	version string
-	since   int64
-}
-
-// firstSince is the time a gateway that serves nothing names the version
-// it prepares with: the earliest, before any activation's.
-const firstSince = 1
-
-// serving returns the version the gateway serves at the moment.
-func (c *Client) serving() serving {
-	v, since := c.opt.Serving()
-	if v == "" || since.IsZero() {
-		return serving{version: v}
-	}
-	return serving{v, since.UnixNano()}
 }
 
 // index returns shard i of version as the client's configuration builds it.
@@ -379,14 +358,9 @@ type Shards struct {
 // the version, Prepare fails.
 func (c *Client) Prepare(ctx context.Context, version string, items int) (*Shards, error) {
 	s := &Shards{c: c, items: items, indexes: make([]*annshardpb.Index, len(c.shards))}
-	sv := c.serving()
-	if sv.version == "" {
-		// The first version, which the gateway serves next. Named with the
-		// earliest time, it becomes the version served on a replica that
-		// has had none, and on the others once the gateway activates it: a
-		// gateway that starts and stops does not take the version served
-		// from one that goes on serving (D057).
-		sv = serving{version, firstSince}
+	serving := c.opt.Serving()
+	if serving == "" { // the first version, which the gateway serves next
+		serving = version
 	}
 	errs := make([][]error, len(c.shards)) // by shard, then replica
 	var wg sync.WaitGroup
@@ -396,7 +370,7 @@ func (c *Client) Prepare(ctx context.Context, version string, items int) (*Shard
 		errs[i] = make([]error, len(g.replicas))
 		for j, r := range g.replicas {
 			wg.Go(func() {
-				_, errs[i][j] = r.rpc.Prepare(ctx, &annshardpb.PrepareRequest{Index: ix, ServingVersion: sv.version, ServingSinceUnixNano: sv.since})
+				_, errs[i][j] = r.rpc.Prepare(ctx, &annshardpb.PrepareRequest{Index: ix, ServingVersion: serving})
 			})
 		}
 	}
@@ -443,7 +417,7 @@ func (c *Client) catchUp(r *replica, x *annshardpb.Index) {
 	c.mu.Unlock()
 	go func() {
 		defer c.wg.Done()
-		if err := c.prepareOn(r, x, c.serving()); err == nil {
+		if err := c.prepareOn(r, x, c.opt.Serving()); err == nil {
 			c.opt.Log.Info("a replica prepared an index it lacked", "replica", r.addr, "version", ix.version, "shard", ix.shard)
 		} else if c.ctx.Err() == nil {
 			c.opt.Log.Warn("a replica could not prepare an index it lacks", "replica", r.addr, "version", ix.version, "shard", ix.shard, "err", err)
@@ -460,13 +434,13 @@ func (c *Client) catchUp(r *replica, x *annshardpb.Index) {
 
 // prepareOn has replica r prepare the index x, telling it the version
 // served, within PrepareTimeout.
-func (c *Client) prepareOn(r *replica, x *annshardpb.Index, sv serving) error {
+func (c *Client) prepareOn(r *replica, x *annshardpb.Index, serving string) error {
 	ctx, cancel := c.ctx, context.CancelFunc(func() {})
 	if c.opt.PrepareTimeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, c.opt.PrepareTimeout)
 	}
 	defer cancel()
-	_, err := r.rpc.Prepare(ctx, &annshardpb.PrepareRequest{Index: x, ServingVersion: sv.version, ServingSinceUnixNano: sv.since})
+	_, err := r.rpc.Prepare(ctx, &annshardpb.PrepareRequest{Index: x, ServingVersion: serving})
 	return err
 }
 

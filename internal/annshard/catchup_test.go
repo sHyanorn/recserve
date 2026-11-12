@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -104,7 +103,7 @@ func TestReplicasKeepTheServingVersion(t *testing.T) {
 	annshardtest.WriteVectors(t, rootA, matrices[0])
 	a := annshardtest.Start(t, rootA)
 	cfg := shard.Config{Shards: 1, Mode: shard.Exact}
-	c := annshardtest.Dial(t, [][]string{{a, annshardtest.Start(t, rootB)}}, annshard.Options{Config: cfg, Serving: func() (string, time.Time) { return v1, time.Time{} }})
+	c := annshardtest.Dial(t, [][]string{{a, annshardtest.Start(t, rootB)}}, annshard.Options{Config: cfg, Serving: func() string { return v1 }})
 	ctx := context.Background()
 	var s2 *annshard.Shards
 	for _, v := range []string{v1, v3, v2} { // a holds v1 and v3, v3 named last
@@ -183,7 +182,7 @@ func TestReplicaCatchesUpOnConnecting(t *testing.T) {
 	a, stopA := annshardtest.StartOn(t, "127.0.0.1:0", root)
 	b, stopB := annshardtest.StartOn(t, "127.0.0.1:0", root)
 	stopB()
-	c := annshardtest.Dial(t, [][]string{{a, b}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, Serving: func() (string, time.Time) { return v1, time.Time{} }})
+	c := annshardtest.Dial(t, [][]string{{a, b}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, Serving: func() string { return v1 }})
 	if _, err := c.Prepare(context.Background(), v1, 100); err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +224,7 @@ func TestReplicaFollowsTheVersionServed(t *testing.T) {
 	addr := annshardtest.Start(t, root)
 	var served atomic.Pointer[string]
 	served.Store(new(string))
-	c := annshardtest.Dial(t, [][]string{{addr}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, Serving: func() (string, time.Time) { return *served.Load(), time.Time{} }})
+	c := annshardtest.Dial(t, [][]string{{addr}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, Serving: func() string { return *served.Load() }})
 	if _, err := c.Prepare(context.Background(), v1, 100); err != nil {
 		t.Fatal(err)
 	}
@@ -243,38 +242,4 @@ func TestReplicaFollowsTheVersionServed(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitReady(t, addr)
-}
-
-// The watch sends a replica the version served again when only the time
-// it started changes, as after a swap away and back between two of its
-// looks (D057 point 2).
-func TestReplicaFollowsTheTimeOfTheVersionServed(t *testing.T) {
-	r := rand.New(rand.NewPCG(13, 13))
-	root := t.TempDir()
-	v := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 100, 2))
-	var sent sync.Map // the times of the Prepares that named v served
-	note := grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if p, ok := req.(*annshardpb.PrepareRequest); ok && p.GetServingVersion() == v {
-			sent.Store(p.GetServingSinceUnixNano(), true)
-		}
-		return handler(ctx, req)
-	})
-	addr := annshardtest.Start(t, root, note)
-	var since atomic.Int64
-	since.Store(time.Now().UnixNano())
-	c := annshardtest.Dial(t, [][]string{{addr}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, Serving: func() (string, time.Time) { return v, time.Unix(0, since.Load()) }})
-	if _, err := c.Prepare(context.Background(), v, 100); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(1500 * time.Millisecond) // the watch has looked since
-	t2 := since.Load() + int64(time.Second)
-	since.Store(t2)
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		if _, ok := sent.Load(t2); ok {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("no Prepare named the version served with its new time within 5 s")
-		}
-	}
 }
