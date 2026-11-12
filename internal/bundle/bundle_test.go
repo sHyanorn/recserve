@@ -216,8 +216,10 @@ func TestLoadCutoffUnit(t *testing.T) {
 	}
 	load(t, writeBundle(t, withCutoff(cutoff)), Options{FirstTestTS: firstTest})
 	checkRejected(t, writeBundle(t, withCutoff(cutoff/1000)), Options{FirstTestTS: firstTest}, "not in milliseconds")
-	// At exactly 1/100 of the first test event the cutoff is accepted.
+	// At exactly 1/100 of the first test event the cutoff is accepted, and
+	// below it rejected, also where 1/100 is not a whole number.
 	load(t, writeBundle(t), Options{FirstTestTS: 10_000})
+	checkRejected(t, writeBundle(t), Options{FirstTestTS: 10_001}, "not in milliseconds")
 }
 
 // TestLoadRejectsONNX covers bundles whose encoder does not reproduce the
@@ -395,7 +397,17 @@ func TestLoadHistoryRaw(t *testing.T) {
 	load(t, writeBundle(t, withRaw(), swap), Options{})
 	checkRejected(t, writeBundle(t, withRaw("item1", "item4"), swap), Options{}, "history_raw \"item1\" is internal ID 2")
 	checkRejected(t, writeBundle(t, withRaw("item1")), Options{}, "history_raw has 1 items")
-	checkRejected(t, writeBundle(t, withRaw("item1", "nosuch")), Options{}, "history_raw \"nosuch\"")
+	checkRejected(t, writeBundle(t, withRaw("item1", "nosuch")), Options{}, "history_raw \"nosuch\" is not in items.ids")
+	empty := func(f map[string][]byte, m map[string]any) {
+		withRaw()(f, m)
+		var c map[string]any
+		if err := json.Unmarshal(f["golden.jsonl"], &c); err != nil {
+			t.Fatal(err)
+		}
+		c["history_raw"] = []any{}
+		f["golden.jsonl"] = append(marshal(t, c), '\n')
+	}
+	checkRejected(t, writeBundle(t, empty), Options{}, "history_raw has 0 items")
 }
 
 func TestLoadRejectsTamperedFile(t *testing.T) {

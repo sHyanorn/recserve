@@ -338,7 +338,7 @@ func checkCutoff(cutoff, firstTest int64) error {
 		return nil
 	case cutoff >= firstTest:
 		return fmt.Errorf("%w: train_cutoff_ts %d, first test event %d", ErrCutoff, cutoff, firstTest)
-	case cutoff < firstTest/unitRatio:
+	case cutoff*unitRatio < firstTest: // cutoff < firstTest here, so no overflow
 		return fmt.Errorf("train_cutoff_ts %d is under 1/%d of the first test event's time %d: not in milliseconds", cutoff, unitRatio, firstTest)
 	}
 	return nil
@@ -501,7 +501,11 @@ func (b *Bundle) checkRaw(c goldenCase) error {
 		return fmt.Errorf("history_raw has %d items, history %d", len(c.HistoryRaw), len(c.History))
 	}
 	for i, raw := range c.HistoryRaw {
-		if id, ok := b.Lookup(raw); !ok || id != c.History[i] {
+		id, ok := b.Lookup(raw)
+		if !ok {
+			return fmt.Errorf("history_raw %q is not in items.ids", raw)
+		}
+		if id != c.History[i] {
 			return fmt.Errorf("history_raw %q is internal ID %d in items.ids, history has %d", raw, id, c.History[i])
 		}
 	}

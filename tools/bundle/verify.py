@@ -90,7 +90,7 @@ def main(d):
         if not c["history"] or min(c["history"]) < 1 or max(c["history"]) > m["item_count"]:
             sys.exit(f"golden {n}: history IDs out of range")
         # Raw IDs, if given, check items.ids, which the internal IDs cannot.
-        if "history_raw" in c and [index.get(raw) for raw in c["history_raw"]] != c["history"]:
+        if c.get("history_raw") is not None and [index.get(raw) for raw in c["history_raw"]] != c["history"]:
             sys.exit(f"golden {n}: history_raw does not map to history through items.ids")
         if m["user_encoder"] == "onnx":
             uv = encode(sess, c["history"], m["max_seq_len"])

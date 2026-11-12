@@ -65,6 +65,7 @@ Format: ID, date, decision, rationale, alternatives. Append new decisions at the
 - Alternatives: vectors inside the ONNX graph (cannot be sharded or searched); a custom binary format (one more writer and reader)
 
 - Revised 2026-11-12: golden cases hold internal IDs only, so a mismatched ID order in `items.ids` passed them, contrary to the rationale. Since this revision a case may carry `history_raw`, its history in raw IDs, which the loader and `tools/bundle/verify.py` map through `items.ids` and compare with the history; seqrec-lab's export carries it (D056)
+- Revised 2026-11-12, later the same day: `history_raw` checks only the items of the golden histories, and only when a case carries it; two lines of `items.ids` swapped whose items are in no golden history still pass
 ## D011 Data by script only; no public demo by default
 - Date: 2026-11-08
 - Decision: Scripts download the data; nothing derived from rows is committed. There is no public online demo. If one is built later, it uses KuaiRec (Zenodo: CC-BY-4.0; the GitHub repository says CC BY-SA 4.0; the stricter terms apply) with attribution

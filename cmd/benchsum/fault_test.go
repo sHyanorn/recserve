@@ -288,11 +288,27 @@ func TestHealthyEjectionsReadBefore30And90(t *testing.T) {
 	}
 }
 
+// deref prints a value that may be missing.
+func deref(p *float64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// A read at exactly 30 s is not before 30 s.
+func TestLastBeforeExcludesTheBound(t *testing.T) {
+	r := testReads(t, 40, func(s int) string { return fmt.Sprintf("x %d\n", s) })
+	if rd, ok := r.lastBefore(30_003); !ok || rd.ms != testT0+29_003 {
+		t.Errorf("last read before 30.003 s at %v, want 29.003 s", rd.ms-testT0)
+	}
+}
+
 // The breaker table names an opening's phase by 90 and 150 s, not by the
 // script's marks a few ms later.
 func TestPhaseAtTheCriteriaBounds(t *testing.T) {
 	f := faultRun{InjectS: 90.005, RemoveS: 150.004, Windows: make([]stats, 270)}
-	for s, want := range map[float64]string{29.999: "warmup", 89.999: "healthy", 90.001: "fault", 150.001: "recovery", 270: "after the load"} {
+	for s, want := range map[float64]string{29.999: "warmup", 30: "healthy", 89.999: "healthy", 90: "fault", 90.001: "fault", 149.999: "fault", 150: "recovery", 150.001: "recovery", 270: "after the load"} {
 		if got := f.phaseAt(s); got != want {
 			t.Errorf("phase at %.3f s: %s, want %s", s, got, want)
 		}
@@ -452,7 +468,7 @@ func TestSummarizeFault(t *testing.T) {
 		})
 		g, err := summarizeFault(filepath.Join(dir, "F1-run1"), raw, ej, "F1")
 		if err != nil || !g.OutlierDetection || g.HealthyEjections == nil || *g.HealthyEjections != want {
-			t.Errorf("ejection first read in second %d: healthy ejections %v, want %v; %v", first, g.HealthyEjections, want, err)
+			t.Errorf("ejection first read in second %d: healthy ejections %v, want %v; %v", first, deref(g.HealthyEjections), want, err)
 		}
 	}
 	// F4's lag drain counts from 150 s, not from the removal mark at
@@ -460,7 +476,11 @@ func TestSummarizeFault(t *testing.T) {
 	write("F1-run1.lag", fmt.Sprintf("%.0f 5 4\n%.0f 5 5\n%.0f 6 6\n", testT0+149_000, testT0+150_002, testT0+151_000))
 	write("F1-run1.histories", "ok\n")
 	if f4, err := summarizeFault(filepath.Join(dir, "F1-run1"), raw, reads, "F4"); err != nil || f4.LagDrainedS == nil || *f4.LagDrainedS != 0.002 {
-		t.Errorf("F4 lag drained %v, want 0.002 s; %v", f4.LagDrainedS, err)
+		t.Errorf("F4 lag drained %v, want 0.002 s; %v", deref(f4.LagDrainedS), err)
+	}
+	// A reading at 150.000 s itself counts.
+	if d, err := lagDrained(filepath.Join(dir, "F1-run1.lag"), testT0+150_002); err != nil || d == nil || *d != 0 {
+		t.Errorf("lag drained at the bound: %v %v, want 0", deref(d), err)
 	}
 	// With nothing injected the same files are judged for validity only.
 	if n, err := summarizeFault(filepath.Join(dir, "F1-run1"), raw, reads, "none"); err != nil || !n.Valid || n.Pass || n.Failures != nil || n.ReplicaShare != nil || len(n.Breaker) != 1 {
