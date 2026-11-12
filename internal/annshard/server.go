@@ -64,10 +64,11 @@ func parseIndex(x *annshardpb.Index) (index, error) {
 const KeepVersions = 2
 
 // Server is one annshard replica. It holds the indexes it was asked to
-// prepare, of KeepVersions bundle versions: the serving version, the one
-// the last Prepare to name one said its caller serves, and otherwise those
-// that requests named last. It answers a search only from the index the
-// request names, and is ready while it holds the serving version (D044).
+// prepare, of KeepVersions bundle versions: the serving version, which the
+// Prepare with the latest time of those that name one said its caller
+// serves (D057), and otherwise those that requests named last. It answers a
+// search only from the index the request names, and is ready while it
+// holds the serving version (D044).
 type Server struct {
 	annshardpb.UnimplementedAnnShardServer
 	root   string // holds one bundle directory per version
@@ -78,6 +79,7 @@ type Server struct {
 	mu       sync.RWMutex
 	versions map[string]*version
 	serving  string
+	since    int64        // the time of serving, in Unix nanoseconds; 0 for none
 	clock    atomic.Int64 // counts the requests that named a held version
 }
 
@@ -168,18 +170,16 @@ func (s *Server) hold(ix index, p *shard.Part) {
 
 // Prepare loads the vectors of the index's bundle version, verifies them
 // against the bundle's manifest and builds the index. The serving version
-// it names, if any, becomes the replica's at once. Requests for one index
-// share one build, which goes on if they give up.
+// it names, if any, becomes the replica's at once, unless its time is
+// before that of the replica's (D057). Requests for one index share one
+// build, which goes on if they give up.
 func (s *Server) Prepare(ctx context.Context, req *annshardpb.PrepareRequest) (*annshardpb.PrepareResponse, error) {
 	ix, err := parseIndex(req.GetIndex())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	if v := req.GetServingVersion(); v != "" {
-		s.mu.Lock()
-		s.serving = v
-		s.setHealth()
-		s.mu.Unlock()
+		s.serve(v, req.GetServingSinceUnixNano())
 	}
 	done := s.loading.DoChan(fmt.Sprintf("%+v", ix), func() (any, error) { return nil, s.prepare(ix) })
 	select {
@@ -191,6 +191,24 @@ func (s *Server) Prepare(ctx context.Context, req *annshardpb.PrepareRequest) (*
 	case <-ctx.Done():
 		return nil, status.FromContextError(ctx.Err()).Err()
 	}
+}
+
+// serve makes v, served since the Unix time in nanoseconds since, the
+// serving version, unless since is before the time of the serving version:
+// a Prepare that arrives after one sent later does not undo it. A since of
+// 0, from a caller that sends no time, makes v the serving version whatever
+// the time, and leaves the time for later ones to be compared with.
+func (s *Server) serve(v string, since int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if since != 0 {
+		if since < s.since {
+			return
+		}
+		s.since = since
+	}
+	s.serving = v
+	s.setHealth()
 }
 
 // prepare builds ix unless the replica holds it; its error is a gRPC

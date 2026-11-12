@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -393,4 +394,87 @@ func TestReadyWithTheServingVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantReady(true)
+}
+
+// Of two Prepares that name a version served, the one with the later time
+// gives it, whichever arrives last (D057). A gateway serves v1, then v2,
+// and prepares v3 while v2's Prepare, sent while it served v1, is held up on
+// the way to this replica; by the arrival order alone the late Prepare would
+// make v1 the version served and the replica would drop v3, which the
+// gateway serves next, to make room for v2.
+func TestLatePrepareKeepsTheServingVersion(t *testing.T) {
+	r := rand.New(rand.NewPCG(7, 7))
+	root := t.TempDir()
+	write := func() string { return annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2)) }
+	v1, v2, v3, v4 := write(), write(), write(), write()
+	c := replica(t, root)
+	ctx := context.Background()
+	prepare := func(v, serving string, since int64) {
+		t.Helper()
+		req := &annshardpb.PrepareRequest{Index: exactIndex(v, 0, 1), ServingVersion: serving, ServingSinceUnixNano: since}
+		if _, err := c.Prepare(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	held := func(vs ...string) {
+		t.Helper()
+		for _, v := range vs {
+			if _, err := c.Search(ctx, &annshardpb.SearchRequest{Index: exactIndex(v, 0, 1), Query: []float32{1, 1}, K: 5}); err != nil {
+				t.Fatalf("%s: %v", v, err)
+			}
+		}
+	}
+	t1 := time.Now().UnixNano() // the gateway serves v1 from t1, v2 from t2 and v3 from t3
+	t2, t3 := t1+int64(time.Second), t1+2*int64(time.Second)
+	prepare(v1, v1, t1)
+	prepare(v3, v2, t2)
+	prepare(v2, v1, t1) // late
+	held(v3)
+	prepare(v4, v3, t3)
+	held(v3, v4)
+}
+
+// A Prepare whose time equals that of the version served gives its own, as
+// the later arrival did before there were times. One with time 0, from a
+// caller that sends none, gives its own whatever the time, and leaves the
+// time the replica has for the next to be compared with.
+func TestServingVersionTimes(t *testing.T) {
+	r := rand.New(rand.NewPCG(8, 8))
+	root := t.TempDir()
+	write := func() string { return annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2)) }
+	v1, v2, v3, v4, v5 := write(), write(), write(), write(), write()
+	c := replica(t, root)
+	ctx := context.Background()
+	prepare := func(v, serving string, since int64) {
+		t.Helper()
+		req := &annshardpb.PrepareRequest{Index: exactIndex(v, 0, 1), ServingVersion: serving, ServingSinceUnixNano: since}
+		if _, err := c.Prepare(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	search := func(v string) error {
+		_, err := c.Search(ctx, &annshardpb.SearchRequest{Index: exactIndex(v, 0, 1), Query: []float32{1, 1}, K: 5})
+		return err
+	}
+	held := func(vs ...string) {
+		t.Helper()
+		for _, v := range vs {
+			if err := search(v); err != nil {
+				t.Fatalf("%s: %v", v, err)
+			}
+		}
+	}
+	t1 := time.Now().UnixNano()
+	prepare(v1, v1, t1)
+	prepare(v2, v2, t1) // the same time: v2 is served
+	held(v1)            // v1 is named last
+	prepare(v3, "", 0)
+	wantCode(t, search(v1), codes.FailedPrecondition)
+	held(v2, v3)
+	prepare(v4, v3, 0) // no time: v3 is served
+	wantCode(t, search(v2), codes.FailedPrecondition)
+	held(v3, v4)
+	prepare(v5, v4, t1-1) // before t1, which a time of 0 left in place
+	wantCode(t, search(v4), codes.FailedPrecondition)
+	held(v3, v5)
 }
