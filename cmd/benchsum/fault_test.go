@@ -535,6 +535,52 @@ func TestSilentWindowEnds60sAfterThePause(t *testing.T) {
 	}
 }
 
+// F5's judged excess is over [15, 60 s) after the pause at 90 s: of the
+// four degraded answers, at 104.99, 105.00, 149.99 and 150.00 s, the two
+// inside count, and moving either end 10 ms either way changes the share.
+func TestSilentExcessOver15To60sAfterThePause(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("F5-run1.json", fmt.Sprintf(`{"start":%q,"target_rate":100,"achieved_rate":100,"warmup_s":0,"duration_s":270,"valid":true}`, msTime(testT0)))
+	write("F5-run1.marks", fmt.Sprintf("inject %.0f\nremove %.0f\n", testT0+90_002, testT0+150_004))
+	write("F5-run1.noise-before.json", `{"noisy": false}`)
+	write("F5-run1.noise-after.json", `{"noisy": false}`)
+	write("F5-run1.breaker", "")
+	for i := range 4 {
+		write(fmt.Sprintf("F5-run1.b%d.metrics", i), "# TYPE recserve_shard_hedges_total counter\nrecserve_shard_hedges_total{result=\"won\",shard=\"0\"} 0\n")
+	}
+	var b strings.Builder
+	b.WriteString("i,path,due_ms,latency_ms,status,outcome,degraded,answered,shards\n")
+	for due := 0; due < 270_000; due += 10 {
+		switch due {
+		case 104_990, 105_000, 149_990, 150_000:
+			fmt.Fprintf(&b, "%d,/v1/recommend,%d,2,200,recommend_degraded,shards_partial,1,2\n", due/10, due)
+		default:
+			fmt.Fprintf(&b, "%d,/v1/recommend,%d,2,200,recommend_ok,,2,2\n", due/10, due)
+		}
+	}
+	raw := filepath.Join(dir, "F5-run1.csv.gz")
+	if err := writeGz(raw, b.String()); err != nil {
+		t.Fatal(err)
+	}
+	reads := filepath.Join(dir, "F5-run1.reads")
+	writeReads(t, reads, 270, shardLines(func(int) int { return 50 }))
+	f, err := summarizeFault(filepath.Join(dir, "F5-run1"), raw, reads, "F5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.Valid {
+		t.Fatalf("invalid: %v", f.Invalid)
+	}
+	if want := 2.0 / 4500; f.SilentExcess["shards_partial"] != want {
+		t.Errorf("silent excess %v, want shards_partial %v", f.SilentExcess, want)
+	}
+}
+
 // A recovery window or a return may start in any second of the recovery
 // phase, also one whose 10 s run past its end; recovery counts from 150 s.
 func TestRecoveryStartsWithinThePhase(t *testing.T) {

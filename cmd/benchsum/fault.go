@@ -80,7 +80,8 @@ func phaseStats(samples []sample, end float64) map[string]stats {
 	return out
 }
 
-// silentWindows are F5's intervals after the pause, ms.
+// silentWindows are F5's intervals after the pause, ms; the criteria judge
+// the last.
 var silentWindows = [][2]float64{{0, 13_000}, {13_000, 15_000}, {15_000, 60_000}}
 
 // replicaFaults are the faults of annshard-1, judged by its share.
@@ -154,8 +155,8 @@ func summarizeFault(prefix, raw, readsPath, fault string) (faultRun, error) {
 		return faultRun{}, err
 	}
 	if fault == "F5" {
-		silent := describe(samples, injectAt+15_000, injectAt+60_000)
-		f.SilentExcess = excess(silent, healthy)
+		judged := silentWindows[len(silentWindows)-1]
+		f.SilentExcess = excess(describe(samples, injectAt+judged[0], injectAt+judged[1]), healthy)
 		for _, w := range silentWindows {
 			f.Silent = append(f.Silent, describe(samples, injectAt+w[0], injectAt+w[1]).Reasons["shards_partial"])
 		}
