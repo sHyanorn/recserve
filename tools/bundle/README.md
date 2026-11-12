@@ -8,5 +8,6 @@ uv run python build.py DATA OUT --encoder onnx  # the same, with user_encoder.on
 uv run python build.py DATA OUT --encoder onnx --ranker  # also a logistic-regression ranker.onnx trained on the valid split (D027)
 uv run python verify.py OUT/<version>  # checksums, shapes, the ranker check, golden cases
 uv run pytest                          # verify.py on hand-written bundles, each kind of fault it rejects
+uv run python histories.py DATA ZERO_CORE  # test events' histories in recserve's data and in seqrec-lab's; ZERO_CORE is the 0-core Video_Games.csv.gz
 uv run python testdata.py ../../internal/onnx/onnxtest/testdata  # the Go tests' ONNX models and SHA256SUMS
 ```
