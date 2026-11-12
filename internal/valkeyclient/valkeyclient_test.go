@@ -50,7 +50,7 @@ func checkSlowSetup(t *testing.T, client func(addr string) (*valkeyclient.Client
 		t.Fatal(err)
 	}
 	var changes []string
-	br := breaker.New(5, time.Second, func(from, to string) { changes = append(changes, from+">"+to) })
+	br := breaker.New(breaker.Gateway, func(from, to string) { changes = append(changes, from+">"+to) })
 	store := breaker.Store{Store: history.NewValkey(clients[0]), Breaker: br}
 	results := breaker.Cache[string]{Cache: vc, Breaker: br}
 	user := fmt.Sprintf("slow-setup-%016x", rand.Uint64())

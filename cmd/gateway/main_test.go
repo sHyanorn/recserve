@@ -499,7 +499,8 @@ func (downStore) Before(context.Context, string, int64, int) ([]string, error) {
 	return nil, errors.New("down")
 }
 
-// The breaker of guard opens after breakerFailures failed history reads,
+// The breaker of guard opens after breaker.Gateway.MinCalls failed history
+// reads within its window,
 // logs it, reports it in its metrics, and leaves a gateway without a cache
 // without one.
 func TestGuard(t *testing.T) {
@@ -508,9 +509,9 @@ func TestGuard(t *testing.T) {
 	if c != nil {
 		t.Fatalf("no cache became %T", c)
 	}
-	for i := range breakerFailures + 1 {
+	for i := range breaker.Gateway.MinCalls + 1 {
 		_, err := store.Before(context.Background(), "u", 1, 0)
-		if open := errors.Is(err, breaker.ErrOpen); open != (i == breakerFailures) {
+		if open := errors.Is(err, breaker.ErrOpen); open != (i == breaker.Gateway.MinCalls) {
 			t.Fatalf("read %d: %v", i, err)
 		}
 	}

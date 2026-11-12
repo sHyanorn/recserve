@@ -1,7 +1,8 @@
 // Package breaker puts the gateway's calls to Valkey behind one circuit
-// breaker (docs/DECISIONS.md D037): after a run of failed calls it is open,
-// and a call fails at once with ErrOpen, without reaching the server, until
-// a later call is let through to try the server again.
+// breaker (docs/DECISIONS.md D037): once enough of its calls in a window
+// failed it is open, and a call fails at once with ErrOpen, without
+// reaching the server, until a later call is let through to try the server
+// again.
 package breaker
 
 import (
@@ -26,18 +27,43 @@ type Breaker struct {
 	calls *prometheus.CounterVec
 }
 
-// New returns a closed breaker. It opens after the given number of failures
-// in a row and stays open for the given time; then one call at a time is
-// let through, and the first that succeeds closes it, while one that fails
-// opens it again. A call whose context was cancelled counts as neither, nor
-// does one that ended waiting for a first connection
-// (valkeyclient.ErrConnecting): neither says that the server fails.
-// onChange, if not nil, is called with the states of every change.
-func New(failures uint32, open time.Duration, onChange func(from, to string)) *Breaker {
+// Settings say when a closed breaker opens and how long it stays open.
+type Settings struct {
+	// Window is the fixed window in which calls are counted: the counts
+	// start again when it ends, and when the breaker closes.
+	Window time.Duration
+	// MinCalls is how many calls must have ended in the window, failed or
+	// succeeded, before a failure can open the breaker.
+	MinCalls uint32
+	// FailureRate is the share of those calls at or above which a failure
+	// opens it.
+	FailureRate float64
+	// Open is how long it stays open before it lets a call try the server.
+	Open time.Duration
+}
+
+// Gateway is the gateway's settings (docs/DECISIONS.md D037, revision of
+// M7): a window of 1 s, as Sentinel's statIntervalMs; at least 100 calls,
+// resilience4j's minimumNumberOfCalls; half of them failed, the failure
+// rate of resilience4j and Hystrix; open for 1 s.
+var Gateway = Settings{Window: time.Second, MinCalls: 100, FailureRate: 0.5, Open: time.Second}
+
+// New returns a closed breaker with the given settings. It opens on a
+// failure that leaves at least s.MinCalls calls ended in the current window
+// and at least s.FailureRate of them failed, and stays open for s.Open;
+// then one call at a time is let through, and the first that succeeds
+// closes it, while one that fails opens it again. A call whose context was
+// cancelled counts as neither, nor does one that ended waiting for a first
+// connection (valkeyclient.ErrConnecting): neither says that the server
+// fails. A call that ends in a later window than it began, or after the
+// breaker changed state, is not counted. onChange, if not nil, is called
+// with the states of every change.
+func New(s Settings, onChange func(from, to string)) *Breaker {
 	return &Breaker{cb: gobreaker.NewCircuitBreaker[struct{}](gobreaker.Settings{
 		MaxRequests: 1,
-		Timeout:     open,
-		ReadyToTrip: func(c gobreaker.Counts) bool { return c.ConsecutiveFailures >= failures },
+		Interval:    s.Window,
+		Timeout:     s.Open,
+		ReadyToTrip: func(c gobreaker.Counts) bool { return trips(c, s) },
 		IsExcluded: func(err error) bool {
 			return errors.Is(err, context.Canceled) || errors.Is(err, valkeyclient.ErrConnecting)
 		},
@@ -50,6 +76,12 @@ func New(failures uint32, open time.Duration, onChange func(from, to string)) *B
 		Name: "recserve_valkey_calls_total",
 		Help: "Valkey calls through the circuit breaker, by call (history, cache_get, cache_put) and result: ok, timeout (the call's budget ended), error, cancelled, connecting (no connection within the budget), or refused (the breaker was open).",
 	}, []string{"call", "result"})}
+}
+
+// trips says whether counts c open a breaker with settings s.
+func trips(c gobreaker.Counts, s Settings) bool {
+	ended := c.TotalSuccesses + c.TotalFailures
+	return ended >= s.MinCalls && float64(c.TotalFailures) >= s.FailureRate*float64(ended)
 }
 
 // Collectors returns the breaker's metrics: its calls by result, and its

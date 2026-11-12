@@ -71,7 +71,7 @@ func checkProperty10(t *testing.T, blackhole, broken bool) error {
 		t.Fatalf("the reference response holds %d items", len(want.Items))
 	}
 
-	br := breaker.New(5, openFor, nil)
+	br := breaker.New(breaker.Settings{Window: time.Minute, MinCalls: 5, FailureRate: 0.5, Open: openFor}, nil)
 	p.History = breaker.Store{Store: store, Breaker: br}
 	p.Budgets.History = budget
 	p.cacheDegraded = broken

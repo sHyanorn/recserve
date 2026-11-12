@@ -102,7 +102,7 @@ func TestRealDataValkey(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		br := breaker.New(5, time.Second, nil)
+		br := breaker.New(breaker.Gateway, nil)
 		if c.store == history.Store(vstore) {
 			p.History = breaker.Store{Store: vstore, Breaker: br}
 		}

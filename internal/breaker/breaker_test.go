@@ -44,7 +44,7 @@ func TestBreaker(t *testing.T) {
 	const openFor = 300 * time.Millisecond // long against a stall of the test between two calls
 	var changes []string
 	srv := &server{}
-	b := New(3, openFor, func(from, to string) { changes = append(changes, from+">"+to) })
+	b := New(Settings{Window: time.Hour, MinCalls: 6, FailureRate: 0.5, Open: openFor}, func(from, to string) { changes = append(changes, from+">"+to) })
 	store, c := Store{srv, b}, Cache[int]{srv, b}
 
 	if items, err := store.Before(ctx, "u", 1, 0); err != nil || len(items) != 1 {
@@ -55,8 +55,8 @@ func TestBreaker(t *testing.T) {
 	}
 
 	// Cancelled calls are no failures, nor are calls that ended waiting
-	// for a first connection, and a success between failures starts the
-	// count again.
+	// for a first connection: they count as neither, or the breaker would
+	// open before the call below that opens it, or after.
 	for _, excluded := range []error{context.Canceled, fmt.Errorf("%w: %w", valkeyclient.ErrConnecting, context.DeadlineExceeded)} {
 		srv.err = excluded
 		for range 5 {
@@ -65,6 +65,7 @@ func TestBreaker(t *testing.T) {
 			}
 		}
 	}
+	// With fewer calls ended than MinCalls, failures do not open it.
 	srv.err = down
 	for range 2 {
 		if err := c.Put(ctx, cache.Key{}, 1); !errors.Is(err, down) {
@@ -76,15 +77,10 @@ func TestBreaker(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Three failures in a row, of the store and the cache together, open it.
+	// The failure that makes 6 calls ended, 3 of them failed, of the store
+	// and the cache together, opens it.
 	srv.err = down
 	if _, err := store.Before(ctx, "u", 1, 0); !errors.Is(err, down) {
-		t.Fatal(err)
-	}
-	if _, _, err := c.Get(ctx, cache.Key{}); !errors.Is(err, down) {
-		t.Fatal(err)
-	}
-	if err := c.Put(ctx, cache.Key{}, 1); !errors.Is(err, down) {
 		t.Fatal(err)
 	}
 	reached := srv.calls
@@ -154,7 +150,7 @@ func TestMetrics(t *testing.T) {
 	ctx := context.Background()
 	const openFor = 300 * time.Millisecond
 	srv := &server{}
-	b := New(3, openFor, nil)
+	b := New(Settings{Window: time.Hour, MinCalls: 6, FailureRate: 0.5, Open: openFor}, nil)
 	store, c := Store{srv, b}, Cache[int]{srv, b}
 	state := func() string {
 		t.Helper()
@@ -196,7 +192,7 @@ func TestMetrics(t *testing.T) {
 		step{get, context.Canceled, context.Canceled}, step{history, connecting, connecting},
 		step{history, timeout, timeout}, step{history, timeout, timeout}, step{put, down, down})
 	if s := state(); s != "open" {
-		t.Fatalf("after three failures in a row: state %s, want open", s)
+		t.Fatalf("after 3 failures of 6 calls: state %s, want open", s)
 	}
 	run(step{history, nil, ErrOpen})
 	time.Sleep(openFor + 10*time.Millisecond)

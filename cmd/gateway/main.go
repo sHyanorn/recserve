@@ -281,18 +281,11 @@ func openCache(addr string, size int, ttl time.Duration) (recommend.Cache, func(
 	return v, c.Close, nil
 }
 
-// The circuit breaker on Valkey opens after breakerFailures failed calls in
-// a row and lets a call try the server again after breakerOpen (D037).
-const (
-	breakerFailures = 5
-	breakerOpen     = time.Second
-)
-
 // guard returns store with its reads, and c with its reads and writes,
 // behind one circuit breaker that logs its changes of state, and the
 // breaker's metrics.
 func guard(store history.Store, c recommend.Cache, log *slog.Logger) (history.Store, recommend.Cache, []prometheus.Collector) {
-	b := breaker.New(breakerFailures, breakerOpen, func(from, to string) {
+	b := breaker.New(breaker.Gateway, func(from, to string) {
 		log.Warn("valkey circuit breaker", "from", from, "to", to)
 	})
 	if c != nil {
