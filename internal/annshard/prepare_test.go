@@ -228,7 +228,7 @@ func TestStartingGatewayLeavesTheVersionServed(t *testing.T) {
 		t.Fatal(err)
 	}
 	served.Store(&servedAt{vA, time.Now()})
-	time.Sleep(1500 * time.Millisecond) // the watch has sent the replica vA's time
+	time.Sleep(1500 * time.Millisecond)       // the watch has sent the replica vA's time
 	for _, v := range []string{vB, missing} { // gateways that start and stop
 		b, err := annshard.Dial([][]string{{addr}}, annshard.Options{Config: cfg})
 		if err != nil {
