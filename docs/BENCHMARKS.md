@@ -617,3 +617,56 @@ Found 2026-11-11 on review; nothing was rerun.
 - The figures of invalid fault attempts (6 with 1.73 to 3.47% of the healthy phase degraded) are gone: `scripts/bench-fault.sh` removes an attempt's files before its rerun.
 - The degraded seconds at 1,200 requests/s (45 of 60 under 10%, 7 at 70% or more) come from raw samples, which are not committed; so does the first, unrecorded profile run's p99.
 - `kind/` has no `env.txt`; its VM, the third, and its images, of 89fac9f, are stated in the text only.
+
+### M7 (2026-11-12)
+
+Every M7 run was on one VM: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.4, Docker 29.9.2 with cgroup v1 (`bench-results/m7/*/env.txt`). Session reference 473,053 ns (`bench-results/m7/noise-reference.json`, ten runs from 458,475 to 491,559 ns, on an idle machine). Bundle b7ff0634dd7b. The breaker's runs and the fault runs below ran on images built from c3679be, before outlier detection; `faults/env.txt` records uncommitted changes, the outlier detection's code in the working tree, which no image or binary of those runs contains (the images were built before it, and loadgen, noisebase and benchsum do not import `internal/annshard`). Figures from M6's VMs are not compared with these.
+
+#### Valkey circuit breaker openings: both attributed openings are calls that ran out of their budget; five of the six openings fell in invalid attempts
+
+`make bench-fault FAULT=none RATE=275` (`breaker/`, the table in `breaker.md`). Five valid runs took 9 attempts. Each of the 4 invalid attempts had 1.70% of its healthy phase degraded and the breaker open in it (1, 1, 2 and 1 openings); of the valid runs only none-run3 had an opening.
+
+| Run, attempt | Valid | Opened at s | Phase | Calls failed in the interval | Attribution | Beside it, not as causes |
+|---|---|---|---|---|---|---|
+| none-run3, 2 | yes | 18.992 | warmup | 6 `timeout`, 0 `error` | timeouts | GC pause 0.21 ms against a median of 0.14 ms, the excess in the second before the change |
+| none-run5, 1 | no | 86.599 | healthy | 6 `timeout` (5 history, 1 cache read), 0 `error` | timeouts | GC pause 1.48 ms against 0.17 ms, all in the second of the change; every container's CPU below its median |
+
+- The openings of none-run2's attempts 1 and 2 and none-run3's attempt 1 are not attributed: the rerun replaced their files (defect below). none-run5's attempt 1 was attributed from a copy of its gateway log and reads made outside the repository before the rerun, with `benchsum`, taking the first request's due time from the reads (each read is 3 ms after a whole second from it in all five valid runs); the same procedure on none-run3 gives its committed row. That row cannot be checked from the committed files.
+- By the rule, both attributed openings are calls that ran out of their budget, which D037 point 3 counts as failures; no Valkey error is among them. Why five history reads in a row passed 5 ms is not established.
+- The fault runs below, with only the history read going through the breaker, show the same: outside F3's fault, whose openings are attributed to errors, all six openings in their files are attributed to timeouts (F1-run2 at 11.8 and 243.8 s, F2-run1 at 105.3 s, F3-run1 at 203.5 s, and the invalid F4-run2 at 113.4 and 237.0 s).
+- Defects, found 2026-11-12, protocol and rule not changed, nothing rerun: (1) a valid run needs at most 1% of its healthy phase degraded, and a breaker open for its 1 s degrades about 1.7% of it, so every run whose breaker opens in its healthy phase is rejected and the valid runs undercount openings; (2) `scripts/bench-fault.sh` removes an attempt's files and recreates the gateway before a rerun, so the openings of invalid attempts cannot be attributed from the results; (3) `benchsum`'s medians take the spans whose later read is in second 90, while the protocol says [30, 90 s).
+
+#### Fault runs with the cache off: F1, F3, F5 and F6 pass; F2 fails on one breaker opening; F4 is not judged
+
+`make bench-fault FAULT=F1 ... F6 RATE=275` (`faults/`, the table in `faults.md`), with the cache off, hedge delay 2.5 ms, history budget 5 ms, by the criteria of Faults, amended for M7. 18 runs took 27 attempts; 10 were invalid, 7 on flagged baselines and 3 with 1.72 to 1.74% of the healthy phase degraded. Healthy phases' p99 4.70 to 6.83 ms; no run had an error.
+
+| Fault | Result | Fault phase p99, ms | Degraded in the fault phase | Recovery, s | Also |
+|---|---|---|---|---|---|
+| F1 replica killed | pass | 4.79, 5.16, 4.38 | 0.0% | 2.0, 4.0, 5.0 | annshard-1 back after 2.0, 4.0 and 5.0 s, the window at 0 s; its share in [210, 270 s) 50.0% in each; no failover in any fault phase |
+| F2 50 ms on shard 1 | fail, run 1 | 18.73, 18.60, 18.69 | 63.1, 62.4, 62.4%, `shards_partial` 61.4 to 62.4 points above the healthy phase | 0, 0, 0 | run 1: `history_unavailable` 1.71 points above the healthy phase, from the opening at 105.3 s; shard 1's hedges 9,116 to 9,262 denied, 1,021 to 1,039 lost and 1 won per run |
+| F3 Valkey unavailable | pass | 1.75, 1.75, 1.91 | 99.9%, `history_unavailable` | 1, 1, 1 | |
+| F4 consumer paused | not judged: run 2 has no valid attempt in three, all flagged | 5.49, 6.46 (runs 1 and 3) | 0.0% | 0, 0 | lag back at 0 in 2.08 and 1.89 s; property 9 holds in both |
+| F5 replica paused | pass | 17.70, 17.45, 17.57 | 5.5%, `shards_partial` | 2.0, 1.0, 2.0 | `shards_partial` in [0, 13 s) after the pause 25.15, 25.12, 25.09%; in [13, 15 s) 0.18%; in [15, 60 s) 0%; annshard-1's share in [210, 270 s) 50.0% |
+| F6 searches hang | pass | 18.39, 18.17, 18.31 | 25.0, 24.9, 24.9%, `shards_partial`, reported | 1.0, 1.0, 1.0 | mean coverage 0.80; shard 0's hedges 4,161 to 4,203 denied and 1,021 to 1,039 won; annshard-1's share in [210, 270 s) 50.0% |
+
+- F2 fails on run 1 alone, whose fault phase had the breaker open for a second; runs 2 and 3 pass.
+- F4 had 4 of its 6 attempts flagged, the other faults 3 of 21. Each F4 attempt recreates Kafka before its first baseline; the last flagged one measured 535,526 ns against the reference's 473,053. What raised it was not measured.
+- F5's share in [0, 13 s), 25.1%, is below the 40% that Faults, amended for M7 expected without outlier detection; the expectation is not a criterion. With F6's 24.9 to 25.0%, both are above 1%, the share by which M6 adopted outlier detection.
+- The criteria answer how the retrieval path behaves under each fault with every response searching; how the service behaves with the cache on is M6's result.
+
+#### Recommendation quality on b7ff0634dd7b
+
+`make bench-quality` (`quality.md`), by the protocol as amended for M7: 43,249 test events, one request each, 8,378 of whose histories give no user vector. Every condition is valid: the test fails otherwise. Differences from the healthy pipeline, with paired bootstrap 95% intervals:
+
+| Condition | Recall@10 | Δ Recall@10 | Δ Recall@20 | Δ NDCG@10 |
+|---|---:|---:|---:|---:|
+| healthy | 0.0181 | | | |
+| reference (exact scoring of all items on the encoder's vector) | 0.0043 | -0.0139 [-0.0151, -0.0126] | -0.0181 [-0.0195, -0.0167] | -0.0061 [-0.0068, -0.0055] |
+| encoder fails | 0.0182 | +0.0001 [-0.0002, +0.0004] | +0.0004 [+0.0001, +0.0008] | +0.0001 [-0.0000, +0.0002] |
+| co-occurrence fails | 0.0098 | -0.0083 [-0.0093, -0.0074] | -0.0103 [-0.0115, -0.0091] | -0.0037 [-0.0042, -0.0032] |
+| ranker fails | 0.0050 | -0.0131 [-0.0143, -0.0119] | -0.0170 [-0.0184, -0.0156] | -0.0058 [-0.0064, -0.0052] |
+| shard 1 of 2 fails | 0.0182 | +0.0001 [+0.0000, +0.0003] | +0.0000 [-0.0002, +0.0002] | +0.0001 [+0.0000, +0.0001] |
+| HNSW, ef 400 | 0.0181 | +0.0000 [+0.0000, +0.0000] | -0.0001 [-0.0002, -0.0000] | +0.0000 [-0.0000, +0.0000] |
+
+- Without co-occurrence or without the ranker every metric is lower than healthy, with intervals below 0; the two conditions' intervals for each metric do not overlap.
+- Without the encoder, with shard 1 missing, and with HNSW, every difference is within 0.0004 of 0; some intervals exclude 0 by up to 0.0001.

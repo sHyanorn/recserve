@@ -1,0 +1,279 @@
+# HELP go_gc_duration_seconds A summary of the wall-time pause (stop-the-world) duration in garbage collection cycles.
+# TYPE go_gc_duration_seconds summary
+go_gc_duration_seconds{quantile="0"} 3.504e-05
+go_gc_duration_seconds{quantile="0.25"} 6.0679e-05
+go_gc_duration_seconds{quantile="0.5"} 0.000120548
+go_gc_duration_seconds{quantile="0.75"} 0.000316881
+go_gc_duration_seconds{quantile="1"} 0.003325667
+go_gc_duration_seconds_sum 0.078308982
+go_gc_duration_seconds_count 248
+# HELP go_gc_gogc_percent Heap size target percentage configured by the user, otherwise 100. This value is set by the GOGC environment variable, and the runtime/debug.SetGCPercent function. Sourced from /gc/gogc:percent.
+# TYPE go_gc_gogc_percent gauge
+go_gc_gogc_percent 100
+# HELP go_gc_gomemlimit_bytes Go runtime memory limit configured by the user, otherwise math.MaxInt64. This value is set by the GOMEMLIMIT environment variable, and the runtime/debug.SetMemoryLimit function. Sourced from /gc/gomemlimit:bytes.
+# TYPE go_gc_gomemlimit_bytes gauge
+go_gc_gomemlimit_bytes 9.223372036854776e+18
+# HELP go_goroutines Number of goroutines that currently exist.
+# TYPE go_goroutines gauge
+go_goroutines 122
+# HELP go_info Information about the Go environment.
+# TYPE go_info gauge
+go_info{version="go1.27.4"} 1
+# HELP go_memstats_alloc_bytes Number of bytes allocated in heap and currently in use. Equals to /memory/classes/heap/objects:bytes.
+# TYPE go_memstats_alloc_bytes gauge
+go_memstats_alloc_bytes 2.398848e+07
+# HELP go_memstats_alloc_bytes_total Total number of bytes allocated in heap until now, even if released already. Equals to /gc/heap/allocs:bytes.
+# TYPE go_memstats_alloc_bytes_total counter
+go_memstats_alloc_bytes_total 5.020174216e+09
+# HELP go_memstats_buck_hash_sys_bytes Number of bytes used by the profiling bucket hash table. Equals to /memory/classes/profiling/buckets:bytes.
+# TYPE go_memstats_buck_hash_sys_bytes gauge
+go_memstats_buck_hash_sys_bytes 1.5513e+06
+# HELP go_memstats_frees_total Total number of heap objects frees. Equals to /gc/heap/frees:objects + /gc/heap/tiny/allocs:objects.
+# TYPE go_memstats_frees_total counter
+go_memstats_frees_total 2.8193715e+07
+# HELP go_memstats_gc_sys_bytes Number of bytes used for garbage collection system metadata. Equals to /memory/classes/metadata/other:bytes.
+# TYPE go_memstats_gc_sys_bytes gauge
+go_memstats_gc_sys_bytes 6.17248e+06
+# HELP go_memstats_heap_alloc_bytes Number of heap bytes allocated and currently in use, same as go_memstats_alloc_bytes. Equals to /memory/classes/heap/objects:bytes.
+# TYPE go_memstats_heap_alloc_bytes gauge
+go_memstats_heap_alloc_bytes 2.398848e+07
+# HELP go_memstats_heap_idle_bytes Number of heap bytes waiting to be used. Equals to /memory/classes/heap/released:bytes + /memory/classes/heap/free:bytes.
+# TYPE go_memstats_heap_idle_bytes gauge
+go_memstats_heap_idle_bytes 3.1240192e+08
+# HELP go_memstats_heap_inuse_bytes Number of heap bytes that are in use. Equals to /memory/classes/heap/objects:bytes + /memory/classes/heap/unused:bytes
+# TYPE go_memstats_heap_inuse_bytes gauge
+go_memstats_heap_inuse_bytes 2.9106176e+07
+# HELP go_memstats_heap_objects Number of currently allocated objects. Equals to /gc/heap/objects:objects.
+# TYPE go_memstats_heap_objects gauge
+go_memstats_heap_objects 39201
+# HELP go_memstats_heap_released_bytes Number of heap bytes released to OS. Equals to /memory/classes/heap/released:bytes.
+# TYPE go_memstats_heap_released_bytes gauge
+go_memstats_heap_released_bytes 2.9597696e+08
+# HELP go_memstats_heap_sys_bytes Number of heap bytes obtained from system. Equals to /memory/classes/heap/objects:bytes + /memory/classes/heap/unused:bytes + /memory/classes/heap/released:bytes + /memory/classes/heap/free:bytes.
+# TYPE go_memstats_heap_sys_bytes gauge
+go_memstats_heap_sys_bytes 3.41508096e+08
+# HELP go_memstats_last_gc_time_seconds Number of seconds since 1970 of last garbage collection.
+# TYPE go_memstats_last_gc_time_seconds gauge
+go_memstats_last_gc_time_seconds 1.7944480227860916e+09
+# HELP go_memstats_mallocs_total Total number of heap objects allocated, both live and gc-ed. Semantically a counter version for go_memstats_heap_objects gauge. Equals to /gc/heap/allocs:objects + /gc/heap/tiny/allocs:objects.
+# TYPE go_memstats_mallocs_total counter
+go_memstats_mallocs_total 2.8232916e+07
+# HELP go_memstats_mcache_inuse_bytes Number of bytes in use by mcache structures. Equals to /memory/classes/metadata/mcache/inuse:bytes.
+# TYPE go_memstats_mcache_inuse_bytes gauge
+go_memstats_mcache_inuse_bytes 6888
+# HELP go_memstats_mcache_sys_bytes Number of bytes used for mcache structures obtained from system. Equals to /memory/classes/metadata/mcache/inuse:bytes + /memory/classes/metadata/mcache/free:bytes.
+# TYPE go_memstats_mcache_sys_bytes gauge
+go_memstats_mcache_sys_bytes 16072
+# HELP go_memstats_mspan_inuse_bytes Number of bytes in use by mspan structures. Equals to /memory/classes/metadata/mspan/inuse:bytes.
+# TYPE go_memstats_mspan_inuse_bytes gauge
+go_memstats_mspan_inuse_bytes 198560
+# HELP go_memstats_mspan_sys_bytes Number of bytes used for mspan structures obtained from system. Equals to /memory/classes/metadata/mspan/inuse:bytes + /memory/classes/metadata/mspan/free:bytes.
+# TYPE go_memstats_mspan_sys_bytes gauge
+go_memstats_mspan_sys_bytes 4.21056e+06
+# HELP go_memstats_next_gc_bytes Number of heap bytes when next garbage collection will take place. Equals to /gc/heap/goal:bytes.
+# TYPE go_memstats_next_gc_bytes gauge
+go_memstats_next_gc_bytes 4.3213026e+07
+# HELP go_memstats_other_sys_bytes Number of bytes used for other system allocations. Equals to /memory/classes/other:bytes.
+# TYPE go_memstats_other_sys_bytes gauge
+go_memstats_other_sys_bytes 1.134604e+06
+# HELP go_memstats_stack_inuse_bytes Number of bytes obtained from system for stack allocator in non-CGO environments. Equals to /memory/classes/heap/stacks:bytes.
+# TYPE go_memstats_stack_inuse_bytes gauge
+go_memstats_stack_inuse_bytes 2.424832e+06
+# HELP go_memstats_stack_sys_bytes Number of bytes obtained from system for stack allocator. Equals to /memory/classes/heap/stacks:bytes + /memory/classes/os-stacks:bytes.
+# TYPE go_memstats_stack_sys_bytes gauge
+go_memstats_stack_sys_bytes 2.424832e+06
+# HELP go_memstats_sys_bytes Number of bytes obtained from system. Equals to /memory/classes/total:byte.
+# TYPE go_memstats_sys_bytes gauge
+go_memstats_sys_bytes 3.57017944e+08
+# HELP go_sched_gomaxprocs_threads The current runtime.GOMAXPROCS setting, or the number of operating system threads that can execute user-level Go code simultaneously. Sourced from /sched/gomaxprocs:threads.
+# TYPE go_sched_gomaxprocs_threads gauge
+go_sched_gomaxprocs_threads 3
+# HELP go_threads Number of OS threads created.
+# TYPE go_threads gauge
+go_threads 11
+# HELP process_cpu_seconds_total Total user and system CPU time spent in seconds.
+# TYPE process_cpu_seconds_total counter
+process_cpu_seconds_total 58.44
+# HELP process_max_fds Maximum number of open file descriptors.
+# TYPE process_max_fds gauge
+process_max_fds 20000
+# HELP process_network_receive_bytes_total Number of bytes received by the process over the network.
+# TYPE process_network_receive_bytes_total counter
+process_network_receive_bytes_total 1.49863645e+08
+# HELP process_network_transmit_bytes_total Number of bytes sent by the process over the network.
+# TYPE process_network_transmit_bytes_total counter
+process_network_transmit_bytes_total 1.39725861e+08
+# HELP process_open_fds Number of open file descriptors.
+# TYPE process_open_fds gauge
+process_open_fds 85
+# HELP process_resident_memory_bytes Resident memory size in bytes.
+# TYPE process_resident_memory_bytes gauge
+process_resident_memory_bytes 1.20090624e+08
+# HELP process_start_time_seconds Start time of the process since unix epoch in seconds.
+# TYPE process_start_time_seconds gauge
+process_start_time_seconds 1.79444786552e+09
+# HELP process_virtual_memory_bytes Virtual memory size in bytes.
+# TYPE process_virtual_memory_bytes gauge
+process_virtual_memory_bytes 2.625449984e+09
+# HELP process_virtual_memory_max_bytes Maximum amount of virtual memory available in bytes.
+# TYPE process_virtual_memory_max_bytes gauge
+process_virtual_memory_max_bytes 1.8446744073709552e+19
+# HELP recserve_arm_requests_total Answered recommend requests by arm and by what ordered the items (ranker or retrieval).
+# TYPE recserve_arm_requests_total counter
+recserve_arm_requests_total{arm="default",ranking="ranker"} 41269
+# HELP recserve_degraded_total Recommend responses that report each degradation reason.
+# TYPE recserve_degraded_total counter
+recserve_degraded_total{reason="cooc_error"} 0
+recserve_degraded_total{reason="cooc_timeout"} 0
+recserve_degraded_total{reason="encoder_error"} 0
+recserve_degraded_total{reason="encoder_timeout"} 0
+recserve_degraded_total{reason="history_unavailable"} 2
+recserve_degraded_total{reason="popular_error"} 0
+recserve_degraded_total{reason="popular_timeout"} 0
+recserve_degraded_total{reason="ranker_error"} 0
+recserve_degraded_total{reason="ranker_timeout"} 0
+recserve_degraded_total{reason="shards_partial"} 10300
+recserve_degraded_total{reason="vector_error"} 0
+recserve_degraded_total{reason="vector_timeout"} 0
+# HELP recserve_http_request_duration_seconds Server-side request duration by route.
+# TYPE recserve_http_request_duration_seconds histogram
+recserve_http_request_duration_seconds_bucket{route="recommend",le="0.0005"} 6050
+recserve_http_request_duration_seconds_bucket{route="recommend",le="0.001"} 13545
+recserve_http_request_duration_seconds_bucket{route="recommend",le="0.002"} 20501
+recserve_http_request_duration_seconds_bucket{route="recommend",le="0.004"} 30660
+recserve_http_request_duration_seconds_bucket{route="recommend",le="0.008"} 30945
+recserve_http_request_duration_seconds_bucket{route="recommend",le="0.016"} 32973
+recserve_http_request_duration_seconds_bucket{route="recommend",le="0.032"} 41267
+recserve_http_request_duration_seconds_bucket{route="recommend",le="0.064"} 41269
+recserve_http_request_duration_seconds_bucket{route="recommend",le="0.128"} 41269
+recserve_http_request_duration_seconds_bucket{route="recommend",le="0.256"} 41269
+recserve_http_request_duration_seconds_bucket{route="recommend",le="0.512"} 41269
+recserve_http_request_duration_seconds_bucket{route="recommend",le="1.024"} 41269
+recserve_http_request_duration_seconds_bucket{route="recommend",le="2.048"} 41269
+recserve_http_request_duration_seconds_bucket{route="recommend",le="4.096"} 41269
+recserve_http_request_duration_seconds_bucket{route="recommend",le="+Inf"} 41269
+recserve_http_request_duration_seconds_sum{route="recommend"} 214.23313546500003
+recserve_http_request_duration_seconds_count{route="recommend"} 41269
+# HELP recserve_http_requests_total HTTP requests by route and status code.
+# TYPE recserve_http_requests_total counter
+recserve_http_requests_total{code="200",route="recommend"} 41269
+# HELP recserve_ranker_candidates_dropped_total Candidates left out of ranking for want of ranker rows.
+# TYPE recserve_ranker_candidates_dropped_total counter
+recserve_ranker_candidates_dropped_total 264599
+# HELP recserve_ranker_truncated_requests_total Requests with more candidates than the ranker takes.
+# TYPE recserve_ranker_truncated_requests_total counter
+recserve_ranker_truncated_requests_total 4744
+# HELP recserve_shard_calls_total Calls to the replicas by shard, replica (its address in -shard-addrs) and result: answered, failed, deadline (the search's deadline ended it), or cancelled (another replica answered first, or the request was cancelled).
+# TYPE recserve_shard_calls_total counter
+recserve_shard_calls_total{replica="toxiproxy:19090",result="answered",shard="0"} 13746
+recserve_shard_calls_total{replica="toxiproxy:19090",result="cancelled",shard="0"} 112
+recserve_shard_calls_total{replica="toxiproxy:19090",result="deadline",shard="0"} 0
+recserve_shard_calls_total{replica="toxiproxy:19090",result="failed",shard="0"} 0
+recserve_shard_calls_total{replica="toxiproxy:19091",result="answered",shard="0"} 13751
+recserve_shard_calls_total{replica="toxiproxy:19091",result="cancelled",shard="0"} 103
+recserve_shard_calls_total{replica="toxiproxy:19091",result="deadline",shard="0"} 0
+recserve_shard_calls_total{replica="toxiproxy:19091",result="failed",shard="0"} 0
+recserve_shard_calls_total{replica="toxiproxy:19092",result="answered",shard="1"} 8589
+recserve_shard_calls_total{replica="toxiproxy:19092",result="cancelled",shard="1"} 80
+recserve_shard_calls_total{replica="toxiproxy:19092",result="deadline",shard="1"} 5171
+recserve_shard_calls_total{replica="toxiproxy:19092",result="failed",shard="1"} 0
+recserve_shard_calls_total{replica="toxiproxy:19093",result="answered",shard="1"} 8602
+recserve_shard_calls_total{replica="toxiproxy:19093",result="cancelled",shard="1"} 67
+recserve_shard_calls_total{replica="toxiproxy:19093",result="deadline",shard="1"} 6168
+recserve_shard_calls_total{replica="toxiproxy:19093",result="failed",shard="1"} 0
+# HELP recserve_shard_failovers_total Shard searches sent to another replica because one failed, by shard and failed replica (its address in -shard-addrs).
+# TYPE recserve_shard_failovers_total counter
+recserve_shard_failovers_total{replica="toxiproxy:19090",shard="0"} 0
+recserve_shard_failovers_total{replica="toxiproxy:19091",shard="0"} 0
+recserve_shard_failovers_total{replica="toxiproxy:19092",shard="1"} 0
+recserve_shard_failovers_total{replica="toxiproxy:19093",shard="1"} 0
+# HELP recserve_shard_hedges_total Shard searches that were slow enough for a second replica to be asked, by shard and result: won (the second replica answered first), lost, or denied (not asked: the shard's hedge budget was spent).
+# TYPE recserve_shard_hedges_total counter
+recserve_shard_hedges_total{result="denied",shard="0"} 0
+recserve_shard_hedges_total{result="denied",shard="1"} 9262
+recserve_shard_hedges_total{result="lost",shard="0"} 174
+recserve_shard_hedges_total{result="lost",shard="1"} 1155
+recserve_shard_hedges_total{result="won",shard="0"} 53
+recserve_shard_hedges_total{result="won",shard="1"} 36
+# HELP recserve_shard_search_seconds Calls to a shard's replicas, from the send until the call returned, whatever its result, by shard.
+# TYPE recserve_shard_search_seconds histogram
+recserve_shard_search_seconds_bucket{shard="0",le="0.00025"} 88
+recserve_shard_search_seconds_bucket{shard="0",le="0.0005"} 107
+recserve_shard_search_seconds_bucket{shard="0",le="0.00075"} 2171
+recserve_shard_search_seconds_bucket{shard="0",le="0.001"} 12568
+recserve_shard_search_seconds_bucket{shard="0",le="0.00125"} 20176
+recserve_shard_search_seconds_bucket{shard="0",le="0.0015"} 24306
+recserve_shard_search_seconds_bucket{shard="0",le="0.00175"} 26061
+recserve_shard_search_seconds_bucket{shard="0",le="0.002"} 26905
+recserve_shard_search_seconds_bucket{shard="0",le="0.0022500000000000003"} 27281
+recserve_shard_search_seconds_bucket{shard="0",le="0.0025000000000000005"} 27442
+recserve_shard_search_seconds_bucket{shard="0",le="0.0027500000000000007"} 27505
+recserve_shard_search_seconds_bucket{shard="0",le="0.003000000000000001"} 27550
+recserve_shard_search_seconds_bucket{shard="0",le="0.003250000000000001"} 27578
+recserve_shard_search_seconds_bucket{shard="0",le="0.0035000000000000014"} 27594
+recserve_shard_search_seconds_bucket{shard="0",le="0.0037500000000000016"} 27619
+recserve_shard_search_seconds_bucket{shard="0",le="0.004000000000000002"} 27636
+recserve_shard_search_seconds_bucket{shard="0",le="0.004250000000000002"} 27658
+recserve_shard_search_seconds_bucket{shard="0",le="0.004500000000000002"} 27673
+recserve_shard_search_seconds_bucket{shard="0",le="0.0047500000000000025"} 27682
+recserve_shard_search_seconds_bucket{shard="0",le="0.005000000000000003"} 27690
+recserve_shard_search_seconds_bucket{shard="0",le="0.006"} 27703
+recserve_shard_search_seconds_bucket{shard="0",le="0.008"} 27709
+recserve_shard_search_seconds_bucket{shard="0",le="0.01"} 27710
+recserve_shard_search_seconds_bucket{shard="0",le="0.015"} 27712
+recserve_shard_search_seconds_bucket{shard="0",le="0.02"} 27712
+recserve_shard_search_seconds_bucket{shard="0",le="0.03"} 27712
+recserve_shard_search_seconds_bucket{shard="0",le="0.05"} 27712
+recserve_shard_search_seconds_bucket{shard="0",le="0.1"} 27712
+recserve_shard_search_seconds_bucket{shard="0",le="+Inf"} 27712
+recserve_shard_search_seconds_sum{shard="0"} 31.22128926799996
+recserve_shard_search_seconds_count{shard="0"} 27712
+recserve_shard_search_seconds_bucket{shard="1",le="0.00025"} 50
+recserve_shard_search_seconds_bucket{shard="1",le="0.0005"} 67
+recserve_shard_search_seconds_bucket{shard="1",le="0.00075"} 1345
+recserve_shard_search_seconds_bucket{shard="1",le="0.001"} 8669
+recserve_shard_search_seconds_bucket{shard="1",le="0.00125"} 13533
+recserve_shard_search_seconds_bucket{shard="1",le="0.0015"} 15911
+recserve_shard_search_seconds_bucket{shard="1",le="0.00175"} 16671
+recserve_shard_search_seconds_bucket{shard="1",le="0.002"} 16971
+recserve_shard_search_seconds_bucket{shard="1",le="0.0022500000000000003"} 17103
+recserve_shard_search_seconds_bucket{shard="1",le="0.0025000000000000005"} 17160
+recserve_shard_search_seconds_bucket{shard="1",le="0.0027500000000000007"} 17197
+recserve_shard_search_seconds_bucket{shard="1",le="0.003000000000000001"} 17228
+recserve_shard_search_seconds_bucket{shard="1",le="0.003250000000000001"} 17241
+recserve_shard_search_seconds_bucket{shard="1",le="0.0035000000000000014"} 17253
+recserve_shard_search_seconds_bucket{shard="1",le="0.0037500000000000016"} 17263
+recserve_shard_search_seconds_bucket{shard="1",le="0.004000000000000002"} 17283
+recserve_shard_search_seconds_bucket{shard="1",le="0.004250000000000002"} 17297
+recserve_shard_search_seconds_bucket{shard="1",le="0.004500000000000002"} 17308
+recserve_shard_search_seconds_bucket{shard="1",le="0.0047500000000000025"} 17315
+recserve_shard_search_seconds_bucket{shard="1",le="0.005000000000000003"} 17322
+recserve_shard_search_seconds_bucket{shard="1",le="0.006"} 17329
+recserve_shard_search_seconds_bucket{shard="1",le="0.008"} 17333
+recserve_shard_search_seconds_bucket{shard="1",le="0.01"} 17336
+recserve_shard_search_seconds_bucket{shard="1",le="0.015"} 18626
+recserve_shard_search_seconds_bucket{shard="1",le="0.02"} 28675
+recserve_shard_search_seconds_bucket{shard="1",le="0.03"} 28675
+recserve_shard_search_seconds_bucket{shard="1",le="0.05"} 28677
+recserve_shard_search_seconds_bucket{shard="1",le="0.1"} 28677
+recserve_shard_search_seconds_bucket{shard="1",le="+Inf"} 28677
+recserve_shard_search_seconds_sum{shard="1"} 189.6976190250007
+recserve_shard_search_seconds_count{shard="1"} 28677
+# HELP recserve_shed_total Recommend requests turned away with 503 by the admission limits: over the rate, or with too many in flight.
+# TYPE recserve_shed_total counter
+recserve_shed_total{reason="inflight"} 0
+recserve_shed_total{reason="rate"} 0
+# HELP recserve_swaps_total Bundle swaps by result: ok, rejected (the bundle failed to prepare or is already active) or busy (another swap was running).
+# TYPE recserve_swaps_total counter
+recserve_swaps_total{result="busy"} 0
+recserve_swaps_total{result="ok"} 0
+recserve_swaps_total{result="rejected"} 0
+# HELP recserve_valkey_breaker_state State of the circuit breaker on Valkey: 1 for the state it is in (closed, half-open or open), 0 for the others.
+# TYPE recserve_valkey_breaker_state gauge
+recserve_valkey_breaker_state{state="closed"} 1
+recserve_valkey_breaker_state{state="half-open"} 0
+recserve_valkey_breaker_state{state="open"} 0
+# HELP recserve_valkey_calls_total Valkey calls through the circuit breaker, by call (history, cache_get, cache_put) and result: ok, timeout (the call's budget ended), error, cancelled, connecting (no connection within the budget), or refused (the breaker was open).
+# TYPE recserve_valkey_calls_total counter
+recserve_valkey_calls_total{call="history",result="ok"} 41268
+recserve_valkey_calls_total{call="history",result="timeout"} 2
