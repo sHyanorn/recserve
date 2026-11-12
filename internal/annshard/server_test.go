@@ -394,3 +394,37 @@ func TestReadyWithTheServingVersion(t *testing.T) {
 	}
 	wantReady(true)
 }
+
+// A Prepare keeps the version its caller serves, also after another
+// gateway named a later version served and stopped. Gateway B serves v1;
+// gateway A prepares v2, activates it and stops; B's swap to v3, naming v1
+// served, drops v2, although v1 was named longer ago (D057).
+func TestPrepareKeepsTheVersionItsGatewayServes(t *testing.T) {
+	r := rand.New(rand.NewPCG(14, 14))
+	root := t.TempDir()
+	write := func() string { return annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2)) }
+	v1, v2, v3 := write(), write(), write()
+	c := replica(t, root)
+	ctx := context.Background()
+	prepare := func(v, serving string) {
+		t.Helper()
+		if _, err := c.Prepare(ctx, &annshardpb.PrepareRequest{Index: exactIndex(v, 0, 1), ServingVersion: serving}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	search := func(v string) error {
+		_, err := c.Search(ctx, &annshardpb.SearchRequest{Index: exactIndex(v, 0, 1), Query: []float32{1, 1}, K: 5})
+		return err
+	}
+	prepare(v1, v1) // B's first
+	prepare(v1, v1) // B's watch, once B activated v1
+	prepare(v2, v2) // A's first
+	prepare(v2, v2) // A's watch, once A activated v2; then A stops
+	prepare(v3, v1) // B's swap, with no request of B's since
+	for _, v := range []string{v1, v3} {
+		if err := search(v); err != nil {
+			t.Fatalf("%s: %v", v, err)
+		}
+	}
+	wantCode(t, search(v2), codes.FailedPrecondition)
+}
