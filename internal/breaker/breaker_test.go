@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/sony/gobreaker/v2"
 
 	"github.com/sHyanorn/recserve/internal/cache"
 	"github.com/sHyanorn/recserve/internal/history"
@@ -281,5 +282,42 @@ func TestStateMetricOneAtATime(t *testing.T) {
 	}
 	if len(bad) > 0 {
 		t.Fatalf("scrapes by the number of states reported as 1, other than one: %v", bad)
+	}
+}
+
+// TestHalfOpenExcludedTrial: a half-open breaker lets one call through; if
+// that call ends with an error that counts as neither success nor failure,
+// the next call must be let through too, at once or later.
+func TestHalfOpenExcludedTrial(t *testing.T) {
+	const openFor = 300 * time.Millisecond
+	for _, excluded := range []error{context.Canceled, fmt.Errorf("%w: %w", valkeyclient.ErrConnecting, context.DeadlineExceeded)} {
+		for _, wait := range []time.Duration{0, openFor + 10*time.Millisecond} {
+			t.Run(fmt.Sprintf("%v after %v", excluded, wait), func(t *testing.T) {
+				ctx := context.Background()
+				srv := &server{err: errors.New("down")}
+				b := New(Settings{Window: time.Hour, MinCalls: 1, FailureRate: 0.5, Open: openFor}, nil)
+				store := Store{srv, b}
+				history := func() error { _, err := store.Before(ctx, "u", 1, 0); return err }
+				if err := history(); err == nil || b.cb.State() != gobreaker.StateOpen {
+					t.Fatalf("after a failure: %v, state %v, want open", err, b.cb.State())
+				}
+				time.Sleep(openFor + 10*time.Millisecond)
+				if s := b.cb.State(); s != gobreaker.StateHalfOpen {
+					t.Fatalf("after the open time: state %v, want half-open", s)
+				}
+				srv.err = excluded
+				if err := history(); !errors.Is(err, excluded) {
+					t.Fatalf("trial: %v, want %v", err, excluded)
+				}
+				time.Sleep(wait)
+				srv.err, srv.calls = nil, 0
+				if err := history(); err != nil || srv.calls != 1 {
+					t.Fatalf("next call: %v, %d calls reached the server, want it let through", err, srv.calls)
+				}
+				if s := b.cb.State(); s != gobreaker.StateClosed {
+					t.Fatalf("after a trial that succeeded: state %v, want closed", s)
+				}
+			})
+		}
 	}
 }
