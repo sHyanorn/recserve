@@ -99,6 +99,14 @@ const (
 	keepaliveTimeout = 3 * time.Second
 )
 
+// Outlier detection: once outlierCalls calls in a row to a replica have
+// ended at the search's deadline, the replica leaves the selection, and
+// every outlierWait one search asks it first, a probe, until it answers.
+const (
+	outlierCalls = 5
+	outlierWait  = time.Second
+)
+
 // DialOptions returns the gRPC options Dial connects to a replica with: no
 // TLS (D040), and the connection and keepalive settings above. A replica's
 // server needs ServerOptions for the keepalive. Dial is the only caller
@@ -115,7 +123,8 @@ func DialOptions() []grpc.DialOption {
 
 // Client reaches the replicas of every shard. Its connections are opened
 // and kept by gRPC, without TLS (D040). A search asks one replica, another
-// at once if that one fails, and a second one if the first is slow (D041).
+// at once if that one fails, and a second one if the first is slow; a
+// replica whose calls keep ending at the deadline is left out (D041).
 type Client struct {
 	opt       Options
 	shards    []*group
@@ -123,6 +132,7 @@ type Client struct {
 	failovers *prometheus.CounterVec
 	calls     *prometheus.HistogramVec
 	results   *prometheus.CounterVec
+	ejections *prometheus.CounterVec
 
 	// Replicas that are preparing an index a search found them to lack.
 	ctx      context.Context // ends at Close
@@ -144,8 +154,8 @@ type group struct {
 	replicas []*replica
 	next     atomic.Uint32 // counts searches, to take the ready replicas in turn
 
-	mu     sync.Mutex
-	tokens int // hedge budget
+	mu     sync.Mutex // guards tokens and the replicas' outlier detection
+	tokens int        // hedge budget
 
 	hedgeWon, hedgeLost, hedgeDenied prometheus.Counter
 	calls                            prometheus.Observer
@@ -156,9 +166,15 @@ type replica struct {
 	conn     *grpc.ClientConn
 	rpc      annshardpb.AnnShardClient
 	failover prometheus.Counter // searches that went on to the next replica after it failed
+	ejected  prometheus.Counter // times it was taken out of the selection
 
 	// Calls to the replica by how they ended.
 	answered, failed, deadline, cancelled prometheus.Counter
+
+	// Outlier detection (track), guarded by the group's mu.
+	timeouts int       // calls in a row that ended at the deadline
+	out      bool      // taken out of the selection
+	probeAt  time.Time // while out, when a search may next ask it first
 }
 
 // ended counts a call to r that returned err.
@@ -214,6 +230,10 @@ func Dial(addrs [][]string, opt Options) (*Client, error) {
 			Name: "recserve_shard_calls_total",
 			Help: "Calls to the replicas by shard, replica (its address in -shard-addrs) and result: answered, failed, deadline (the search's deadline ended it), or cancelled (another replica answered first, or the request was cancelled).",
 		}, []string{"shard", "replica", "result"}),
+		ejections: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "recserve_shard_ejections_total",
+			Help: "Times a replica was taken out of its shard's selection because its calls kept ending at the search's deadline, by shard and replica (its address in -shard-addrs).",
+		}, []string{"shard", "replica"}),
 	}
 	for i, replicas := range addrs {
 		if len(replicas) == 0 {
@@ -234,6 +254,7 @@ func Dial(addrs [][]string, opt Options) (*Client, error) {
 			result := func(r string) prometheus.Counter { return c.results.WithLabelValues(shard, addr, r) }
 			g.replicas = append(g.replicas, &replica{
 				addr: addr, conn: conn, rpc: annshardpb.NewAnnShardClient(conn), failover: c.failovers.WithLabelValues(shard, addr),
+				ejected:  c.ejections.WithLabelValues(shard, addr),
 				answered: result("answered"), failed: result("failed"), deadline: result("deadline"), cancelled: result("cancelled"),
 			})
 		}
@@ -298,7 +319,7 @@ func (c *Client) index(version string, i int) *annshardpb.Index {
 
 // Collectors returns the client's metrics.
 func (c *Client) Collectors() []prometheus.Collector {
-	return []prometheus.Collector{c.hedges, c.failovers, c.calls, c.results}
+	return []prometheus.Collector{c.hedges, c.failovers, c.calls, c.results, c.ejections}
 }
 
 // Close closes the connections; calls in flight fail.
@@ -423,19 +444,27 @@ func (c *Client) prepareOn(r *replica, x *annshardpb.Index, serving string) erro
 func (s *Shards) Config() shard.Config { return s.c.opt.Config }
 
 // order returns the shard's replicas in the order a search asks them: those
-// with a ready connection first, a different one leading each time, then
-// the others as listed. A connection gRPC has let go idle is told to
+// with a ready connection that are in the selection first, a different one
+// leading each time, then the others as listed. A replica taken out of the
+// selection (track) is among the others, except in a search that probes
+// it, which asks it first. A connection gRPC has let go idle is told to
 // connect again, since no search would be sent to wake it.
 func (g *group) order() []*replica {
 	ready := make([]*replica, 0, len(g.replicas))
 	var rest []*replica
+	var probe *replica
 	for _, r := range g.replicas {
-		switch r.conn.GetState() {
-		case connectivity.Ready:
-			ready = append(ready, r)
-		case connectivity.Idle:
+		st := r.conn.GetState()
+		if st == connectivity.Idle {
 			r.conn.Connect()
+		}
+		switch {
+		case st != connectivity.Ready:
 			rest = append(rest, r)
+		case g.in(r):
+			ready = append(ready, r)
+		case probe == nil && g.probe(r):
+			probe = r
 		default:
 			rest = append(rest, r)
 		}
@@ -444,7 +473,65 @@ func (g *group) order() []*replica {
 		lead := int(g.next.Add(1) % n)
 		ready = append(ready[lead:len(ready):len(ready)], ready[:lead]...)
 	}
+	if probe != nil {
+		ready = append([]*replica{probe}, ready...)
+	}
 	return append(ready, rest...)
+}
+
+// in reports whether r, one of g's replicas, is in the selection.
+func (g *group) in(r *replica) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return !r.out
+}
+
+// probe reports whether r, one of g's replicas taken out of the selection,
+// is due a probe, a search that asks it first: outlierWait after it was
+// taken out or last probed. If so, its next probe is due outlierWait later.
+func (g *group) probe(r *replica) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := time.Now()
+	if !r.out || now.Before(r.probeAt) {
+		return false
+	}
+	r.probeAt = now.Add(outlierWait)
+	return true
+}
+
+// track counts a call to r, one of g's replicas, that returned err: an
+// answer clears r's count and brings it back into the selection, a call
+// that the deadline ended counts against it, and a failure, which the
+// search takes to the next replica, or a cancellation counts neither way.
+// After outlierCalls calls in a row against it, r is taken out of the
+// selection, as long as another replica answers in its place (covered).
+func (g *group) track(r *replica, err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	switch {
+	case err == nil:
+		r.timeouts, r.out = 0, false
+	case errors.Is(err, context.DeadlineExceeded):
+		r.timeouts++
+		if !r.out && r.timeouts >= outlierCalls && g.covered(r) {
+			r.out, r.probeAt = true, time.Now().Add(outlierWait)
+			r.ejected.Inc()
+		}
+	}
+}
+
+// covered reports whether a replica of g other than r has a ready
+// connection, is in the selection and has had no call end at the deadline
+// since it last answered. When every replica of a shard is slow, none is
+// so taken out, and the hedge budget covers the shard. g.mu is held.
+func (g *group) covered(r *replica) bool {
+	for _, o := range g.replicas {
+		if o != r && !o.out && o.timeouts == 0 && o.conn.GetState() == connectivity.Ready {
+			return true
+		}
+	}
+	return false
 }
 
 // earn adds a search's share of a hedge to the budget.
@@ -477,13 +564,14 @@ type answer struct {
 // shard i are sent. It asks one replica. If that one fails, it asks the
 // next at once, each replica at most once, and one that failed for lack of
 // the index is told to prepare it (catchUp). If the first has not answered
-// after the hedge delay, it asks one more replica, one that is connected,
-// as long as the shard's hedge budget allows. The first answer wins and the
-// calls still out are cancelled; Search returns once all of them have. A
-// call that the deadline or a cancellation ended is not tried elsewhere.
-// If no replica answers, the error is that of the replicas that failed; it
-// wraps ctx's, as an in-process search's does when ctx ends first, only if
-// every call ended by the deadline or a cancellation.
+// after the hedge delay, it asks one more replica, one that is connected
+// and in the selection, as long as the shard's hedge budget allows. The
+// first answer wins and the calls still out are cancelled; Search returns
+// once all of them have. A call that the deadline or a cancellation ended
+// is not tried elsewhere. If no replica answers, the error is that of the
+// replicas that failed; it wraps ctx's, as an in-process search's does when
+// ctx ends first, only if every call ended by the deadline or a
+// cancellation.
 func (s *Shards) Search(ctx context.Context, i int, q []float32, k int, seen map[int32]bool) ([]vec.Hit, error) {
 	cfg := s.c.opt.Config
 	req := &annshardpb.SearchRequest{Index: s.indexes[i], Query: q, K: int32(k), Ef: int32(cfg.Ef)}
@@ -506,6 +594,7 @@ func (s *Shards) Search(ctx context.Context, i int, q []float32, k int, seen map
 			hits, err := r.search(ctx, req, s.items)
 			g.calls.Observe(time.Since(start).Seconds())
 			r.ended(err)
+			g.track(r, err)
 			if status.Code(err) == codes.FailedPrecondition {
 				s.c.catchUp(r, req.GetIndex())
 			}
@@ -551,7 +640,7 @@ func (s *Shards) Search(ctx context.Context, i int, q []float32, k int, seen map
 		case <-hedgeDue:
 			hedgeDue = nil
 			switch {
-			case asked == len(order) || order[asked].conn.GetState() != connectivity.Ready:
+			case asked == len(order) || order[asked].conn.GetState() != connectivity.Ready || !g.in(order[asked]):
 			case !g.spend():
 				g.hedgeDenied.Inc()
 			default:
