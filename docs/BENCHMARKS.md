@@ -102,6 +102,7 @@ The index is still used in later milestones, with its measured p99 stated wherev
   - full pipeline, healthy
   - each degradation forced on its own through a test hook: vector retrieval skipped (encoder timeout), co-occurrence skipped, ranker skipped (retrieval order), one of two shards missing, HNSW instead of exact search
 - **Reporting.** Each condition's metrics and its difference from the healthy pipeline, with a paired bootstrap 95% interval over test events (1,000 resamples, seed 1).
+- **Amended 2026-11-12, before the first run.** The test hook is the pipeline's `stall` field (`internal/recommend`), which is unexported, nil in production and set only by the package's tests; TestRealDataDegradation already uses it. The evaluation is `TestRealDataQuality`, which runs the pipeline in process on the real data and bundle (`RECSERVE_DATA`, `RECSERVE_BUNDLE`), with the test split's events preloaded and every stage budget off, so nothing degrades by time. The encoder, co-occurrence and the ranker are forced to fail at their stage, and shard 1 of two at its search; HNSW is the shards' mode, with the gateway's default ef. The reference's user vector is the bundle's encoder on the same history; a request without one has an empty reference. A condition is valid if no response of the healthy pipeline is degraded, and in a forced condition every response reports its reason exactly when the hook forced the stage in that request, and no other reason; HNSW reports none. Results in `bench-results/m7/quality.md`, first on bundle b7ff0634dd7b. The intervals are percentile intervals of the mean difference.
 
 ## Load tests
 
@@ -243,6 +244,45 @@ Committed before the first fault run. A criterion found not to measure what it s
 **Also reported.** F5's share of responses with `shards_partial` in [0, 13 s), [13, 15 s) and [15, 60 s) after the pause; F6's over the fault phase.
 
 **Outlier detection (D041).** If F5's share in [0, 13 s) or F6's over the fault phase exceeds 1%, D041 records outlier detection as adopted, with a design (a replica taken out after a number of searches in a row end at the shard deadline, and asked again after a wait), and TASKS gets an item for it; it is not built in M6. Otherwise D041 records it as not needed at this rate.
+
+### Faults, amended for M7
+
+Committed 2026-11-12, before the first M7 fault run. M6's setup, criteria and results above stay as they are. M7's runs are not compared with them, nor with runs on any other VM.
+
+**Why the cache is off.** The result cache is on in production (`-cache-size` 13,000). These runs turn it off so that every response searches the shards and the criteria can tell recovery apart: with it on, M6's recovery phases had 86 to 99% hits and 2 to 25 calls per second to shard 0. They answer how the retrieval path behaves under each fault; how the service behaves with the cache on is M6's result.
+
+**Setup.** As in M6, with these changes:
+
+- the gateway runs with the cache off (`CACHE_SIZE=0`), and with the defaults of the commit named with the results (hedge delay 2.5 ms, history budget 5 ms);
+- from the first request's due time, the gateway's `/metrics` and each container's CPU time (its cgroup's `cpuacct.usage`) are read every second, each read with its time. The gateway's give the calls of each replica by result (`recserve_shard_calls_total`), the Valkey calls by result and the breaker's state (D037);
+- the results go to `bench-results/m7/faults`, and those of the runs with outlier detection to `bench-results/m7/faults-outlier`.
+
+**A replica's share** in an interval is its answered calls over all answered calls to its shard's replicas in that interval, taken from the reads at the interval's ends.
+
+**Changes to M6's criteria.**
+
+1. F1, F5 and F6: "annshard-1 uses CPU in the last 60 s" is replaced by: annshard-1's share in [210, 270 s) is at least 40%. At 275 requests/s shard 0 answers about 16,500 calls in those 60 s, and taking the ready replicas in turn gives annshard-1 about half, with a binomial standard deviation of about 0.4 points. 40% is far below that, and far above a replica that is not back (0%) and one back for only the last half of the interval (about 25%). Health checks and keepalive pings are not calls, so a replica that answers only them has a share of 0.
+2. Recovery is judged as in M6, on all responses, which now all search. A 10 s window holds about 2,750 responses: its p99 is the 28th largest, and 1 percentage point is about 28 responses, while the healthy share's standard deviation over a window is about 0.1 point. F1, F5 and F6 also need the replica back: the first whole second t after removal such that annshard-1's share is at least 30% in each second of [t, t + 10 s). In a second shard 0 answers about 275 calls and annshard-1 about 137, with a standard deviation of about 8; 30% is about 83, six standard deviations below, and a second in which the replica answers for half of it is at about 25%, so its return is resolved to about a second. A fault's recovery time is the later of the two, within M6's limits.
+3. M6's defect 3 is fixed: "no error in any phase" and F4's p99 are judged from 0 s, and the recovery window's degraded share must be within 1 percentage point of the healthy phase's either way.
+4. F6 without outlier detection: its `shards_partial` share over the fault phase is reported, not judged, as in M6.
+
+**Outlier detection (D041)**, judged in the runs with it, of F2, F5 and F6: F5's `shards_partial` share in [0, 13 s) after the pause, and F6's over the fault phase, exceed the healthy phase's by at most 1 percentage point; no replica is taken out in any healthy phase (`recserve_shard_ejections_total` the same at 30 and 90 s); F2 passes its criteria. F5's [0, 13 s) holds about 3,575 responses, so 1 point is about 36. Without outlier detection about 40% of them are expected to be partial, since half of shard 0's first calls go to the paused replica and the hedge budget covers about a fifth of those; with it, about 8, until five calls have ended at the deadline. F6's fault phase holds about 16,500 responses, 1 point about 165. 1% is the share by which M6 adopted outlier detection.
+
+**Runs.** All six faults, three valid runs each, on one VM, at the commit before outlier detection; then F2, F5 and F6, three each, at the commit that adds it. F1, F3 and F4 are not run with it: it does not touch Valkey or ingest, and a killed replica's calls fail at once while its connection is not ready.
+
+### Valkey circuit breaker openings (M7)
+
+Committed before these runs. In M6, 15 of the 18 valid fault runs had the breaker open for 1.0 s, and F4 and F5 failed on such a second; what made five Valkey calls in a row fail was not established (Results, M6).
+
+**Runs.** The M7 fault setup with the cache on, as in M6 (`CACHE_SIZE` unset), and no fault injected (`FAULT=none`): 5 runs of 270 s at 275 requests/s, results in `bench-results/m7/breaker`. From M6's 15 openings in 18 runs, 3 to 5 openings are expected; the expectation plays no part in the attribution, and if none opens no run is added.
+
+**Attribution**, for each change of the breaker from closed to open in the gateway's log, by the Valkey calls that failed (`recserve_valkey_calls_total`) in the interval between reads that holds the change and the one before it:
+
+- at least 5 with `timeout` and none with `error`: calls that ran out of their budget;
+- at least 5 with `error` and none with `timeout`: errors, which the gateway's log of those seconds names;
+- otherwise not attributed.
+
+Reported for the same interval, not as causes: the gateway's GC pause time (`go_gc_duration_seconds_sum`) and each container's CPU time, beside the median interval of the run's [30, 90 s).
 
 ## Hedge delay (M6, D041)
 
