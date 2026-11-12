@@ -1,0 +1,8 @@
+0-core: 4555500 rows read, 0 dropped, 4555500 after deduplication
+T 1649219168790, T_val 1618224866975, vocabulary 21930 items, test targets in it 18092 of 43249 (41.83%)
+test events: 43249; their users absent from the 0-core log: 0
+recserve history length: median 5, mean 9.08, p10/p25/p50/p75/p90 2/3/5/9/17, max 427
+seqrec-lab events before, in its vocabulary: median 3, mean 6.28, p10/p25/p50/p75/p90 0/1/3/6/12, max 386
+events where they differ: 25950 (60.00%); seqrec-lab longer 0, shorter 25950
+seqrec-lab minus recserve: median -1, mean -2.80, p10/p25/p50/p75/p90 -7/-3/-1/0/0, max 0
+repeated items in recserve's histories: 0, in 0 events
