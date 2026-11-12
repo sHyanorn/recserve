@@ -1,4 +1,5 @@
-"""verify.py on a hand-written bundle of twelve items, and on each kind of fault it rejects."""
+"""verify.py on a hand-written bundle of twelve items, and on five of the faults it rejects: a checksum,
+train_cutoff_ts, history_raw, a golden top 10, an optional file the manifest does not list."""
 
 import json
 

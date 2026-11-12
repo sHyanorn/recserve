@@ -280,7 +280,8 @@ func TestComparisonReport(t *testing.T) {
 	report := comparisonReport(bundleRef{"base", refBase, noBase}, bundleRef{"b", refB, noB}, comparisonSubsets(base, b, events), healthy)
 	t.Logf("\n%s", report)
 	// Recall@10: B 3/6, the baseline 4/6 on all events; on the 4 targets
-	// in B, 3/4 against 2/4; on the 3 in both, 2/3 against 2/3.
+	// in B, 3/4 against 2/4; on the 4 with a non-zero vector in the
+	// baseline, 2/4 against 3/4; on the 3 in both, 2/3 against 2/3.
 	for _, s := range []string{
 		"- requests whose history gives no user vector: baseline 1, bundle B 1\n",
 		"## Primary result\n\nReference rows on all test events; Δ is bundle B minus the baseline. A difference whose interval excludes 0 is a difference, otherwise none is shown.\n\nEvents: 6\n",
@@ -290,6 +291,8 @@ func TestComparisonReport(t *testing.T) {
 		"### target in bundle B's items\n\nEvents: 4\n\n| Row | Recall@10 | Recall@20 | NDCG@10 |\n|---|---:|---:|---:|\n| baseline reference | 0.5000 | 0.5000 |",
 		"| bundle B reference | 0.7500 | 0.7500 |",
 		"| Δ [95% CI] | +0.2500 [",
+		"### target with a non-zero vector in the baseline\n\nEvents: 4\n\n| Row | Recall@10 | Recall@20 | NDCG@10 |\n|---|---:|---:|---:|\n| baseline reference | 0.7500 | 0.7500 |",
+		"| Δ [95% CI] | -0.2500 [",
 		"### both\n\nEvents: 3\n\n| Row | Recall@10 | Recall@20 | NDCG@10 |\n|---|---:|---:|---:|\n| baseline reference | 0.6667 | 0.6667 |",
 		"| Δ [95% CI] | +0.0000 [",
 		"| 1.0000 | 1.0000 | 1.0000 |\n",

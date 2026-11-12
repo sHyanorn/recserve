@@ -7,8 +7,8 @@ of the same user's events before it in seqrec-lab's data, and the repeated
 items in recserve's histories.
 
 seqrec-lab's data is rebuilt as its code at 6aa5d87 builds it, without
-pandas: `data/readers.py` read_amazon_2023 (rows with an empty user, item
-or timestamp dropped, pandas' default missing values counting as empty),
+pandas: `data/readers.py` read_amazon_2023 (rows with an empty or missing user,
+item or timestamp dropped, pandas' default missing values counting as empty),
 `data/preprocess.py` build_log (stable sort by user, time and source row,
 then the earliest of each repeated (user, item) pair kept) and
 `data/splits.py` global_temporal (T the lower 0.9 quantile of the log's
@@ -56,10 +56,10 @@ def read_zero_core(path):
     """(user, item, ts) of the rows read_amazon_2023 keeps, in file order."""
     users, items, ts = [], [], []
     dropped = 0
-    with gzip.open(path, "rt", newline="") as f:
+    with gzip.open(path, "rt", encoding="utf-8-sig", newline="") as f:
         for r in csv.DictReader(f):
             u, i, t = r["user_id"], r["parent_asin"], r["timestamp"]
-            if u in PANDAS_NA or i in PANDAS_NA or t in PANDAS_NA:
+            if None in (u, i, t) or u in PANDAS_NA or i in PANDAS_NA or t in PANDAS_NA:
                 dropped += 1
                 continue
             users.append(u)
@@ -98,7 +98,7 @@ def time_quantile(ts, q):
 
 
 def read_split(data, name):
-    with gzip.open(f"{data}/Video_Games.{name}.csv.gz", "rt", newline="") as f:
+    with gzip.open(f"{data}/Video_Games.{name}.csv.gz", "rt", encoding="utf-8", newline="") as f:
         return [(r["user_id"], r["parent_asin"], int(r["timestamp"])) for r in csv.DictReader(f)]
 
 
