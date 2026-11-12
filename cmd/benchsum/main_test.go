@@ -308,3 +308,24 @@ func TestNextRate(t *testing.T) {
 	v[50] = m
 	step(true, 0, true, 50)
 }
+
+// A reply whose status line arrived but whose body did not is loadgen's
+// outcome "error": an error, neither an answer nor an accepted event.
+func TestOutcomeErrorIsAnError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.csv.gz")
+	if err := writeGz(path, "i,path,due_ms,latency_ms,status,outcome,degraded,answered,shards\n"+
+		"0,/v1/recommend,1.000,2.000,200,recommend_ok,,2,2\n"+
+		"1,/v1/recommend,2.000,900.000,200,error,,-1,-1\n"+
+		"2,/v1/events,3.000,3.000,202,events_ok,,-1,-1\n"+
+		"3,/v1/events,4.000,800.000,202,error,,-1,-1\n"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := readSamples(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := describe(s, 0, 10)
+	if st.Errors != 2 || st.Busy != 0 || st.Answers != 1 || st.Max != 2 || st.Events != 1 || st.EventP99 != 3 {
+		t.Fatalf("%+v", st)
+	}
+}

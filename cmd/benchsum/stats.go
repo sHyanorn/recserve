@@ -15,7 +15,7 @@ type stats struct {
 	P99      float64            `json:"p99_ms"`
 	P999     float64            `json:"p99_9_ms"`
 	Max      float64            `json:"max_ms"`
-	Errors   int                `json:"errors"` // transport errors and 5xx, either endpoint
+	Errors   int                `json:"errors"` // transport errors and 5xx, either endpoint; loadgen's outcome "error"
 	Busy     int                `json:"busy"`   // 503, also in Errors
 	Degraded float64            `json:"degraded_share"`
 	Reasons  map[string]float64 `json:"degraded_by_reason"` // share of the answers naming each reason
@@ -42,7 +42,7 @@ func describe(samples []sample, from, to float64) stats {
 			}
 		}
 		if s.events {
-			if s.status == 202 {
+			if s.accepted() {
 				st.Events++
 				ev = append(ev, micros(s.latency))
 			}

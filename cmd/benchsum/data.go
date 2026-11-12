@@ -24,16 +24,22 @@ type sample struct {
 	i                int  // the request's index in loadgen's workload
 	events           bool // /v1/events, else /v1/recommend
 	due, latency     float64
-	status           int // 0 for a transport error
+	status           int  // 0 for a transport error
+	errored          bool // loadgen's outcome "error": a transport error, before or after the status line, or a reply neither 503 nor its endpoint's success
 	degraded         []string
 	answered, shards int // -1 without coverage
 }
 
 // failed is an error of the fault criteria: a transport error or any 5xx.
-func (s sample) failed() bool { return s.status == 0 || s.status >= 500 }
+// A reply whose status line arrived but whose body did not is a transport
+// error with a status; loadgen's outcome "error" marks it.
+func (s sample) failed() bool { return s.status == 0 || s.status >= 500 || s.errored }
 
 // answer is a recommendation the gateway served.
-func (s sample) answer() bool { return !s.events && s.status == 200 }
+func (s sample) answer() bool { return !s.events && s.status == 200 && !s.errored }
+
+// accepted is an event the gateway accepted.
+func (s sample) accepted() bool { return s.events && s.status == 202 && !s.errored }
 
 func readSamples(path string) ([]sample, error) {
 	f, err := os.Open(path)
@@ -58,7 +64,7 @@ func readSamples(path string) ([]sample, error) {
 		if err != nil {
 			return nil, err
 		}
-		s := sample{events: rec[1] == "/v1/events"}
+		s := sample{events: rec[1] == "/v1/events", errored: rec[5] == "error"}
 		var errs [6]error
 		s.i, errs[5] = strconv.Atoi(rec[0])
 		s.due, errs[0] = strconv.ParseFloat(rec[2], 64)
