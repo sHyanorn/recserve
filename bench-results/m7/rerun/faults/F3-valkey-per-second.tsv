@@ -1,0 +1,53 @@
+# F3, each second [k, k + 1) s from the first request's due time: the gateway's Valkey history calls by result, the breaker's state and the GC pause time, as differences of the reads at k and k + 1 in raw/<attempt>.reads (not committed); degraded responses by reason from <attempt>.fault.json
+attempt	k_s	history_timeout	history_error	history_connecting	history_refused	breaker_at_k+1	gc_pause_ms	degraded
+F3-run1-a1	148	0	1	0	274	open	0.00	history_unavailable=275
+F3-run1-a1	149	0	1	0	275	open	0.07	history_unavailable=275
+F3-run1-a1	150	0	0	0	176	closed	0.05	history_unavailable=180
+F3-run1-a1	151	0	0	0	0	closed	0.44	
+F3-run1-a1	152	0	0	0	0	closed	2.80	
+F3-run1-a1	153	0	0	0	0	closed	0.59	
+F3-run1-a1	154	0	0	0	0	closed	0.20	
+F3-run1-a1	155	1	0	0	0	closed	0.35	history_unavailable=1
+F3-run1-a1	156	0	0	0	0	closed	0.12	
+F3-run1-a1	157	0	0	0	0	closed	0.33	
+F3-run1-a1	158	0	0	0	0	closed	0.38	
+F3-run1-a1	159	2	0	0	0	closed	0.25	history_unavailable=2
+F3-run1-a1	160	0	0	0	0	closed	1.67	
+F3-run1-a1	161	0	0	0	0	closed	0.15	
+F3-run1-a1	162	0	0	0	0	closed	0.22	
+F3-run1-a1	163	0	0	0	0	closed	0.20	
+F3-run1-a1	164	0	0	0	0	closed	1.15	
+F3-run2-a1	148	0	1	0	273	open	0.00	history_unavailable=275
+F3-run2-a1	149	0	1	0	274	open	0.06	history_unavailable=275
+F3-run2-a1	150	1	0	0	180	closed	0.07	history_unavailable=184
+F3-run2-a1	151	0	0	0	0	closed	0.19	
+F3-run2-a1	152	0	0	0	0	closed	0.87	
+F3-run2-a1	153	1	0	0	0	closed	0.32	history_unavailable=1
+F3-run2-a1	154	0	0	0	0	closed	0.13	
+F3-run2-a1	155	0	0	0	0	closed	0.11	
+F3-run2-a1	156	0	0	0	0	closed	0.10	
+F3-run2-a1	157	0	0	0	0	closed	1.69	
+F3-run2-a1	158	0	0	0	0	closed	0.27	
+F3-run2-a1	159	1	0	0	0	closed	2.30	history_unavailable=1,shards_partial=1
+F3-run2-a1	160	2	0	0	0	closed	0.09	history_unavailable=2
+F3-run2-a1	161	0	0	0	0	closed	5.20	
+F3-run2-a1	162	1	0	0	0	closed	0.71	history_unavailable=1
+F3-run2-a1	163	0	0	0	0	closed	1.95	
+F3-run2-a1	164	0	0	0	0	closed	0.93	
+F3-run3-a1	148	0	1	0	273	open	0.00	history_unavailable=275
+F3-run3-a1	149	0	1	0	274	open	0.10	history_unavailable=275
+F3-run3-a1	150	0	0	0	176	closed	0.93	history_unavailable=179
+F3-run3-a1	151	0	0	0	0	closed	0.08	
+F3-run3-a1	152	0	0	0	0	closed	0.22	
+F3-run3-a1	153	0	0	0	0	closed	0.17	
+F3-run3-a1	154	1	0	0	0	closed	0.09	history_unavailable=1
+F3-run3-a1	155	0	0	0	0	closed	0.06	
+F3-run3-a1	156	0	0	0	0	closed	0.08	
+F3-run3-a1	157	0	0	0	0	closed	0.64	
+F3-run3-a1	158	3	0	0	0	closed	0.98	history_unavailable=3
+F3-run3-a1	159	0	0	0	0	closed	0.32	
+F3-run3-a1	160	0	0	0	0	closed	0.51	
+F3-run3-a1	161	0	0	0	0	closed	0.13	
+F3-run3-a1	162	0	0	0	0	closed	2.13	
+F3-run3-a1	163	0	0	0	0	closed	0.15	
+F3-run3-a1	164	0	0	0	0	closed	0.17	
