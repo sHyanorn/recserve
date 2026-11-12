@@ -318,6 +318,10 @@ type serving struct {
 	since   int64
 }
 
+// firstSince is the time a gateway that serves nothing names the version
+// it prepares with: the earliest, before any activation's.
+const firstSince = 1
+
 // serving returns the version the gateway serves at the moment.
 func (c *Client) serving() serving {
 	v, since := c.opt.Serving()
@@ -376,8 +380,13 @@ type Shards struct {
 func (c *Client) Prepare(ctx context.Context, version string, items int) (*Shards, error) {
 	s := &Shards{c: c, items: items, indexes: make([]*annshardpb.Index, len(c.shards))}
 	sv := c.serving()
-	if sv.version == "" { // the first version, which the gateway serves next
-		sv = serving{version, time.Now().UnixNano()}
+	if sv.version == "" {
+		// The first version, which the gateway serves next. Named with the
+		// earliest time, it becomes the version served on a replica that
+		// has had none, and on the others once the gateway activates it: a
+		// gateway that starts and stops does not take the version served
+		// from one that goes on serving (D057).
+		sv = serving{version, firstSince}
 	}
 	errs := make([][]error, len(c.shards)) // by shard, then replica
 	var wg sync.WaitGroup

@@ -203,3 +203,52 @@ func TestPrepareFailsWhenItsContextEnds(t *testing.T) {
 		t.Fatalf("a call of Prepare runs after it returned:\n%s", stacks)
 	}
 }
+
+// A gateway that starts, whether its Prepare succeeds or not, and stops
+// before activating a version leaves a replica the version that another
+// gateway serves: the replica stays ready, and that gateway's next swap,
+// naming its version served, keeps it (D057 point 1).
+func TestStartingGatewayLeavesTheVersionServed(t *testing.T) {
+	r := rand.New(rand.NewPCG(11, 11))
+	root, elsewhere := t.TempDir(), t.TempDir()
+	write := func(root string) string { return annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2)) }
+	vA, vB, v3, missing := write(root), write(root), write(root), write(elsewhere)
+	addr := annshardtest.Start(t, root)
+	cfg := shard.Config{Shards: 1, Mode: shard.Exact}
+	ctx := context.Background()
+	var served atomic.Pointer[servedAt]
+	a := annshardtest.Dial(t, [][]string{{addr}}, annshard.Options{Config: cfg, Serving: func() (string, time.Time) {
+		if s := served.Load(); s != nil {
+			return s.version, s.since
+		}
+		return "", time.Time{}
+	}})
+	sA, err := a.Prepare(ctx, vA, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	served.Store(&servedAt{vA, time.Now()})
+	time.Sleep(1500 * time.Millisecond) // the watch has sent the replica vA's time
+	for _, v := range []string{vB, missing} { // gateways that start and stop
+		b, err := annshard.Dial([][]string{{addr}}, annshard.Options{Config: cfg})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = b.Prepare(ctx, v, 50)
+		if (err == nil) != (v == vB) {
+			t.Fatalf("prepare %s: %v", v, err)
+		}
+		if err := b.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if !annshardtest.Ready(t, addr) {
+			t.Fatalf("not ready once a gateway that prepared %s stopped", v)
+		}
+	}
+	if _, err := a.Prepare(ctx, v3, 50); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sA.Search(ctx, 0, []float32{1, 1}, 5, nil); err != nil {
+		t.Fatalf("the swap to v3 dropped vA, which the gateway serves: %v", err)
+	}
+}
