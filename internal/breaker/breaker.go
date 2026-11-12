@@ -87,20 +87,32 @@ func trips(c gobreaker.Counts, s Settings) bool {
 // Collectors returns the breaker's metrics: its calls by result, and its
 // state, 1 for the state it is in and 0 for the others.
 func (b *Breaker) Collectors() []prometheus.Collector {
-	cs := []prometheus.Collector{b.calls}
+	return []prometheus.Collector{b.calls, stateCollector{b.cb, prometheus.NewDesc(
+		"recserve_valkey_breaker_state",
+		"State of the circuit breaker on Valkey: 1 for the state it is in (closed, half-open or open), 0 for the others.",
+		[]string{"state"}, nil,
+	)}}
+}
+
+// stateCollector reports the state of cb as one series per state. It reads
+// the state once per scrape, so a scrape has exactly one state at 1 even
+// while the state changes.
+type stateCollector struct {
+	cb   *gobreaker.CircuitBreaker[struct{}]
+	desc *prometheus.Desc
+}
+
+func (c stateCollector) Describe(ch chan<- *prometheus.Desc) { ch <- c.desc }
+
+func (c stateCollector) Collect(ch chan<- prometheus.Metric) {
+	now := c.cb.State()
 	for _, s := range []gobreaker.State{gobreaker.StateClosed, gobreaker.StateHalfOpen, gobreaker.StateOpen} {
-		cs = append(cs, prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-			Name:        "recserve_valkey_breaker_state",
-			Help:        "State of the circuit breaker on Valkey: 1 for the state it is in (closed, half-open or open), 0 for the others.",
-			ConstLabels: prometheus.Labels{"state": s.String()},
-		}, func() float64 {
-			if b.cb.State() == s {
-				return 1
-			}
-			return 0
-		}))
+		v := 0.0
+		if s == now {
+			v = 1
+		}
+		ch <- prometheus.MustNewConstMetric(c.desc, prometheus.GaugeValue, v, s.String())
 	}
-	return cs
 }
 
 // do runs call, named name in the metrics, through the breaker.

@@ -224,3 +224,62 @@ func TestMetrics(t *testing.T) {
 		t.Fatalf("calls %v, want %v", calls, want)
 	}
 }
+
+// TestStateMetricOneAtATime scrapes the state metric while another
+// goroutine moves the breaker between closed, open and half-open: every
+// scrape must report exactly one state as 1.
+func TestStateMetricOneAtATime(t *testing.T) {
+	b := New(Settings{Window: time.Hour, MinCalls: 1, FailureRate: 0.5, Open: time.Microsecond}, nil)
+	reg := prometheus.NewPedanticRegistry()
+	reg.MustRegister(b.Collectors()...)
+	down := errors.New("down")
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			// The first call opens it; the second closes it once half-open.
+			if err := b.do("history", func() error { return down }); !errors.Is(err, down) && !errors.Is(err, ErrOpen) {
+				t.Error(err)
+				return
+			}
+			if err := b.do("history", func() error { return nil }); err != nil && !errors.Is(err, ErrOpen) {
+				t.Error(err)
+				return
+			}
+		}
+	}()
+	defer func() { close(stop); <-done }()
+	bad := map[int]int{} // scrapes by the number of states reported as 1
+	for range 20000 {
+		families, err := reg.Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		in := 0
+		for _, f := range families {
+			if f.GetName() != "recserve_valkey_breaker_state" {
+				continue
+			}
+			if len(f.GetMetric()) != 3 {
+				t.Fatalf("%d state series, want 3", len(f.GetMetric()))
+			}
+			for _, m := range f.GetMetric() {
+				if m.GetGauge().GetValue() == 1 {
+					in++
+				}
+			}
+		}
+		if in != 1 {
+			bad[in]++
+		}
+	}
+	if len(bad) > 0 {
+		t.Fatalf("scrapes by the number of states reported as 1, other than one: %v", bad)
+	}
+}
