@@ -156,6 +156,9 @@ func TestLoadRejects(t *testing.T) {
 	}{
 		"cutoff equal": {nil, Options{FirstTestTS: 100}, "test period"},
 		"cutoff after": {nil, Options{FirstTestTS: 50}, "test period"},
+		"no cutoff":    {func(_ map[string][]byte, m map[string]any) { delete(m, "train_cutoff_ts") }, Options{}, "is required"},
+		"cutoff zero":  {func(_ map[string][]byte, m map[string]any) { m["train_cutoff_ts"] = 0 }, Options{FirstTestTS: 101}, "is required"},
+		"cutoff unit":  {nil, Options{FirstTestTS: 100_000}, "not in milliseconds"},
 		"golden top": {func(f map[string][]byte, _ map[string]any) {
 			f["golden.jsonl"] = editGolden(t, func(c map[string]any) {
 				top := c["top10"].([]any)
@@ -201,6 +204,20 @@ func TestLoadRejects(t *testing.T) {
 	if _, err := Load(writeBundle(t), Options{FirstTestTS: 100}); !errors.Is(err, ErrCutoff) {
 		t.Fatalf("cutoff error %v is not ErrCutoff", err)
 	}
+}
+
+// TestLoadCutoffUnit checks the unit check at the times of the real data:
+// the first event of recserve's test split, and seqrec-lab's temporal
+// split's cutoff on the same data, in milliseconds and in seconds.
+func TestLoadCutoffUnit(t *testing.T) {
+	const firstTest, cutoff = 1658003248622, 1649219168790
+	withCutoff := func(ts int64) editFunc {
+		return func(_ map[string][]byte, m map[string]any) { m["train_cutoff_ts"] = ts }
+	}
+	load(t, writeBundle(t, withCutoff(cutoff)), Options{FirstTestTS: firstTest})
+	checkRejected(t, writeBundle(t, withCutoff(cutoff/1000)), Options{FirstTestTS: firstTest}, "not in milliseconds")
+	// At exactly 1/100 of the first test event the cutoff is accepted.
+	load(t, writeBundle(t), Options{FirstTestTS: 10_000})
 }
 
 // TestLoadRejectsONNX covers bundles whose encoder does not reproduce the

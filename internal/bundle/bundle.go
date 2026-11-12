@@ -84,7 +84,9 @@ type Bundle struct {
 // Options control Load.
 type Options struct {
 	// FirstTestTS, if non-zero, is the time of the first test event; a bundle
-	// whose train_cutoff_ts is not before it is rejected with ErrCutoff.
+	// whose train_cutoff_ts is not before it is rejected with ErrCutoff, and
+	// one whose train_cutoff_ts is under 1/100 of it as a time in another
+	// unit.
 	FirstTestTS int64
 }
 
@@ -215,8 +217,8 @@ func (b *Bundle) load(opt Options) error {
 		return err
 	}
 	m := &b.Manifest
-	if opt.FirstTestTS != 0 && m.TrainCutoffTS >= opt.FirstTestTS {
-		return fmt.Errorf("%w: train_cutoff_ts %d, first test event %d", ErrCutoff, m.TrainCutoffTS, opt.FirstTestTS)
+	if err := checkCutoff(m.TrainCutoffTS, opt.FirstTestTS); err != nil {
+		return err
 	}
 
 	files := map[string][]byte{}
@@ -316,6 +318,30 @@ func (b *Bundle) load(opt Options) error {
 		return err
 	}
 	return b.checkGolden(golden)
+}
+
+// unitRatio bounds how much earlier than the first test event a train
+// cutoff may be before it is taken for a time in another unit: seconds are a
+// thousandth of milliseconds, while a cutoff and a test event in one unit
+// differ by a small fraction of either.
+const unitRatio = 100
+
+// checkCutoff requires a train cutoff in milliseconds since the Unix epoch,
+// as the dataset's times are, and, given the first test event's time, one
+// before it. A manifest without train_cutoff_ts reads as 0, and a cutoff in
+// seconds reads as a time long past: either would pass the comparison alone.
+func checkCutoff(cutoff, firstTest int64) error {
+	switch {
+	case cutoff <= 0:
+		return fmt.Errorf("train_cutoff_ts %d: a time in milliseconds is required", cutoff)
+	case firstTest == 0:
+		return nil
+	case cutoff >= firstTest:
+		return fmt.Errorf("%w: train_cutoff_ts %d, first test event %d", ErrCutoff, cutoff, firstTest)
+	case cutoff < firstTest/unitRatio:
+		return fmt.Errorf("train_cutoff_ts %d is under 1/%d of the first test event's time %d: not in milliseconds", cutoff, unitRatio, firstTest)
+	}
+	return nil
 }
 
 // checkRows are the rows the ranker check changes, one set at a time from

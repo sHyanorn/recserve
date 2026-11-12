@@ -38,6 +38,9 @@ def main(d):
             sys.exit(f"{name}: checksum mismatch")
     if m["model_version"] != version_of(m["sha256"]):
         sys.exit(f"model_version {m['model_version']!r}, but the checksums give {version_of(m['sha256'])!r}")
+    cutoff = m.get("train_cutoff_ts")
+    if type(cutoff) is not int or cutoff <= 0:
+        sys.exit(f"train_cutoff_ts {cutoff!r}: a time in milliseconds is required")
     for name in OPTIONAL:
         if name not in m["sha256"] and os.path.exists(f"{d}/{name}"):
             sys.exit(f"{name} is in the directory but not in the manifest")
