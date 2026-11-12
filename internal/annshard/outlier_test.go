@@ -219,10 +219,15 @@ func TestTakenOutReplicaComesBack(t *testing.T) {
 
 // While every replica of a shard hangs, none is taken out, and the shard's
 // searches keep going to each in turn: a slow shard is the hedge budget's
-// case. Once one of them answers again, the other is taken out.
+// case. b answers once after a's run began and only then hangs, so what
+// keeps a in is b's calls that ended at the deadline since, not an answer
+// from before the run. Once one of them answers again, the other is taken
+// out.
 func TestNoReplicaTakenOutWhileAllHang(t *testing.T) {
 	o := newOutlierShard(t, 0)
 	o.aMode.Store(hang)
+	o.until(o.a, "deadline", 1, 2*time.Second)
+	o.until(o.b, "answered", 1, 2*time.Second)
 	o.bMode.Store(hang)
 	for range 20 {
 		o.search(outlierDeadline) //nolint:errcheck // the calls' counts are the test
@@ -380,26 +385,36 @@ func TestNoHedgeToTakenOutReplica(t *testing.T) {
 }
 
 // A replica is not taken out while no other replica of its shard has a
-// ready connection: with the other replica's server stopped, a replica
-// whose searches hang has ten calls in a row end at the deadline and stays
-// in, although the other replica is in the selection and its count is
-// clear.
+// ready connection: a replica whose searches hang has its run begin, the
+// other answers once and then its server stops, and the first has ten calls
+// in a row end at the deadline and stays in, although the other is in the
+// selection, its count is clear and it answered during the run.
 func TestNoEjectionWhileOtherReplicaDown(t *testing.T) {
 	o := newOutlierShard(t, 0)
+	o.aMode.Store(hang)
+	o.until(o.a, "deadline", 1, 2*time.Second)
+	o.until(o.b, "answered", 1, 2*time.Second)
+	if got := o.calls(); got[o.a+" deadline"] >= 5 {
+		t.Fatalf("calls %v: %s's run reached five before %s stopped", got, o.a, o.b)
+	}
 	o.stopB()
 	// Wait until the client's connection to b has left the ready state, for
 	// good, as no server is left to take it: while both connections are
-	// ready, of two searches in a row one asks b first. a answers meanwhile,
-	// so a search that b fails goes on to it.
+	// ready, of two searches in a row one asks b first, and b's failure then
+	// counts a failover under b. a fails meanwhile, which neither adds to
+	// its run nor clears it, and so the search fails over to b when it asks
+	// a first; a call that b fails counts neither way either.
+	o.aMode.Store(fail)
+	failovers := func() float64 {
+		return counts(t, o.c, "recserve_shard_failovers_total", "replica")[o.b]
+	}
 	for end, without := time.Now().Add(5*time.Second), 0; without < 2; {
 		if time.Now().After(end) {
 			t.Fatalf("searches still ask %s first 5 s after it stopped: %v", o.b, o.calls())
 		}
-		before := callsTo(o.calls(), o.b)
-		if err := o.search(outlierDeadline); err != nil {
-			t.Fatalf("search after %s stopped: %v", o.b, err)
-		}
-		if callsTo(o.calls(), o.b) == before {
+		before := failovers()
+		o.search(outlierDeadline) //nolint:errcheck // both replicas fail it
+		if failovers() == before {
 			without++
 		} else {
 			without = 0
