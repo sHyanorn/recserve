@@ -42,9 +42,9 @@ func TestPrepareFailsWhenItsContextEnds(t *testing.T) {
 	})
 	c := annshardtest.Dial(t, [][]string{{annshardtest.Start(t, root, stuck)}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, PrepareTimeout: 2 * time.Minute})
 	const timeout = 200 * time.Millisecond
+	start := time.Now() // before the context, whose deadline is then at least start + timeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	start := time.Now()
 	if _, err := c.Prepare(ctx, v, 50); err == nil {
 		t.Fatal("prepared with the shard's only replica stuck")
 	}
