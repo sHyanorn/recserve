@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -48,17 +49,29 @@ func TestEncodeMatchesNumPy(t *testing.T) {
 	}
 }
 
+// npyFile returns a version 1.0 .npy file with header h and no data.
+func npyFile(h string) []byte {
+	h += "\n"
+	return append(append([]byte("\x93NUMPY\x01\x00"), byte(len(h)), byte(len(h)>>8)), h...)
+}
+
 func TestParseRejects(t *testing.T) {
 	good := Encode([]int{2}, []float32{1, 2}, nil)
-	for name, b := range map[string][]byte{
-		"empty":     nil,
-		"magic":     append([]byte("XNUMPY"), good[6:]...),
-		"truncated": good[:len(good)-1],
-		"overflow":  []byte("\x93NUMPY\x01\x00\x46\x00{'descr': '<f4', 'fortran_order': False, 'shape': (4294967296, 4294967296), }\n"),
-		"negative":  []byte("\x93NUMPY\x01\x00\x38\x00{'descr': '<f4', 'fortran_order': False, 'shape': (-1,), }\n"),
+	for name, tc := range map[string]struct {
+		b    []byte
+		want string // the start of the error
+	}{
+		"empty":     {nil, "not a .npy file"},
+		"magic":     {append([]byte("XNUMPY"), good[6:]...), "not a .npy file"},
+		"truncated": {good[:len(good)-1], "7 data bytes for 2 float32 values"},
+		// 2^32 * 2^32 values would wrap int to 0 and match the empty data.
+		"overflow": {npyFile("{'descr': '<f4', 'fortran_order': False, 'shape': (4294967296, 4294967296), }"), "shape "},
+		"negative": {npyFile("{'descr': '<f4', 'fortran_order': False, 'shape': (-1,), }"), "shape "},
+		"header":   {npyFile("{'descr': '<f4', 'fortran_order': False, }"), "header "},
 	} {
-		if _, err := Parse(b); err == nil {
-			t.Errorf("%s: accepted", name)
+		_, err := Parse(tc.b)
+		if err == nil || !strings.HasPrefix(err.Error(), tc.want) {
+			t.Errorf("%s: got %v, want an error starting %q", name, err, tc.want)
 		}
 	}
 }
