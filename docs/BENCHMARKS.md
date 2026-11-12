@@ -284,6 +284,32 @@ Committed before these runs. In M6, 15 of the 18 valid fault runs had the breake
 
 Reported for the same interval, not as causes: the gateway's GC pause time (`go_gc_duration_seconds_sum`) and each container's CPU time, beside the median interval of the run's [30, 90 s).
 
+### Second M7 set: breaker on a failure rate, cover, benchsum as written
+
+Committed 2026-11-12, before these runs. The first M7 set (Results, M7) stays as it is; the two sets come from different VMs and are not compared side by side, each only against the criteria.
+
+**What changed since the first set.** The breaker opens on a failure rate in a window of 1 s, no longer on 5 failures in a row (D037, revision of M7). A replica is taken out only if the other answered since its run of calls ended at the deadline began (D041, M7 point 7). `scripts/bench-fault.sh` keeps each attempt's files under its own prefix, `FAULT-runN-aK`, and `cmd/benchsum` gives each run's valid attempt, every attempt with why it was invalid and its breaker openings, and each fault's verdict by the rule; the outlier detection of 03bb156 is in the build, so every fault runs with it.
+
+**benchsum as the criteria are written.** The criteria and the validity rule are not changed; benchsum's readings of them are, each with a test:
+
+1. The phases are cut at 90 and 150 s from the first request's due time, not at the script's marks a few ms later, and the times "after the pause" and "after removal" count from 90 and 150 s. F5's [15, 60 s) after the pause so ends at 150 s.
+2. A recovery window, and annshard-1's return, may start at any whole second of the recovery phase, [150, 270 s): "not recovered" if none starts within it. A window that runs past 270 s holds the responses due before 270 s, and the seconds of the return's window before 270 s.
+3. Both recoveries count from 150 s, on the same whole seconds.
+4. An invalid run is neither a pass nor a fail: it is not judged.
+5. The breaker table's medians take the intervals between reads that lie within [30, 90 s).
+
+**Expectation.** With no fault, 0 openings of the breaker in the 5 runs: at 275 requests/s with the cache on its window holds about 550 to 825 calls, and half of them must fail. The expectation plays no part in the attribution, which is as in Valkey circuit breaker openings (M7), nor in validity. In the fault runs, with the cache off, the window holds about 275 history reads.
+
+**F4's baseline.** Not changed: each F4 attempt still recreates Kafka before its first baseline. A measurement on the VM of these changes (one-off, not committed) did not confirm that Kafka's start raises the baseline. It planned three rounds of three baselines: right after Kafka's recreation and the services' (`fresh`), as F4 takes it; with Kafka not recreated, as the other faults take it; and 60 s after the recreation. Against that VM's reference of 520,455 ns, right after: 478,575, 480,579 and 701,455 ns, the last flagged; not recreated: 490,804 and 481,444; after 60 s: 569,584 and 667,428, the last flagged. The VM restarted before the last two. Kafka's CPU was about 100 ms a second in the 15 s after its recreation and 20 to 39 ms a second in each 15 s from then to 90 s. What flagged the first set's F4 attempts is still not established.
+
+**Runs**, all on one VM, with images and binaries built from the commit that records this section or a later one that changes no code, in this order:
+
+1. `make bench-ref REF_FILE=bench-results/m7/rerun/noise-reference.json`;
+2. `OUT=bench-results/m7/rerun/breaker make bench-fault FAULT=none RATE=275 REF_FILE=bench-results/m7/rerun/noise-reference.json`, 5 runs;
+3. `OUT=bench-results/m7/rerun/faults make bench-fault FAULT=F1 ... F6 RATE=275 REF_FILE=bench-results/m7/rerun/noise-reference.json`, three valid runs each, judged by Faults, setup and pass criteria (M6) as amended for M7, and F2, F5 and F6 also by its criteria of outlier detection.
+
+No run is added after the results. The quality evaluation is not run again: `TestRealDataQuality` uses neither the breaker nor the replicas' client, which its package links only for other tests, so neither change reaches it.
+
 ## Hedge delay (M6, D041)
 
 The gateway's `recserve_shard_search_seconds{shard}` observes every call to a replica, from its send until it returns, whatever the result. Three runs as in Load tests (M6): replay, cache off, half the headline rate, `-hedge-delay 0`, so that no call is cancelled by a hedge that won. Each run's p95 per shard comes from the histogram by linear interpolation within a bucket, as Prometheus's `histogram_quantile`. The default becomes the median over the runs of the larger shard's p95, rounded up to 0.5 ms: on healthy replicas about 5% of the searches then send a hedge, half of what the budget allows. Three more runs with that default report hedges per search and p99.
