@@ -117,7 +117,7 @@ The catalog served has 25.6k items (Amazon Reviews 2023 Video_Games, 5-core). At
 - Exposure lines are dropped when the writer's queue is full or stdout fails, and lost if the process is killed with lines queued (D049).
 - The rate and in-flight limits are per gateway. kind's values, 1,450 requests/s and 152 in flight, follow from an estimate of one gateway's capacity, made from its CPU per request while it shared three CPUs with the rest of the service (D050).
 - The cost of tracing when on is not measured; Valkey and Kafka calls have no spans of their own (D051).
-- On the 680 held-out users the ranker's recall@10 is 0.091 against 0.026 for retrieval order, measured before MMR; its effect on the served lists is for an A/B experiment to show (D027).
+- On the 680 held-out users the ranker's recall@10 is 0.091 against 0.026 for retrieval order, measured before MMR (D027). In an offline run of the pipeline in process, with no stage budgets and MMR included, on 43,249 test events, recall@10 is 0.0181, and 0.0050 with the ranker forced to fail, which keeps the retrieval scores: a difference of −0.0131, 95% interval over test events −0.0143 to −0.0119 (BENCHMARKS, M7). Its effect on users is for an A/B experiment to show.
 - A replica that restarts is empty and not ready until the gateway has it prepare the version served again, which it does as soon as its connection is back (D044); for up to a second after a swap, a replica reports ready on the previous version.
 
 ## License
