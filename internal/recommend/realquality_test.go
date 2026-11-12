@@ -308,7 +308,9 @@ func meanOf(v []float64) float64 {
 // test event through the pipeline in process, every budget off, under each
 // condition of qualityConditions, and the reference. It fails if a
 // condition is not valid. The table goes to the file RECSERVE_QUALITY_OUT
-// names, if set, and to the log.
+// names, if set, and to the log. With RECSERVE_BUNDLE_B, a bundle
+// directory, it then compares that bundle with the first
+// (compareRealBundles).
 func TestRealDataQuality(t *testing.T) {
 	rd := loadRealData(t)
 	evs := make([]history.Event, len(rd.test))
@@ -356,6 +358,9 @@ func TestRealDataQuality(t *testing.T) {
 		if err := os.WriteFile(out, []byte(report), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if dir := os.Getenv("RECSERVE_BUNDLE_B"); dir != "" {
+		compareRealBundles(t, rd, dir, ref, noVector)
 	}
 }
 
