@@ -175,10 +175,9 @@ var replicaFaults = map[string]func(*replicated){
 	"answers with an error": func(c *replicated) { c.failing.Store(true) },
 }
 
-// checkProperty12 loses one replica of each of two shards, once every
-// replica holds the version, and compares 10 responses with those of
-// in-process shards: the same items, every shard answered, nothing
-// degraded. dial returns the client of the replicas at
+// checkProperty12 loses one replica of each of two shards and compares 10
+// responses with those of in-process shards: the same items, every shard
+// answered, nothing degraded. dial returns the client of the replicas at
 // addrs[shard][replica], with the shards configured as cfg. Ten searches of
 // a shard stay within its hedge budget also if every one of them needs a
 // hedge.
@@ -190,7 +189,7 @@ func checkProperty12(t *testing.T, lose func(*replicated), dial func(addrs [][]s
 	}
 	local.rankWith = linearRanker
 	c := replicate(t, local.Bundle.Vectors)
-	remote, err := annshardtest.PrepareAll(t, dial(c.addrs, local.Shards.Config()), c.version, local.Bundle.ItemCount)
+	remote, err := dial(c.addrs, local.Shards.Config()).Prepare(context.Background(), c.version, local.Bundle.ItemCount)
 	if err != nil {
 		return err
 	}
