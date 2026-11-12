@@ -246,6 +246,27 @@ func TestNoReplicaTakenOutWhileAllHang(t *testing.T) {
 	}
 }
 
+// While one replica of a shard is out, the other is not taken out, however
+// many of its calls end at the deadline: once a hanging replica is out and
+// the other hangs too, the shard's searches all go to the other, between the
+// probes of the first, and through 20 of its calls ended at the deadline the
+// first is still the only one taken out.
+func TestOneReplicaOutAtATime(t *testing.T) {
+	o := newOutlierShard(t, 0)
+	o.aMode.Store(hang)
+	o.until(o.a, "deadline", 5, 2*time.Second)
+	if got := o.ejections(); got[o.a] != 1 || got[o.b] != 0 {
+		t.Fatalf("ejections %v after five calls to %s ended at the deadline, want one of it", got, o.a)
+	}
+	o.bMode.Store(hang)
+	for _, n := range []float64{5, 15} {
+		o.until(o.b, "deadline", n, 2*time.Second)
+		if got := o.ejections(); got[o.a] != 1 || got[o.b] != 0 {
+			t.Fatalf("ejections %v with %s out and %s hanging, want only %s's", got, o.a, o.b, o.a)
+		}
+	}
+}
+
 // A replica is taken out only when the other has answered since the first
 // of its run of calls ended at the deadline: one that answered before the
 // run and since only failed has not stood in for it. Once the other answers,
