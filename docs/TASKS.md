@@ -86,10 +86,17 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] Report with charts: bench-results/m6/report.md, drawn by `make report`
 
 ## M7 Integration and evaluation
-- [ ] Load seqrec-lab's exported bundle; reject one whose `train_cutoff_ts` is not before the first test event
+- [ ] Load seqrec-lab's exported bundle; reject one whose `train_cutoff_ts` is not before the first test event. Done when the bundle loads with `bundle.Load` and its cutoff check, passes `verify.py`, and `make bench-bundles` runs to the end. The real-data tests' `loadRealData` stays as it is: it requires every train item in the bundle, a premise of the baseline's smoke test, and seqrec-lab's bundle holds only its own vocabulary (D056), so it is not used as `RECSERVE_BUNDLE`
 - [x] Golden top-10 lists may hold items whose vector is zero, which the shards leave out (D028); decide with seqrec-lab whether its export excludes them, so a golden case matches what the service retrieves: its export holds only the items it trained, with no zero row past padding, and the service is unchanged (D056)
 - [x] Quality evaluation with each degradation forced (BENCHMARKS, M7)
 - [ ] seqrec-lab's bundle against the baseline (BENCHMARKS, M7): in place are the comparison (`RECSERVE_BUNDLE_B` in TestRealDataQuality, `make bench-bundles`), verify.py's tests in CI and the history counts (`tools/bundle/histories.py`); it runs once the export exists (D056 point 3)
+  1. seqrec-lab has committed its Video_Games test results (D056 point 3); the run is the one D056 point 2 picks; `B` is its exported bundle directory, named by its `model_version`
+  2. `cd tools/bundle && uv sync --frozen && uv run --frozen python verify.py $B && cd ../..`: prints `ok:`, user encoder onnx, ranker no
+  3. If `data/` is missing: `make data`, then `make bundle ENCODER=onnx RANKER=1`, which prints b7ff0634dd7b
+  4. `export RECSERVE_ORT_LIB=$PWD/tools/bundle/.venv/lib/python3.13/site-packages/onnxruntime/capi/libonnxruntime.so.1.31.1 RECSERVE_REQUIRE_ORT=1`
+  5. `make bench-bundles VERSION=b7ff0634dd7b BUNDLE_B=$B`: writes bench-results/m7/bundles-<model_version>.md, also runs the baseline's conditions without writing quality.md, and fails if B's healthy pipeline reports a degradation
+  6. BENCHMARKS, M7 results: B's `model_version`, the primary result and its reading, the three secondary readings, the requests without a user vector under each bundle, and the training periods of both bundles as the protocol states them; the histories are in bench-results/m7/histories.txt
+  7. Commit the result file, BENCHMARKS and this entry, checked
 - [x] Replica fault criteria that measure what they state (BENCHMARKS, M6, the dated defects): a call count per replica, or the runs with the cache off, and the amended criteria committed before any run; then F1, F2, F5 and F6 again. Not compared side by side with M6's F3 and F4, from another VM
 - [x] Outlier detection on the replicas, adopted in M6 (D041): a replica whose calls end at the shard deadline a number of times in a row leaves the selection until a trial search is answered; F2, F5 and F6 again with it (BENCHMARKS, M7)
 - [x] The Valkey circuit breaker's state and calls as metrics; its openings in five runs without a fault, those that could be attributed by a rule committed before them (D037; BENCHMARKS, M7)
