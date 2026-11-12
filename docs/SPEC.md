@@ -165,6 +165,8 @@ The service verifies the checksums and that `model_version` is the one they give
 - Amended 2026-11-12: a golden case may carry `history_raw`, its history in raw item IDs; the service and `verify.py` then require `items.ids` to map each to the internal ID in its place, which the other fields, in internal IDs, cannot check (D010)
 - Amended 2026-11-12: a model whose score is not the user vector times an item vector, such as one that adds a per-item bias, is outside this contract (D056)
 - Amended 2026-11-12, later the same day: in the definition of `train_cutoff_ts` the vocabulary counts where events choose it, as seqrec-lab's 5-core of its training period does. The baseline bundle's `items.ids` lists every item of recserve's three splits; those without train events have zero vectors and no file is computed from their events, so its cutoff stays the last event its vectors, co-occurrence, popularity and ranker are computed from
+- Noted 2026-11-12: of the files the manifest does not list, the service and `verify.py` reject only the five optional ones (`user_encoder.onnx`, `ranker.onnx`, `cooc_ids.npy`, `cooc_counts.npy`, `popular.npy`); both ignore a file of any other name, so an exporter that checks its bundle with `verify.py` gets no error for one
+- Noted 2026-11-12: when fewer than 10 items lie outside a golden case's history, `verify.py` (`build.top_k`) expects the top 10 filled with row 0 and the history's items, while the service requires 10 IDs and finds fewer, so no such case passes both. A bundle of thousands of items has none
 
 ## 9. Data
 
