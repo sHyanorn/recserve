@@ -104,14 +104,20 @@ func usage(a, b read) (gc float64, cpu map[string]float64) {
 	return gc, cpu
 }
 
+// healthy reports whether the interval from read a to read b lies within
+// [30, 90 s), the healthy phase.
+func (r runReads) healthy(a, b read) bool {
+	return a.ms-r.t0 >= 30_000 && b.ms-r.t0 < 90_000
+}
+
 // medianUsage is the median of usage over the intervals of n reads in a row
-// from the reads of [30, 90 s].
+// within [30, 90 s).
 func (r runReads) medianUsage(n int) (gc float64, cpu map[string]float64) {
 	var gcs []float64
 	cpus := map[string][]float64{}
 	for i := 0; i+n < len(r.list); i++ {
 		a, b := r.list[i], r.list[i+n]
-		if r.second(a) < 30 || r.second(b) > 90 {
+		if !r.healthy(a, b) {
 			continue
 		}
 		g, c := usage(a, b)

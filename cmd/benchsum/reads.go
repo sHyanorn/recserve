@@ -141,13 +141,13 @@ func (r runReads) shares(end int) []*float64 {
 }
 
 // returned is the time from removal (s from t0) to annshard-1's return: the
-// first whole second t at or after removal such that its share is at least
-// 30% in each second of [t, t + 10 s), with t + 10 s by end (s); nil if
-// there is none.
+// first whole second t at or after removal, before end (s), the end of the
+// recovery phase, such that its share is at least 30% in each second of
+// [t, t + 10 s) before end; nil if there is none.
 func (r runReads) returned(removal float64, end int) *float64 {
-	for t := int(math.Ceil(removal)); t+10 <= end; t++ {
+	for t := int(math.Ceil(removal)); t < end; t++ {
 		back := true
-		for s := t; s < t+10 && back; s++ {
+		for s := t; s < min(t+10, end) && back; s++ {
 			v, ok := r.share(s, s+1)
 			back = ok && v >= shareReturn
 		}

@@ -176,12 +176,9 @@ func TestReplicaReturn(t *testing.T) {
 		}
 		return 50
 	})
-	got := r.returned(150.004, 270)
-	if got == nil || math.Abs(*got-6.996) > 1e-9 {
-		t.Fatalf("returned %v s after removal, want 6.996", got)
-	}
-	if r.returned(150.004, 166) != nil {
-		t.Error("returned with no 10 s left before the end")
+	got := r.returned(150, 270)
+	if got == nil || *got != 7 {
+		t.Fatalf("returned %v s after removal, want 7", got)
 	}
 	ten, three := 10, 3
 	if v := later(&three, got); v == nil || *v != *got {
@@ -393,7 +390,7 @@ func TestSummarizeFault(t *testing.T) {
 	if !f.Valid || !f.Pass || f.Phases["warmup"].Answers != 3000 || f.Hedges["healthy"]["0/won"] != 1 || f.OutlierDetection {
 		t.Fatalf("%+v", f)
 	}
-	if f.WindowRecovery == nil || *f.WindowRecovery != 0 || f.Return == nil || math.Abs(*f.Return-1.996) > 1e-9 || *f.Recovery != *f.Return {
+	if f.WindowRecovery == nil || *f.WindowRecovery != 0 || f.Return == nil || *f.Return != 2 || *f.Recovery != *f.Return {
 		t.Errorf("recovery %v, return %v, later %v", f.WindowRecovery, f.Return, f.Recovery)
 	}
 	if f.ReplicaShare == nil || *f.ReplicaShare != 0.5 || len(f.ReplicaShares) != 270 || f.ReplicaShares[100] == nil || *f.ReplicaShares[100] != 0 {
@@ -416,8 +413,14 @@ func TestSummarizeFault(t *testing.T) {
 	if err := breakerTable(&bb, dir); err != nil {
 		t.Fatal(err)
 	}
+	sections := strings.Split(tb.String(), "\n\n")
+	if len(sections) != 3 {
+		t.Fatalf("fault tables:\n%s", tb.String())
+	}
 	for table, want := range map[string]string{
-		tb.String(): "| F1-run1 | true | true | 2.00 | 2.00 | 2.00 | 2.00 | 0.0% |  | 0 | 1.996 | 50.0% | 1.996 | no | 0 |  |",
+		sections[0]: "| F1-run1 | true | true | 2.00 | 2.00 | 2.00 | 2.00 | 0.0% |  | 0 | 2.000 | 50.0% | 2.000 | no | 0 |  |",
+		sections[1]: "| F1-run1 | true |  | 1 |",
+		sections[2]: "| F1 | 1 | 1 | 1 | 0 | not judged: 1 valid runs |",
 		bb.String(): "| F1-run1 | true | 100.500 | fault | 99.003 to 101.003 | 0 | 0 |  | not attributed | 0.00 (0.00) |  |",
 	} {
 		lines := strings.Split(strings.TrimSpace(table), "\n")
@@ -429,3 +432,94 @@ func TestSummarizeFault(t *testing.T) {
 }
 
 func msTime(ms float64) string { return time.UnixMilli(int64(ms)).UTC().Format(time.RFC3339Nano) }
+
+// The phases are cut at 90 and 150 s, as the criteria write them, not at
+// the script's marks a few ms later.
+func TestPhasesAtTheCriteriaBounds(t *testing.T) {
+	s := answers(270_000, func(float64) float64 { return 2 }, none)
+	for i := range s {
+		if s[i].due == 90_000 || s[i].due == 150_000 {
+			s[i].status = 503
+		}
+	}
+	p := phaseStats(s, 270_000)
+	if p["healthy"].Errors != 0 || p["fault"].Errors != 1 || p["recovery"].Errors != 1 {
+		t.Fatalf("errors healthy %d, fault %d, recovery %d; want 0, 1, 1", p["healthy"].Errors, p["fault"].Errors, p["recovery"].Errors)
+	}
+}
+
+// F5's [15, 60 s) after the pause ends 60 s after 90 s, not at the removal.
+func TestSilentWindowEnds60sAfterThePause(t *testing.T) {
+	if w := silentWindows[len(silentWindows)-1]; injectAt+w[1] != 150_000 || injectAt+w[0] != 105_000 {
+		t.Fatalf("last silent window %v after %d ms", w, injectAt)
+	}
+}
+
+// A recovery window or a return may start in any second of the recovery
+// phase, also one whose 10 s run past its end; recovery counts from 150 s.
+func TestRecoveryStartsWithinThePhase(t *testing.T) {
+	s := answers(270_000, func(due float64) float64 {
+		if due < 262_000 {
+			return 30
+		}
+		return 2
+	}, none)
+	healthy := describe(answers(1000, func(float64) float64 { return 2 }, none), 0, 1000)
+	if got, ok := recovery(s, healthy, removeAt, 270_000); !ok || got != 112 {
+		t.Fatalf("recovery %d %v, want 112 s, the window [262, 272 s)", got, ok)
+	}
+	r := shardCalls(t, 270, func(s int) int {
+		if s < 265 {
+			return 0
+		}
+		return 50
+	})
+	if got := r.returned(removeAt/1000, 270); got == nil || *got != 115 {
+		t.Fatalf("returned %v, want 115 s", got)
+	}
+}
+
+// An invalid run is neither a pass nor a fail.
+func TestInvalidRunNotJudged(t *testing.T) {
+	f := faultRun{Fault: "F1", Invalid: []string{"noise baseline flagged"}, Phases: map[string]stats{"fault": {P99: 80}}}
+	f.verdict()
+	if f.Pass || f.Failures != nil {
+		t.Fatalf("invalid run judged: pass %v, failures %v", f.Pass, f.Failures)
+	}
+}
+
+// The breaker table's medians take the intervals within [30, 90 s): not one
+// that ends at the read in second 90.
+func TestHealthyIntervals(t *testing.T) {
+	r := runReads{t0: 1000}
+	at := func(s float64) read { return read{ms: r.t0 + s*1000} }
+	for _, c := range []struct {
+		a, b float64
+		want bool
+	}{{30.005, 31.005, true}, {88.005, 89.005, true}, {89.005, 90.005, false}, {29.995, 30.995, false}} {
+		if got := r.healthy(at(c.a), at(c.b)); got != c.want {
+			t.Errorf("[%v, %v s]: %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+// Attempts of a run are kept apart: the run's row is its valid attempt,
+// and a fault's verdict comes from its valid runs only.
+func TestChosenAttempts(t *testing.T) {
+	a := func(name string, valid, pass bool) faultRun {
+		run, n := runOf(name)
+		return faultRun{Name: name, Run: run, Attempt: n, Fault: "F2", Valid: valid, Pass: pass}
+	}
+	runs := chosen([]faultRun{a("F2-run1-a1", false, false), a("F2-run1-a2", true, true), a("F2-run2-a1", false, false),
+		a("F2-run2-a2", false, false), a("F2-run3-a1", true, true)})
+	if len(runs) != 3 || runs[0].Name != "F2-run1-a2" || runs[1].Name != "F2-run2-a2" || runs[2].Name != "F2-run3-a1" {
+		t.Fatalf("chosen %v", runs)
+	}
+	if v := faultVerdict(runs); v != "not judged: 2 valid runs" {
+		t.Fatalf("verdict %q", v)
+	}
+	runs[1] = a("F2-run2-a3", true, false)
+	if v := faultVerdict(runs); v != "fail: F2-run2" {
+		t.Fatalf("verdict %q", v)
+	}
+}

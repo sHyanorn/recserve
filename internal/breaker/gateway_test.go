@@ -34,7 +34,7 @@ func drive(t *testing.T, rate, n int, timeout func(i int) bool) (opened time.Dur
 		var wg sync.WaitGroup
 		for i := range n {
 			wg.Go(func() {
-				_ = b.do("history", func() error {
+				b.do("history", func() error { //nolint:errcheck // the breaker's state is the test
 					if timeout(i) {
 						time.Sleep(budget)
 						return context.DeadlineExceeded

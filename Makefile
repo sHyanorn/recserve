@@ -4,10 +4,11 @@ ENCODER ?= mean
 BUNDLE  ?=
 TAG     ?= dev
 VERSION ?=
+REF_FILE ?= bench-results/m7/noise-reference.json
 COMPOSE := docker compose -f deploy/compose.yaml
 
 .DEFAULT_GOAL := help
-BENCH   := DATA=$(abspath $(DATA)) VERSION=$(VERSION)
+BENCH   := DATA=$(abspath $(DATA)) VERSION=$(VERSION) REF_FILE=$(REF_FILE)
 .PHONY: bench-ref bench-sweep bench-profile bench-compare bench-fault bench-hedge bench-swap bench-kind bench-vegeta bench-ann bench-quality report
 .PHONY: help build test test-real e2e lint fmt proto data bundle images infra-up infra-down up down test-alerts kind-up kind-swap kind-check kind-netpol kind-down
 
@@ -76,7 +77,7 @@ kind-down: ## Delete the kind cluster
 	kind delete cluster --name recserve
 
 bench-ref: build ## Take the session's noise reference on an idle machine (docs/BENCHMARKS.md), before the bench- targets
-	mkdir -p bench-results/m7 && taskset -c 1 bin/noisebase -n 10 -cpu 1 -out bench-results/m7/noise-reference.json
+	mkdir -p $(dir $(REF_FILE)) && taskset -c 1 bin/noisebase -n 10 -cpu 1 -out $(REF_FILE)
 
 bench-sweep: build ## Load sweep in compose (docs/BENCHMARKS.md): SCENARIO replay, writes or repeats, CACHE on or off, RATES (empty: the grid, to GRID_MAX if set); DATA, VERSION
 	$(BENCH) GRID_MAX=$(GRID_MAX) scripts/bench-sweep.sh $(SCENARIO) $(CACHE) $(RATES)

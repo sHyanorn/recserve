@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,8 @@ import (
 // first request; inject and removal are when the script acted.
 type faultRun struct {
 	Name    string           `json:"name"`
+	Run     string           `json:"run"`
+	Attempt int              `json:"attempt"`
 	Fault   string           `json:"fault"`
 	Valid   bool             `json:"valid"`
 	Invalid []string         `json:"invalid,omitempty"`
@@ -57,6 +60,28 @@ type faultRun struct {
 
 var phaseNames = []string{"warmup", "healthy", "fault", "recovery"}
 
+// The fault is injected at 90 s and removed at 150 s, ms from the first
+// request's due time: the criteria's phases are cut there, and their times
+// after the injection or the removal count from there. The script's marks,
+// a few ms later, are reported.
+const (
+	injectAt = 90_000
+	removeAt = 150_000
+)
+
+// phaseStats describes each phase of samples, the run ending at end (ms).
+func phaseStats(samples []sample, end float64) map[string]stats {
+	bounds := []float64{0, 30_000, injectAt, removeAt, end}
+	out := map[string]stats{}
+	for i, p := range phaseNames {
+		out[p] = describe(samples, bounds[i], bounds[i+1])
+	}
+	return out
+}
+
+// silentWindows are F5's intervals after the pause, ms.
+var silentWindows = [][2]float64{{0, 13_000}, {13_000, 15_000}, {15_000, 60_000}}
+
 // replicaFaults are the faults of annshard-1, judged by its share.
 var replicaFaults = map[string]bool{"F1": true, "F5": true, "F6": true}
 
@@ -86,14 +111,11 @@ func summarizeFault(prefix, raw, readsPath, fault string) (faultRun, error) {
 	}
 	inject, removal := marks["inject"]-start, marks["remove"]-start
 	end := (r.Warmup + r.Duration) * 1000
-	f := faultRun{Name: filepath.Base(prefix), Fault: fault, InjectS: inject / 1000, RemoveS: removal / 1000, Phases: map[string]stats{}}
-	bounds := []float64{0, 30_000, inject, removal, end}
-	for i, p := range phaseNames {
-		f.Phases[p] = describe(samples, bounds[i], bounds[i+1])
-	}
+	f := faultRun{Name: filepath.Base(prefix), Fault: fault, InjectS: inject / 1000, RemoveS: removal / 1000, Phases: phaseStats(samples, end)}
+	f.Run, f.Attempt = runOf(f.Name)
 	healthy, during := f.Phases["healthy"], f.Phases["fault"]
 	f.Excess = excess(during, healthy)
-	if t, ok := recovery(samples, healthy, removal, end); ok {
+	if t, ok := recovery(samples, healthy, removeAt, end); ok {
 		f.WindowRecovery = &t
 		v := float64(t)
 		f.Recovery = &v
@@ -104,7 +126,7 @@ func summarizeFault(prefix, raw, readsPath, fault string) (faultRun, error) {
 			f.ReplicaShare = &v
 		}
 		f.ReplicaShares = reads.shares(endS)
-		f.Return = reads.returned(removal/1000, endS)
+		f.Return = reads.returned(removeAt/1000, endS)
 		f.Recovery = later(f.WindowRecovery, f.Return)
 	}
 	if f.OutlierDetection = reads.outlierDetection(); f.OutlierDetection {
@@ -131,10 +153,10 @@ func summarizeFault(prefix, raw, readsPath, fault string) (faultRun, error) {
 		return faultRun{}, err
 	}
 	if fault == "F5" {
-		silent := describe(samples, inject+15_000, removal)
+		silent := describe(samples, injectAt+15_000, injectAt+60_000)
 		f.SilentExcess = excess(silent, healthy)
-		for _, w := range [][2]float64{{0, 13_000}, {13_000, 15_000}, {15_000, removal - inject}} {
-			f.Silent = append(f.Silent, describe(samples, inject+w[0], inject+w[1]).Reasons["shards_partial"])
+		for _, w := range silentWindows {
+			f.Silent = append(f.Silent, describe(samples, injectAt+w[0], injectAt+w[1]).Reasons["shards_partial"])
 		}
 	}
 	if fault == "F4" {
@@ -147,11 +169,34 @@ func summarizeFault(prefix, raw, readsPath, fault string) (faultRun, error) {
 		}
 		f.Histories = strings.TrimSpace(string(data))
 	}
-	if fault != "none" {
-		f.Failures = judge(f)
+	f.verdict()
+	return f, nil
+}
+
+// verdict judges f by its fault's criteria, if it is a valid fault run: an
+// invalid run is neither a pass nor a fail.
+func (f *faultRun) verdict() {
+	if f.Fault != "none" && f.Valid {
+		f.Failures = judge(*f)
 		f.Pass = len(f.Failures) == 0
 	}
-	return f, nil
+}
+
+// attemptName matches the name of an attempt, its run's and its number.
+var attemptName = regexp.MustCompile(`^(.*-run[0-9]+)-a([0-9]+)$`)
+
+// runOf returns the run and the attempt of the attempt named name; a name
+// without an attempt is the run's only one.
+func runOf(name string) (string, int) {
+	m := attemptName.FindStringSubmatch(name)
+	if m == nil {
+		return name, 1
+	}
+	n, err := strconv.Atoi(m[2])
+	if err != nil {
+		return name, 1
+	}
+	return m[1], n
 }
 
 // readCounters takes the hedges and failovers of each phase from 30 s from

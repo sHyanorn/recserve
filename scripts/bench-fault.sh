@@ -11,7 +11,9 @@
 # load, a read each second of the gateway's metrics of the criteria and the
 # containers' CPU time (OUT/raw/*.reads); the changes of state its Valkey
 # circuit breaker logged, with their time. An invalid run is rerun at most
-# twice. Results in OUT (bench-results/m7/faults; with none,
+# twice; each attempt keeps its own files, OUT/FAULT-runN-aK.*, and a run
+# that already has a valid attempt, or an attempt judged, is not run again.
+# Results in OUT (bench-results/m7/faults; with none,
 # bench-results/m7/breaker).
 cd "$(dirname "$0")/.."
 FAULT=$1 RATE=$2 RUNS=${3:-3}
@@ -105,7 +107,6 @@ lag() {
 attempt() {
 	local p=$1 t0 lagpid= pollpid gwlog
 	gwlog=$OUT/raw/$(basename "$p").gateway.log
-	rm -f "$p".*
 	[[ $FAULT == F4 ]] && "${COMPOSE[@]}" up -d --force-recreate --wait kafka >/dev/null 2>&1 # no events of an earlier run
 	"${COMPOSE[@]}" up -d --force-recreate toxiproxy >/dev/null 2>&1
 	until toxi GET /proxies; do sleep 0.2; done
@@ -138,11 +139,14 @@ attempt() {
 }
 
 for n in $(seq 1 "$RUNS"); do
-	p=$OUT/$FAULT-run$n
 	for try in 1 2 3; do
+		p=$OUT/$FAULT-run$n-a$try
+		if [[ -e $p.fault.json ]]; then
+			jq -e .valid "$p.fault.json" >/dev/null && break
+			continue
+		fi
 		log "$FAULT run $n attempt $try"
 		attempt "$p"
-		echo "$try" >"$p.attempt"
 		v=$(bin/benchsum fault -prefix "$p" -samples "$(samples "$p")" -reads "$(reads "$p")" -fault "$FAULT")
 		log "$v"
 		[[ $v == *"valid true"* ]] && break

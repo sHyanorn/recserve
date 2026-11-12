@@ -4,7 +4,7 @@
 # (make bench-ref). Raw samples go to OUT/raw, which git ignores.
 set -euo pipefail
 
-REF=${REF:-$(sed -n 's/^ *"median_ns": \([0-9.]*\),*$/\1/p' bench-results/m7/noise-reference.json)}
+REF=${REF:-$(sed -n 's/^ *"median_ns": \([0-9.]*\),*$/\1/p' "${REF_FILE:-bench-results/m7/noise-reference.json}")}
 COMPOSE=(docker compose -f deploy/compose.yaml -f deploy/bench.compose.yaml)
 SERVICES=(ingest annshard-0 annshard-1 annshard-2 annshard-3 gateway)
 CONTAINERS=(gateway annshard-0 annshard-1 annshard-2 annshard-3 valkey kafka ingest)

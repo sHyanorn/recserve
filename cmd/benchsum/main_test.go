@@ -54,9 +54,6 @@ func TestRecovery(t *testing.T) {
 	if got, ok := recovery(s, healthy, 30_000, 60_000); !ok || got != 4 {
 		t.Fatalf("recovery %d %v, want 4 s", got, ok)
 	}
-	if _, ok := recovery(s, healthy, 30_000, 39_000); ok {
-		t.Fatal("recovered with no 10 s window left")
-	}
 	slow := answers(60_000, func(due float64) float64 { return 2 + float64(min(due, 30_000))/10_000 }, none)
 	if _, ok := recovery(slow, describe(slow, 0, 10_000), 30_000, 60_000); ok {
 		t.Fatal("recovered while p99 stays at 2.5 times healthy")

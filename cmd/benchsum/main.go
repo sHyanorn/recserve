@@ -220,20 +220,78 @@ func byRate(runs []runSummary) map[float64][]runSummary {
 	return out
 }
 
-// faultTable writes a row per fault run, in name order.
-func faultTable(w *strings.Builder, dir string) error {
+// readFaultRuns reads the attempts of dir, in name order.
+func readFaultRuns(dir string) ([]faultRun, error) {
 	paths, err := filepath.Glob(filepath.Join(dir, "*.fault.json"))
+	if err != nil {
+		return nil, err
+	}
+	slices.Sort(paths)
+	out := make([]faultRun, len(paths))
+	for i, p := range paths {
+		if err := readJSON(p, &out[i]); err != nil {
+			return nil, err
+		}
+		if out[i].Run == "" {
+			out[i].Run, out[i].Attempt = runOf(out[i].Name)
+		}
+	}
+	return out, nil
+}
+
+// chosen returns each run's valid attempt or, if it has none, its last, in
+// run order. The script stops at a run's first valid attempt.
+func chosen(attempts []faultRun) []faultRun {
+	by := map[string]faultRun{}
+	for _, a := range attempts {
+		if c, ok := by[a.Run]; !ok || (!c.Valid && (a.Valid || a.Attempt > c.Attempt)) {
+			by[a.Run] = a
+		}
+	}
+	var out []faultRun
+	for _, k := range slices.Sorted(maps.Keys(by)) {
+		out = append(out, by[k])
+	}
+	return out
+}
+
+// faultVerdict is a fault's verdict by the rule (BENCHMARKS, Faults): it
+// passes if all three of its valid runs pass, and fails if one of them
+// fails; with fewer valid runs and none failed it is not judged.
+func faultVerdict(runs []faultRun) string {
+	var valid int
+	var failed []string
+	for _, r := range runs {
+		if r.Valid {
+			valid++
+			if !r.Pass {
+				failed = append(failed, r.Run)
+			}
+		}
+	}
+	switch {
+	case len(runs) > 0 && runs[0].Fault == "none":
+		return "not judged"
+	case len(failed) > 0:
+		return "fail: " + strings.Join(failed, ", ")
+	case valid >= 3:
+		return "pass"
+	}
+	return fmt.Sprintf("not judged: %d valid runs", valid)
+}
+
+// faultTable writes a row per fault run, from its chosen attempt; then a
+// row per attempt, with why it was invalid and its breaker openings; then
+// each fault's runs, attempts and verdict.
+func faultTable(w *strings.Builder, dir string) error {
+	attempts, err := readFaultRuns(dir)
 	if err != nil {
 		return err
 	}
-	slices.Sort(paths)
+	runs := chosen(attempts)
 	fmt.Fprintln(w, "| Run | Valid | Pass | Healthy p99 | Fault p99 | Fault max | Recovery p99 | Fault degraded | Excess | Window recovery s | annshard-1 back s | annshard-1 [210, 270 s) | Recovery s | Outlier detection | Errors | Failures |")
 	fmt.Fprintln(w, "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
-	for _, p := range paths {
-		var f faultRun
-		if err := readJSON(p, &f); err != nil {
-			return err
-		}
+	for _, f := range runs {
 		h, d, r := f.Phases["healthy"], f.Phases["fault"], f.Phases["recovery"]
 		var ex []string
 		for k, v := range f.Excess {
@@ -275,6 +333,34 @@ func faultTable(w *strings.Builder, dir string) error {
 		}
 		fmt.Fprintf(w, "| %s | %v | %s | %.2f | %.2f | %.2f | %.2f | %.1f%% | %s | %s | %s | %s | %s | %s | %d | %s |\n", f.Name, f.Valid, pass, h.P99, d.P99, d.Max, r.P99,
 			100*d.Degraded, strings.Join(ex, ", "), window, back, share, rec, od, errs, strings.Join(f.Failures, "; "))
+	}
+	fmt.Fprintln(w, "\n| Attempt | Valid | Invalid because | Breaker openings |")
+	fmt.Fprintln(w, "|---|---|---|---|")
+	for _, a := range attempts {
+		fmt.Fprintf(w, "| %s | %v | %s | %d |\n", a.Name, a.Valid, strings.Join(a.Invalid, "; "), len(a.Breaker))
+	}
+	fmt.Fprintln(w, "\n| Fault | Runs | Valid runs | Attempts | Invalid attempts | Verdict |")
+	fmt.Fprintln(w, "|---|---|---|---|---|---|")
+	byFault := map[string][]faultRun{}
+	for _, r := range runs {
+		byFault[r.Fault] = append(byFault[r.Fault], r)
+	}
+	for _, k := range slices.Sorted(maps.Keys(byFault)) {
+		var valid, n, invalid int
+		for _, r := range byFault[k] {
+			if r.Valid {
+				valid++
+			}
+		}
+		for _, a := range attempts {
+			if a.Fault == k {
+				n++
+				if !a.Valid {
+					invalid++
+				}
+			}
+		}
+		fmt.Fprintf(w, "| %s | %d | %d | %d | %d | %s |\n", k, len(byFault[k]), valid, n, invalid, faultVerdict(byFault[k]))
 	}
 	return nil
 }
