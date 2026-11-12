@@ -41,7 +41,8 @@ type faultRun struct {
 	ReplicaShare  *float64   `json:"replica_share_210_270_s,omitempty"`
 	ReplicaShares []*float64 `json:"replica_share_by_second,omitempty"`
 	// Whether the gateway counted ejections, and with it the ejections
-	// from 30 to 90 s (nil without both reads).
+	// in the healthy phase: from the last read before 30 s to the last
+	// before 90 s (nil without both reads).
 	OutlierDetection bool     `json:"outlier_detection"`
 	HealthyEjections *float64 `json:"healthy_ejections,omitempty"`
 	// F5: the share of answers with shards_partial in [0, 13 s), [13, 15 s)
@@ -130,7 +131,7 @@ func summarizeFault(prefix, raw, readsPath, fault string) (faultRun, error) {
 		f.Recovery = later(f.WindowRecovery, f.Return)
 	}
 	if f.OutlierDetection = reads.outlierDetection(); f.OutlierDetection {
-		if v, ok := reads.delta("recserve_shard_ejections_total", nil, 30, 90); ok {
+		if v, ok := reads.deltaBefore("recserve_shard_ejections_total", nil, 30_000, injectAt); ok {
 			f.HealthyEjections = &v
 		}
 	}
@@ -160,7 +161,7 @@ func summarizeFault(prefix, raw, readsPath, fault string) (faultRun, error) {
 		}
 	}
 	if fault == "F4" {
-		if f.LagDrainedS, err = lagDrained(prefix+".lag", marks["remove"]); err != nil {
+		if f.LagDrainedS, err = lagDrained(prefix+".lag", start+removeAt); err != nil {
 			return faultRun{}, err
 		}
 		data, err := os.ReadFile(prefix + ".histories")
@@ -225,16 +226,17 @@ func (f *faultRun) readCounters(prefix string) error {
 	return nil
 }
 
-// phaseAt names the phase that holds s seconds from the first request.
+// phaseAt names the phase that holds s seconds from the first request, the
+// phases cut at 90 and 150 s as the criteria are, not at the script's marks.
 func (f faultRun) phaseAt(s float64) string {
 	switch {
 	case s < 0:
 		return "before the load"
 	case s < 30:
 		return "warmup"
-	case s < f.InjectS:
+	case s < injectAt/1000:
 		return "healthy"
-	case s < f.RemoveS:
+	case s < removeAt/1000:
 		return "fault"
 	case s < float64(len(f.Windows)):
 		return "recovery"
@@ -286,7 +288,7 @@ func judge(f faultRun) []string {
 		}
 		switch {
 		case f.HealthyEjections == nil:
-			fail("no reads at 30 and 90 s for the ejections")
+			fail("no reads before 30 and 90 s for the ejections")
 		case *f.HealthyEjections != 0:
 			fail("%.0f ejections in the healthy phase", *f.HealthyEjections)
 		}
@@ -366,8 +368,9 @@ func readMarks(path string) (map[string]float64, error) {
 }
 
 // lagDrained reads lines of "<unix ms> <events accepted> <records applied>"
-// and returns the seconds from removal until the first reading at or after
-// it with nothing left to apply; nil if none. The two counts are read one
+// and returns the seconds from removal (Unix ms: 150 s from the first
+// request, as the criteria count) until the first reading at or after it
+// with nothing left to apply; nil if none. The two counts are read one
 // after the other, the gateway's first, so a consumer that has caught up
 // may read as having applied more than was accepted.
 func lagDrained(path string, removal float64) (*float64, error) {

@@ -263,6 +263,42 @@ func TestJudgeOutlierDetection(t *testing.T) {
 	}
 }
 
+// The healthy phase's ejections are read from the last read before 30 s
+// to the last before 90 s. The reads are 3 ms after each whole second: an
+// ejection first read at 30.003 s may have come after 30 s and counts, one
+// first read at 90.003 s may have come after 90 s and does not.
+func TestHealthyEjectionsReadBefore30And90(t *testing.T) {
+	for _, c := range []struct {
+		first int // second of the first read that counts the ejection
+		want  float64
+	}{{29, 0}, {30, 1}, {89, 1}, {90, 0}} {
+		r := testReads(t, 100, func(s int) string {
+			n := 0
+			if s >= c.first {
+				n = 1
+			}
+			return fmt.Sprintf("recserve_shard_ejections_total{replica=\"toxiproxy:19091\",shard=\"0\"} %d\n", n)
+		})
+		if v, ok := r.deltaBefore("recserve_shard_ejections_total", nil, 30_000, injectAt); !ok || v != c.want {
+			t.Errorf("ejection first read in second %d: %v %v, want %v", c.first, v, ok, c.want)
+		}
+	}
+	if _, ok := testReads(t, 100, func(int) string { return "" }).deltaBefore("x", nil, 0, injectAt); ok {
+		t.Error("a delta from before the first read")
+	}
+}
+
+// The breaker table names an opening's phase by 90 and 150 s, not by the
+// script's marks a few ms later.
+func TestPhaseAtTheCriteriaBounds(t *testing.T) {
+	f := faultRun{InjectS: 90.005, RemoveS: 150.004, Windows: make([]stats, 270)}
+	for s, want := range map[float64]string{29.999: "warmup", 89.999: "healthy", 90.001: "fault", 150.001: "recovery", 270: "after the load"} {
+		if got := f.phaseAt(s); got != want {
+			t.Errorf("phase at %.3f s: %s, want %s", s, got, want)
+		}
+	}
+}
+
 func TestAttribute(t *testing.T) {
 	for _, c := range []struct {
 		failed map[string]float64
@@ -401,6 +437,30 @@ func TestSummarizeFault(t *testing.T) {
 	}
 	if err := writeJSON(filepath.Join(dir, "F1-run1.fault.json"), f); err != nil {
 		t.Fatal(err)
+	}
+	// With outlier detection, the healthy phase's ejections are those read
+	// from the last read before 30 s to the last before 90 s.
+	for first, want := range map[int]float64{30: 1, 90: 0} {
+		ej := filepath.Join(dir, "raw", fmt.Sprintf("F1-run1.ej%d.reads", first))
+		calls := shardLines(func(int) int { return 50 })
+		writeReads(t, ej, 270, func(s int) string {
+			n := 0
+			if s >= first {
+				n = 1
+			}
+			return calls(s) + fmt.Sprintf("recserve_shard_ejections_total{replica=\"toxiproxy:19091\",shard=\"0\"} %d\n", n)
+		})
+		g, err := summarizeFault(filepath.Join(dir, "F1-run1"), raw, ej, "F1")
+		if err != nil || !g.OutlierDetection || g.HealthyEjections == nil || *g.HealthyEjections != want {
+			t.Errorf("ejection first read in second %d: healthy ejections %v, want %v; %v", first, g.HealthyEjections, want, err)
+		}
+	}
+	// F4's lag drain counts from 150 s, not from the removal mark at
+	// 150.004 s: the first reading with nothing left, at 150.002 s, gives 0.002.
+	write("F1-run1.lag", fmt.Sprintf("%.0f 5 4\n%.0f 5 5\n%.0f 6 6\n", testT0+149_000, testT0+150_002, testT0+151_000))
+	write("F1-run1.histories", "ok\n")
+	if f4, err := summarizeFault(filepath.Join(dir, "F1-run1"), raw, reads, "F4"); err != nil || f4.LagDrainedS == nil || *f4.LagDrainedS != 0.002 {
+		t.Errorf("F4 lag drained %v, want 0.002 s; %v", f4.LagDrainedS, err)
 	}
 	// With nothing injected the same files are judged for validity only.
 	if n, err := summarizeFault(filepath.Join(dir, "F1-run1"), raw, reads, "none"); err != nil || !n.Valid || n.Pass || n.Failures != nil || n.ReplicaShare != nil || len(n.Breaker) != 1 {

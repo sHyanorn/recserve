@@ -114,6 +114,31 @@ func (r runReads) delta(name string, want map[string]string, from, to int) (floa
 	return b.m.sum(name, want) - a.m.sum(name, want), true
 }
 
+// deltaBefore is the change of name's series with the labels want from the
+// last read taken before from to the last taken before to, both ms from t0;
+// ok is false without both reads. A phase [from, to) so loses no change
+// read just after from, and gains none read just after to.
+func (r runReads) deltaBefore(name string, want map[string]string, from, to float64) (float64, bool) {
+	a, ok0 := r.lastBefore(from)
+	b, ok1 := r.lastBefore(to)
+	if !ok0 || !ok1 {
+		return 0, false
+	}
+	return b.m.sum(name, want) - a.m.sum(name, want), true
+}
+
+// lastBefore returns the last read taken before ms from t0.
+func (r runReads) lastBefore(ms float64) (read, bool) {
+	var last read
+	ok := false
+	for _, rd := range r.list {
+		if rd.ms-r.t0 < ms && (!ok || rd.ms > last.ms) {
+			last, ok = rd, true
+		}
+	}
+	return last, ok
+}
+
 // share is annshard-1's answered calls over all those of its shard's
 // replicas from the read of second from to that of second to; ok is false
 // without both reads or with no answered call.
