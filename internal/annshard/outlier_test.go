@@ -241,6 +241,27 @@ func TestNoReplicaTakenOutWhileAllHang(t *testing.T) {
 	}
 }
 
+// A replica is taken out only when the other has answered since the first
+// of its run of calls ended at the deadline: one that answered before the
+// run and since only failed has not stood in for it. Once the other answers,
+// the next call that ends at the deadline takes it out.
+func TestCoverMustAnswerDuringTheRun(t *testing.T) {
+	o := newOutlierShard(t, 0)
+	o.until(o.b, "answered", 2, 2*time.Second)
+	o.aMode.Store(hang)
+	o.bMode.Store(fail)
+	o.until(o.a, "deadline", 8, 2*time.Second)
+	if got := o.ejections(); got[o.a] != 0 {
+		t.Fatalf("ejections %v with %s failing every search since %s's run began, want none", got, o.b, o.a)
+	}
+	o.bMode.Store(answer)
+	o.until(o.b, "answered", 1, 2*time.Second)
+	o.until(o.a, "deadline", 1, 2*time.Second)
+	if got := o.ejections(); got[o.a] != 1 || got[o.b] != 0 {
+		t.Fatalf("ejections %v once %s answered again, want one of %s", got, o.b, o.a)
+	}
+}
+
 // A failure, which the search takes to the next replica at once, counts
 // neither way: a replica that fails every search stays in the selection,
 // and failures between calls that end at the deadline neither clear their
@@ -321,7 +342,7 @@ func TestAnswerClearsTheCount(t *testing.T) {
 // searches of its shard wait for the other replica, which takes longer than
 // the hedge delay, and send the one taken out nothing but its probes, a
 // second apart. The budget is not what holds the hedges back: the searches
-// that took the replica out spent about three of its reserve of ten.
+// that took the replica out spent a few of its reserve of ten.
 func TestNoHedgeToTakenOutReplica(t *testing.T) {
 	o := newOutlierShard(t, 5*time.Millisecond)
 	// With b failing at once, every search waits for a until the deadline:
@@ -330,6 +351,11 @@ func TestNoHedgeToTakenOutReplica(t *testing.T) {
 	o.aMode.Store(hang)
 	o.bMode.Store(fail)
 	o.until(o.a, "deadline", 4, 2*time.Second)
+	// b answers once during a's run, so it stands in for a; its failures
+	// after that count neither way.
+	o.bMode.Store(answer)
+	o.until(o.b, "answered", 1, 2*time.Second)
+	o.bMode.Store(fail)
 	fifth := time.Now() // a is taken out after this, so probed no sooner than a second after it
 	o.until(o.a, "deadline", 1, 2*time.Second)
 	if got := o.ejections(); got[o.a] != 1 || got[o.b] != 0 {

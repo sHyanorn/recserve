@@ -156,6 +156,7 @@ type group struct {
 
 	mu     sync.Mutex // guards tokens and the replicas' outlier detection
 	tokens int        // hedge budget
+	events uint64     // calls tracked, a clock for the replicas' answers and runs
 
 	hedgeWon, hedgeLost, hedgeDenied prometheus.Counter
 	calls                            prometheus.Observer
@@ -172,9 +173,11 @@ type replica struct {
 	answered, failed, deadline, cancelled prometheus.Counter
 
 	// Outlier detection (track), guarded by the group's mu.
-	timeouts int       // calls in a row that ended at the deadline
-	out      bool      // taken out of the selection
-	probeAt  time.Time // while out, when a search may next ask it first
+	timeouts   int       // calls in a row that ended at the deadline
+	runFrom    uint64    // g.events when the first of those calls ended
+	answeredAt uint64    // g.events when it last answered
+	out        bool      // taken out of the selection
+	probeAt    time.Time // while out, when a search may next ask it first
 }
 
 // ended counts a call to r that returned err.
@@ -509,10 +512,14 @@ func (g *group) probe(r *replica) bool {
 func (g *group) track(r *replica, err error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.events++
 	switch {
 	case err == nil:
-		r.timeouts, r.out = 0, false
+		r.timeouts, r.out, r.answeredAt = 0, false, g.events
 	case errors.Is(err, context.DeadlineExceeded):
+		if r.timeouts == 0 {
+			r.runFrom = g.events
+		}
 		r.timeouts++
 		if !r.out && r.timeouts >= outlierCalls && g.covered(r) {
 			r.out, r.probeAt = true, time.Now().Add(outlierWait)
@@ -522,12 +529,13 @@ func (g *group) track(r *replica, err error) {
 }
 
 // covered reports whether a replica of g other than r has a ready
-// connection, is in the selection and has had no call end at the deadline
-// since it last answered. When every replica of a shard is slow, none is
-// so taken out, and the hedge budget covers the shard. g.mu is held.
+// connection, is in the selection, has answered since the first call of
+// r's run ended at the deadline, and has had no call end at the deadline
+// since. When every replica of a shard is slow, none is so taken out, and
+// the hedge budget covers the shard. g.mu is held.
 func (g *group) covered(r *replica) bool {
 	for _, o := range g.replicas {
-		if o != r && !o.out && o.timeouts == 0 && o.conn.GetState() == connectivity.Ready {
+		if o != r && !o.out && o.timeouts == 0 && o.answeredAt > r.runFrom && o.conn.GetState() == connectivity.Ready {
 			return true
 		}
 	}
