@@ -593,7 +593,6 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 - By the rule above, the median max over the swap windows with `GOGC=off`, 23.39 ms, is 0.75 times that over the other windows, 31.16 ms: read as written, the rule attributes the largest values to GC. That reading does not hold here, by the rule's defect noted above: with GC on, the swap windows' maximum is above the other windows' in one run (25.58 against 17.25 ms) and below in two, medians 18.65 against 19.85 ms, ranges that overlap, so no excess is established for GC to explain and this record attributes nothing to GC. With `GOGC=off` it is below in every run (20.19 to 23.49 against 29.25 to 52.22 ms). The other windows' largest values, up to 52.22 ms, also occur with no GC at all.
 - p99 over the swap windows is above the other windows' in every run, with GC on (6.73 to 7.50 against 5.18 to 5.99 ms) and off (6.50 to 11.33 against 5.48 to 6.34 ms): turning GC off does not remove it. The CPU readings above are the only other figures; no cause is named.
 - With GC on, the swap windows hold 6 or 7 collections per run, 1.4 to 2.9 ms of pauses in all; the other windows 205 to 207, 72 to 78 ms.
-- Note 2026-11-12: these runs predate D057, when a swap's prepare waited for every replica's `Prepare`, and the prepare times above include that wait. Since D057 a swap waits for one replica per shard, and searches that reach a replica still building the version fail over. Not rerun.
 
 #### Rollouts and a swap in kind with SPEC §5's budgets
 
@@ -601,7 +600,6 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 
 - No error in any phase of the three runs. At most 0.133% of a phase's responses are degraded: one `vector_timeout` while the gateways rolled in run 1, one `shards_partial` while the replicas rolled in run 2, and one of each during the swap in run 3.
 - p99 by phase, over the three runs: before 3.80 to 4.71 ms, the gateways' rollout 7.68 to 9.91, the replicas' 5.87 to 6.13, the swap 7.09 to 8.84, after 5.12 to 5.23; the largest single response took 26.77 ms, during the replicas' rollout in run 2.
-- Note 2026-11-12: run before D057, when a gateway's start and the swap waited for every replica's `Prepare`; since D057 they wait for one replica per shard. Not rerun.
 
 #### annbench's profile on glove: `vec.Dot32` first
 
