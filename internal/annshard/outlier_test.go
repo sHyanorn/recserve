@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/status"
 
 	"github.com/sHyanorn/recserve/internal/annshard"
+	"github.com/sHyanorn/recserve/internal/annshard/annshardpb"
 	"github.com/sHyanorn/recserve/internal/annshard/annshardtest"
 	"github.com/sHyanorn/recserve/internal/shard"
 	"github.com/sHyanorn/recserve/internal/shard/shardtest"
@@ -22,7 +24,13 @@ const (
 	answer int32 = iota
 	hang         // until its caller cancels it or the deadline ends it
 	fail
+	crawl // answers crawlFor after it arrived, unless cancelled or ended first
 )
+
+// crawlFor is how long a crawling replica takes to answer a search: past
+// the hedge delay of TestNoHedgeToTakenOutReplica, and well within
+// outlierDeadline.
+const crawlFor = 15 * time.Millisecond
 
 // scripted returns a server interceptor that handles every search as mode,
 // which the test may change at any time, says.
@@ -33,9 +41,25 @@ func scripted(mode *atomic.Int32) grpc.ServerOption {
 			return hangSearches(ctx, req, info, handler)
 		case fail:
 			return failSearches(ctx, req, info, handler)
+		case crawl:
+			return crawlSearches(ctx, req, info, handler)
 		}
 		return handler(ctx, req)
 	})
+}
+
+// crawlSearches is a server interceptor that answers every search crawlFor
+// after it arrived, unless its caller cancels it or the deadline ends it
+// first.
+func crawlSearches(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	if _, ok := req.(*annshardpb.SearchRequest); ok {
+		select {
+		case <-time.After(crawlFor):
+		case <-ctx.Done():
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+	}
+	return handler(ctx, req)
 }
 
 // outlierDeadline is the deadline of the searches of the outlier tests: far
@@ -50,6 +74,7 @@ type outlierShard struct {
 	s            *annshard.Shards
 	a, b         string       // the replicas' addresses
 	aMode, bMode atomic.Int32 // answer at first
+	stopB        func()       // stops b before the test ends, cutting its connections
 }
 
 // newOutlierShard starts the replicas of an outlierShard and prepares them
@@ -61,7 +86,7 @@ func newOutlierShard(t *testing.T, hedgeDelay time.Duration) *outlierShard {
 	version := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2))
 	o := &outlierShard{t: t}
 	o.a = annshardtest.Start(t, root, scripted(&o.aMode))
-	o.b = annshardtest.Start(t, root, scripted(&o.bMode))
+	o.b, o.stopB = annshardtest.StartOn(t, "127.0.0.1:0", root, scripted(&o.bMode))
 	o.c = annshardtest.Dial(t, [][]string{{o.a, o.b}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, HedgeDelay: hedgeDelay})
 	var err error
 	if o.s, err = o.c.Prepare(context.Background(), version, 50); err != nil {
@@ -82,6 +107,16 @@ func (o *outlierShard) search(timeout time.Duration) error {
 func (o *outlierShard) calls() map[string]float64 {
 	o.t.Helper()
 	return counts(o.t, o.c, "recserve_shard_calls_total", "replica", "result")
+}
+
+// callsTo returns the calls to the replica at addr in calls, as calls
+// gives them, whatever their result.
+func callsTo(calls map[string]float64, addr string) float64 {
+	var n float64
+	for _, result := range []string{"answered", "failed", "deadline", "cancelled"} {
+		n += calls[addr+" "+result]
+	}
+	return n
 }
 
 // ejections returns the ejections by replica address.
@@ -279,5 +314,77 @@ func TestAnswerClearsTheCount(t *testing.T) {
 	o.until(o.a, "deadline", 5, 2*time.Second)
 	if got := o.ejections(); got[o.a] != 1 {
 		t.Fatalf("ejections %v after five calls in a row ended at the deadline, want one of %s", got, o.a)
+	}
+}
+
+// No hedge asks a replica taken out: once a hanging replica is out, the
+// searches of its shard wait for the other replica, which takes longer than
+// the hedge delay, and send the one taken out nothing but its probes, a
+// second apart. The budget is not what holds the hedges back: the searches
+// that took the replica out spent about three of its reserve of ten.
+func TestNoHedgeToTakenOutReplica(t *testing.T) {
+	o := newOutlierShard(t, 5*time.Millisecond)
+	// With b failing at once, every search waits for a until the deadline:
+	// one that asks b first goes on to a, and one that asks a first sends
+	// its hedge to b, which fails.
+	o.aMode.Store(hang)
+	o.bMode.Store(fail)
+	o.until(o.a, "deadline", 4, 2*time.Second)
+	fifth := time.Now() // a is taken out after this, so probed no sooner than a second after it
+	o.until(o.a, "deadline", 1, 2*time.Second)
+	if got := o.ejections(); got[o.a] != 1 || got[o.b] != 0 {
+		t.Fatalf("ejections %v after five calls to %s ended at the deadline, want one of it", got, o.a)
+	}
+	o.bMode.Store(crawl)
+	before := o.calls()
+	for j := range 20 {
+		if err := o.search(outlierDeadline); err != nil {
+			t.Fatalf("search %d after the ejection: %v", j, err)
+		}
+	}
+	after := o.calls()
+	took := time.Since(fifth)
+	probes := float64(took / time.Second)
+	if n := callsTo(after, o.a) - callsTo(before, o.a); n > probes {
+		t.Fatalf("%v calls to %s, taken out, in %v from 20 searches slower than the hedge delay, want at most %v, its probes: %v", n, o.a, took, probes, after)
+	}
+	if n := after[o.b+" answered"] - before[o.b+" answered"]; n != 20 {
+		t.Fatalf("%v of 20 searches answered by %s, want all", n, o.b)
+	}
+}
+
+// A replica is not taken out while no other replica of its shard has a
+// ready connection: with the other replica's server stopped, a replica
+// whose searches hang has ten calls in a row end at the deadline and stays
+// in, although the other replica is in the selection and its count is
+// clear.
+func TestNoEjectionWhileOtherReplicaDown(t *testing.T) {
+	o := newOutlierShard(t, 0)
+	o.stopB()
+	// Wait until the client's connection to b has left the ready state, for
+	// good, as no server is left to take it: while both connections are
+	// ready, of two searches in a row one asks b first. a answers meanwhile,
+	// so a search that b fails goes on to it.
+	for end, without := time.Now().Add(5*time.Second), 0; without < 2; {
+		if time.Now().After(end) {
+			t.Fatalf("searches still ask %s first 5 s after it stopped: %v", o.b, o.calls())
+		}
+		before := callsTo(o.calls(), o.b)
+		if err := o.search(outlierDeadline); err != nil {
+			t.Fatalf("search after %s stopped: %v", o.b, err)
+		}
+		if callsTo(o.calls(), o.b) == before {
+			without++
+		} else {
+			without = 0
+		}
+	}
+	if got := o.calls(); got[o.b+" deadline"] != 0 {
+		t.Fatalf("calls %v: a call to the stopped %s ended at the deadline, want none, so that only its connection keeps %s in", got, o.b, o.a)
+	}
+	o.aMode.Store(hang)
+	o.until(o.a, "deadline", 10, 3*time.Second)
+	if got := o.ejections(); got[o.a] != 0 || got[o.b] != 0 {
+		t.Fatalf("ejections %v with %s's connection down, want none", got, o.b)
 	}
 }
