@@ -128,6 +128,22 @@ func TestProperty2CatchesBrokenVariant(t *testing.T) {
 	}
 }
 
+// TestCosineOfTinyRow: a row whose norm is too small for 1/norm to be a
+// float32 counts as a zero row, so its cosine similarity is 0, not NaN or
+// an infinity.
+func TestCosineOfTinyRow(t *testing.T) {
+	m, err := vec.NewMatrix(2, []float32{1e-45, 0, 1e-39, 1e-39, 1, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv := m.InvNorms()
+	for _, p := range [][2]int32{{0, 0}, {0, 2}, {1, 1}, {1, 2}} {
+		if c := cosine(m, inv, p[0], p[1]); c != 0 {
+			t.Errorf("cosine of rows %d and %d: %g, want 0", p[0], p[1], c)
+		}
+	}
+}
+
 func TestMMRPrefersDiversity(t *testing.T) {
 	// Items 1 and 2 point the same way; 3 is orthogonal and a little less
 	// relevant; 4 sets the bottom of the relevance range.

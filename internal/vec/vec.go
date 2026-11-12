@@ -28,12 +28,16 @@ func (m Matrix) Rows() int { return len(m.Data) / m.Dim }
 func (m Matrix) Row(i int32) []float32 { return m.Data[int(i)*m.Dim : (int(i)+1)*m.Dim] }
 
 // InvNorms returns 1 / the Euclidean norm of every row, 0 for a zero row.
+// A row whose norm is below about 1/math.MaxFloat32 (2.9e-39), so that
+// 1/norm is not a float32, also gets 0: it counts as a zero row.
 func (m Matrix) InvNorms() []float32 {
 	out := make([]float32, m.Rows())
 	for i := range out {
 		row := m.Row(int32(i))
 		if n := math.Sqrt(Dot(row, row)); n > 0 {
-			out[i] = float32(1 / n)
+			if inv := float32(1 / n); !math.IsInf(float64(inv), 0) {
+				out[i] = inv
+			}
 		}
 	}
 	return out

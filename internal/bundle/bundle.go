@@ -72,7 +72,7 @@ type Bundle struct {
 	Dir      string
 	IDs      []string // IDs[i] is the raw ID of internal ID i; IDs[0] is ""
 	Vectors  vec.Matrix
-	InvNorms []float32     // 1 / the norm of each row of Vectors, 0 for a zero row
+	InvNorms []float32     // 1 / the norm of each row of Vectors, 0 for a zero row (vec.Matrix.InvNorms)
 	Cooc     []int32       // row i holds item i's co-occurring IDs, CoocWidth per row, 0-padded
 	Popular  []int32       // best first
 	Encoder  *onnx.Encoder // user_encoder.onnx; nil when the user vector is the mean
