@@ -2,6 +2,7 @@ package hnsw
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -388,6 +389,33 @@ func TestSmallAndDegenerate(t *testing.T) {
 		if _, err := Build(bad.data, bad.dim, bad.cfg); err == nil {
 			t.Errorf("Build(%v, %d, %+v) accepted", bad.data, bad.dim, bad.cfg)
 		}
+	}
+}
+
+// TestReadRejectsWrappingRowCount gives Read headers whose row count times
+// dim wraps around to the length of the data: Read must return an error,
+// not allocate from the row count.
+func TestReadRejectsWrappingRowCount(t *testing.T) {
+	for _, tc := range []struct {
+		n   int64
+		dim int
+	}{{4 - 1<<63, 2}, {1<<62 + 4, 4}} {
+		// n, dim, M, Mmax0, efConstruction, entry, top, len(upper)
+		head := []int64{tc.n, int64(tc.dim), 16, 32, 1, 0, 0, 0}
+		b := []byte(fileMagic)
+		for _, v := range head {
+			b = binary.LittleEndian.AppendUint64(b, uint64(v))
+		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("n %d, dim %d: Read panicked: %v", tc.n, tc.dim, r)
+				}
+			}()
+			if _, err := Read(bytes.NewReader(b), make([]float32, 4*tc.dim), tc.dim); err == nil {
+				t.Errorf("n %d, dim %d: accepted", tc.n, tc.dim)
+			}
+		}()
 	}
 }
 

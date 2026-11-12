@@ -42,8 +42,10 @@ func Read(r io.Reader, data []float32, dim int) (*Index, error) {
 		return nil, fmt.Errorf("hnsw: header: %w", err)
 	}
 	n, d, m, m0, efc, entry, top, nUpper := head[0], head[1], head[2], head[3], head[4], head[5], head[6], head[7]
+	// The row count is compared with the data's, not multiplied by dim: a
+	// product could wrap around to the data's length.
 	switch {
-	case int64(dim) != d || dim <= 0 || int64(len(data)) != n*d:
+	case int64(dim) != d || dim <= 0 || len(data)%dim != 0 || n != int64(len(data)/dim):
 		return nil, fmt.Errorf("hnsw: index of %d rows of %d values, data has %d values of rows of %d", n, d, len(data), dim)
 	case m < 2 || m > 1<<10 || (m0 != m && m0 != 2*m) || efc < 1 || top < 0 || top > maxLevel || nUpper < 0 || nUpper > n*maxLevel*(1+m):
 		return nil, errors.New("hnsw: header values out of range")
