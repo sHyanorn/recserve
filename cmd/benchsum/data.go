@@ -130,25 +130,25 @@ func readMetrics(path string) (metrics, error) {
 	return p.TextToMetricFamilies(f)
 }
 
-// sum adds the values of name's counters, or the observations of its
-// histograms, whose labels include want.
+// sum adds the values of name's counters and untyped series, or the
+// observations of its histograms, whose labels include want.
 func (m metrics) sum(name string, want map[string]string) float64 {
 	var total float64
 	for _, x := range m[name].GetMetric() {
 		if has(x, want) {
-			total += x.GetCounter().GetValue() + float64(x.GetHistogram().GetSampleCount())
+			total += x.GetCounter().GetValue() + x.GetUntyped().GetValue() + float64(x.GetHistogram().GetSampleCount())
 		}
 	}
 	return total
 }
 
-// by adds the values of name's counters by the value of label.
+// by adds the values of name's counters and untyped series by the value of label.
 func (m metrics) by(name, label string) map[string]float64 {
 	out := map[string]float64{}
 	for _, x := range m[name].GetMetric() {
 		for _, l := range x.GetLabel() {
 			if l.GetName() == label {
-				out[l.GetValue()] += x.GetCounter().GetValue()
+				out[l.GetValue()] += x.GetCounter().GetValue() + x.GetUntyped().GetValue()
 			}
 		}
 	}

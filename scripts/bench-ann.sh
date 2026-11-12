@@ -18,7 +18,7 @@ STEP=$1
 OUT=${OUT:-bench-results/m6/ann}
 ANN_DATA=${ANN_DATA:-$DATA/ann}
 PY=${PY:-python3}
-REF=$(sed -n 's/^ *"median_ns": \([0-9.]*\),*$/\1/p' bench-results/m6/noise-reference.json)
+REF=${REF:-$(sed -n 's/^ *"median_ns": \([0-9.]*\),*$/\1/p' bench-results/m7/noise-reference.json)}
 EFS=120,200,400,800
 mkdir -p "$OUT/raw" "$ANN_DATA/graphs"
 

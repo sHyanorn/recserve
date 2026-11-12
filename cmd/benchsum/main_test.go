@@ -66,11 +66,11 @@ func TestRecovery(t *testing.T) {
 func TestJudge(t *testing.T) {
 	ok := func(f faultRun) faultRun {
 		f.Phases = map[string]stats{"healthy": {P99: 5}, "fault": {P99: 20}, "recovery": {P99: 5}}
-		zero := 0
-		f.Recovery = &zero
+		zero := 0.0
+		f.Recovery, f.Return = &zero, &zero
 		return f
 	}
-	cpu := 3.0
+	share, low := 0.5, 0.25
 	cases := []struct {
 		name string
 		f    faultRun
@@ -79,23 +79,24 @@ func TestJudge(t *testing.T) {
 		{"F2 partial", ok(faultRun{Fault: "F2", Excess: map[string]float64{"shards_partial": 0.9}}), true},
 		{"F2 other shard too", ok(faultRun{Fault: "F2", Excess: map[string]float64{"shards_partial": 0.9, "vector_timeout": 0.02}}), false},
 		{"F3 history", ok(faultRun{Fault: "F3", Excess: map[string]float64{"history_unavailable": 1}}), true},
-		{"F1 degraded", ok(faultRun{Fault: "F1", Excess: map[string]float64{"shards_partial": 0.05}, ReplicaCPU: &cpu}), false},
-		{"F1 replica idle", ok(faultRun{Fault: "F1"}), false},
-		{"F1", ok(faultRun{Fault: "F1", ReplicaCPU: &cpu}), true},
-		{"F6 degraded is reported only", ok(faultRun{Fault: "F6", Excess: map[string]float64{"shards_partial": 0.4}}), true},
-		{"F5 after keepalive", ok(faultRun{Fault: "F5", SilentExcess: map[string]float64{"shards_partial": 0.03}, ReplicaCPU: &cpu}), false},
+		{"F1 degraded", ok(faultRun{Fault: "F1", Excess: map[string]float64{"shards_partial": 0.05}, ReplicaShare: &share}), false},
+		{"F1 no reads", ok(faultRun{Fault: "F1"}), false},
+		{"F1 replica back for the last half only", ok(faultRun{Fault: "F1", ReplicaShare: &low}), false},
+		{"F1", ok(faultRun{Fault: "F1", ReplicaShare: &share}), true},
+		{"F6 degraded is reported only", ok(faultRun{Fault: "F6", Excess: map[string]float64{"shards_partial": 0.4}, ReplicaShare: &share}), true},
+		{"F5 after keepalive", ok(faultRun{Fault: "F5", SilentExcess: map[string]float64{"shards_partial": 0.03}, ReplicaShare: &share}), false},
 	}
 	for _, c := range cases {
 		if got := judge(c.f); (len(got) == 0) != c.pass {
 			t.Errorf("%s: failures %v, want pass %v", c.name, got, c.pass)
 		}
 	}
-	errs := ok(faultRun{Fault: "F6"})
+	errs := ok(faultRun{Fault: "F3"})
 	errs.Phases["recovery"] = stats{Errors: 1}
-	slow := ok(faultRun{Fault: "F6"})
+	slow := ok(faultRun{Fault: "F3"})
 	slow.Phases["fault"] = stats{P99: 51}
-	late := ok(faultRun{Fault: "F6"})
-	ten := 10
+	late := ok(faultRun{Fault: "F3"})
+	ten := 10.0
 	late.Recovery = &ten
 	for _, f := range []faultRun{errs, slow, late} {
 		if got := judge(f); len(got) == 0 {

@@ -1,25 +1,39 @@
 #!/usr/bin/env bash
-# Fault runs of docs/BENCHMARKS.md (Faults, setup and pass criteria):
+# Fault runs of docs/BENCHMARKS.md (Faults, setup and pass criteria (M6), as
+# amended for M7) and the runs of Valkey circuit breaker openings (M7):
 #   scripts/bench-fault.sh FAULT RATE [RUNS]
-# FAULT is F1 to F6, RATE half the headline rate. Each run: toxiproxy between
-# the gateway and the replicas and Valkey, fresh services, 270 s of load from
-# the first request's due time, the fault injected at 90 s and removed at
-# 150 s; the gateway's metrics at 30, 90, 150 s and the end, and the changes
-# of state its Valkey circuit breaker logged. An invalid run is rerun at most
-# twice. Results in OUT (bench-results/m6/faults).
+# FAULT is F1 to F6, with the cache off, or none: nothing injected and the
+# cache on. RATE is half the headline rate; RUNS 3, or 5 with none. Each
+# run: toxiproxy between the gateway and the replicas and Valkey, fresh
+# services, 270 s of load from the first request's due time, the fault
+# injected at 90 s and removed at 150 s; the gateway's metrics at 30, 90,
+# 150 s and the end; from the first request's due time to the end of the
+# load, a read each second of the gateway's metrics of the criteria and the
+# containers' CPU time (OUT/raw/*.reads); the changes of state its Valkey
+# circuit breaker logged, with their time. An invalid run is rerun at most
+# twice. Results in OUT (bench-results/m7/faults; with none,
+# bench-results/m7/breaker).
 cd "$(dirname "$0")/.."
 FAULT=$1 RATE=$2 RUNS=${3:-3}
-OUT=${OUT:-bench-results/m6/faults}
-source scripts/bench-lib.sh
-export SHARD_ADDRS="toxiproxy:19090,toxiproxy:19091;toxiproxy:19092,toxiproxy:19093" VALKEY_ADDR=toxiproxy:16379
-EXTRA_CONTAINERS=toxiproxy
 ARGS=()
 case $FAULT in
 F1 | F2 | F3 | F5) ;;
 F4) ARGS=(-write-share 0.1) ;;
 F6) export ANNSHARD1_IMAGE=recserve/faultshard:${TAG:-dev} ;;
-*) echo "FAULT is F1 to F6" >&2; exit 2 ;;
+none) RUNS=${3:-5} ;;
+*) echo "FAULT is F1 to F6 or none" >&2; exit 2 ;;
 esac
+if [[ $FAULT == none ]]; then
+	OUT=${OUT:-bench-results/m7/breaker}
+	unset CACHE_SIZE
+else
+	OUT=${OUT:-bench-results/m7/faults}
+	export CACHE_SIZE=0
+fi
+unset HEDGE_DELAY BUDGET_HISTORY # the commit's defaults
+source scripts/bench-lib.sh
+export SHARD_ADDRS="toxiproxy:19090,toxiproxy:19091;toxiproxy:19092,toxiproxy:19093" VALKEY_ADDR=toxiproxy:16379
+EXTRA_CONTAINERS=toxiproxy
 env_record
 
 # toxi METHOD PATH [BODY]: a call to toxiproxy's API.
@@ -52,6 +66,27 @@ remove() {
 # metrics PREFIX TAG: the gateway's /metrics.
 metrics() { curl -sf "http://$GATEWAY:8080/metrics" >"$1.$2.metrics"; }
 
+# reads PREFIX: the run's per-second reads, written by poll.
+reads() { echo "$OUT/raw/$(basename "$1").reads"; }
+
+# The gateway's metrics that poll reads: the replicas' calls and ejections,
+# the Valkey calls, the breaker's state and the GC pause time.
+POLLED='recserve_shard_calls_total|recserve_shard_ejections_total|recserve_valkey_calls_total|recserve_valkey_breaker_state|go_gc_duration_seconds_sum'
+
+# poll PREFIX T0: a read each second from T0, the first request's due time
+# in Unix ms, to the end of the load at T0 + 270 s: a line "read <unix ms>",
+# the gateway's /metrics lines of POLLED (none if it does not answer), and
+# a line "cpu <container> <ns>" for each container.
+poll() {
+	local k
+	for ((k = 0; k <= 270; k++)); do
+		at $(($2 + k * 1000))
+		echo "read $(now_ms)"
+		curl -sf -m 0.5 "http://$GATEWAY:8080/metrics" | grep -E "^($POLLED)[{ ]" || true
+		cpu_times | sed 's/^/cpu /'
+	done >"$(reads "$1")"
+}
+
 # lag PREFIX: each second, "<unix ms> <events the gateway accepted> <records
 # ingest applied>"; no line while ingest does not answer.
 lag() {
@@ -65,9 +100,11 @@ lag() {
 	done >"$1.lag"
 }
 
-# attempt PREFIX: one run's files.
+# attempt PREFIX: one run's files. The gateway's whole log goes to OUT/raw,
+# its breaker's lines, JSON with their time, to PREFIX.breaker.
 attempt() {
-	local p=$1 t0 lagpid=
+	local p=$1 t0 lagpid= pollpid gwlog
+	gwlog=$OUT/raw/$(basename "$p").gateway.log
 	rm -f "$p".*
 	[[ $FAULT == F4 ]] && "${COMPOSE[@]}" up -d --force-recreate --wait kafka >/dev/null 2>&1 # no events of an earlier run
 	"${COMPOSE[@]}" up -d --force-recreate toxiproxy >/dev/null 2>&1
@@ -77,6 +114,8 @@ attempt() {
 	noise "$p" before
 	loadgen "$p" "$RATE" 0s 270s "${ARGS[@]}"
 	t0=$(started "$p")
+	poll "$p" "$t0" &
+	pollpid=$!
 	if [[ $FAULT == F4 ]]; then
 		lag "$p" &
 		lagpid=$!
@@ -84,13 +123,11 @@ attempt() {
 	at $((t0 + 30000)) && metrics "$p" b0
 	at $((t0 + 90000)) && echo "inject $(now_ms)" >"$p.marks" && inject && metrics "$p" b1
 	at $((t0 + 150000)) && echo "remove $(now_ms)" >>"$p.marks" && remove && metrics "$p" b2
-	if [[ $FAULT == F1 || $FAULT == F5 ]]; then
-		at $((t0 + 210000)) && cpu_snapshot "$p.late0.cpu"
-		at $((t0 + 270000)) && cpu_snapshot "$p.late1.cpu"
-	fi
 	wait "$LOADGEN" || true
+	wait "$pollpid"
 	metrics "$p" b3
-	docker logs recserve-gateway-1 2>&1 | grep '"valkey circuit breaker"' >"$p.breaker" || true
+	docker logs recserve-gateway-1 >"$gwlog" 2>&1 || true
+	grep '"valkey circuit breaker"' "$gwlog" >"$p.breaker" || true
 	noise "$p" after
 	if [[ -n $lagpid ]]; then
 		at $((t0 + 300000)) # the lag file shows the drain; the histories need it done
@@ -106,10 +143,11 @@ for n in $(seq 1 "$RUNS"); do
 		log "$FAULT run $n attempt $try"
 		attempt "$p"
 		echo "$try" >"$p.attempt"
-		v=$(bin/benchsum fault -prefix "$p" -samples "$(samples "$p")" -fault "$FAULT")
+		v=$(bin/benchsum fault -prefix "$p" -samples "$(samples "$p")" -reads "$(reads "$p")" -fault "$FAULT")
 		log "$v"
 		[[ $v == *"valid true"* ]] && break
 	done
 done
 bin/benchsum faults -dir "$OUT" | tee "$OUT/faults.md"
+bin/benchsum breakers -dir "$OUT" | tee "$OUT/breaker.md"
 down

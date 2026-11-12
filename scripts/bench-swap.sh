@@ -27,11 +27,11 @@ attempt() {
 	for k in $(seq 1 9); do
 		((k % 2)) && v=$OTHER || v=$VERSION
 		at $((t0 + 10000 + 15000 * k))
-		cpu_snapshot "$p.swap$k.cpu0"
+		cpu_times >"$p.swap$k.cpu0"
 		s=$(now_ms)
 		a=$(curl -sf -X POST "http://$admin/v1/admin/swap" -H 'Content-Type: application/json' -d "{\"bundle\":\"/data/bundle/$v\"}")
 		e=$(now_ms)
-		cpu_snapshot "$p.swap$k.cpu1"
+		cpu_times >"$p.swap$k.cpu1"
 		echo "$s $e $a" >>"$p.swaps"
 	done
 	wait "$LOADGEN" || true

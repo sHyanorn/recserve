@@ -98,13 +98,13 @@ func excess(st, base stats) map[string]float64 {
 
 // recovery returns the seconds from removal (ms) until the first 10 s
 // window, starting a whole second after removal, whose p99 is within 1.2
-// times healthy's and whose degraded share is at most 1 percentage point
-// above healthy's; ok is false if no such window ends by end (ms).
+// times healthy's and whose degraded share is within 1 percentage point of
+// healthy's either way; ok is false if no such window ends by end (ms).
 func recovery(samples []sample, healthy stats, removal, end float64) (seconds int, ok bool) {
 	for t := 0; removal+float64(t+10)*1000 <= end; t++ {
 		from := removal + float64(t)*1000
 		w := describe(samples, from, from+10_000)
-		if w.Answers > 0 && w.P99 <= 1.2*healthy.P99 && w.Degraded <= healthy.Degraded+0.01 {
+		if w.Answers > 0 && w.P99 <= 1.2*healthy.P99 && math.Abs(w.Degraded-healthy.Degraded) <= 0.01 {
 			return t, true
 		}
 	}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,37 +11,58 @@ import (
 )
 
 // faultRun is one fault run judged by the criteria of docs/BENCHMARKS.md
-// (Faults, setup and pass criteria). Its phases are healthy [30 s, inject),
-// fault [inject, removal) and recovery [removal, end), from the due time of
-// the run's first request; inject and removal are when the script acted.
+// (Faults, setup and pass criteria (M6), as amended for M7), or, with fault
+// none, a run for the breaker's openings, judged for validity only. Its
+// phases are warmup [0, 30 s), healthy [30 s, inject), fault [inject,
+// removal) and recovery [removal, end), from the due time of the run's
+// first request; inject and removal are when the script acted.
 type faultRun struct {
-	Name     string           `json:"name"`
-	Fault    string           `json:"fault"`
-	Valid    bool             `json:"valid"`
-	Invalid  []string         `json:"invalid,omitempty"`
-	Noisy    bool             `json:"noisy"`
-	InjectS  float64          `json:"inject_s"`
-	RemoveS  float64          `json:"remove_s"`
-	Phases   map[string]stats `json:"phases"`
-	Excess   map[string]float64
-	Recovery *int `json:"recovery_s"` // nil: not recovered
+	Name    string           `json:"name"`
+	Fault   string           `json:"fault"`
+	Valid   bool             `json:"valid"`
+	Invalid []string         `json:"invalid,omitempty"`
+	Noisy   bool             `json:"noisy"`
+	InjectS float64          `json:"inject_s"`
+	RemoveS float64          `json:"remove_s"`
+	Phases  map[string]stats `json:"phases"`
+	Excess  map[string]float64
+	// M6's recovery, with the window's degraded share within 1 point of the
+	// healthy phase's either way, in whole s from removal; nil: none.
+	WindowRecovery *int `json:"window_recovery_s"`
+	// F1, F5 and F6: s from removal to annshard-1's return; nil: not back.
+	Return *float64 `json:"replica_return_s,omitempty"`
+	// The later of the two for F1, F5 and F6, else WindowRecovery; nil: not recovered.
+	Recovery *float64 `json:"recovery_s"`
+	// F1, F5 and F6: annshard-1's share of its shard's answered calls in
+	// [210, 270 s), nil without both reads, and in each second.
+	ReplicaShare  *float64   `json:"replica_share_210_270_s,omitempty"`
+	ReplicaShares []*float64 `json:"replica_share_by_second,omitempty"`
+	// Whether the gateway counted ejections, and with it the ejections
+	// from 30 to 90 s (nil without both reads).
+	OutlierDetection bool     `json:"outlier_detection"`
+	HealthyEjections *float64 `json:"healthy_ejections,omitempty"`
 	// F5: the share of answers with shards_partial in [0, 13 s), [13, 15 s)
 	// and [15 s, removal) after the pause, and the excess of each reason in the last.
 	Silent       []float64                     `json:"silent_shards_partial,omitempty"`
 	SilentExcess map[string]float64            `json:"silent_excess,omitempty"`
-	Hedges       map[string]map[string]float64 `json:"hedges"`    // per phase, by shard/result
-	Failovers    map[string]map[string]float64 `json:"failovers"` // per phase, by replica
-	ReplicaCPU   *float64                      `json:"replica_cpu_last_60s_ms,omitempty"`
+	Hedges       map[string]map[string]float64 `json:"hedges"`                  // per phase from 30 s, by shard/result
+	Failovers    map[string]map[string]float64 `json:"failovers"`               // per phase from 30 s, by replica
 	LagDrainedS  *float64                      `json:"lag_drained_s,omitempty"` // F4; nil: not drained
 	Histories    string                        `json:"histories,omitempty"`     // F4: the property 9 check's result
+	Breaker      []opening                     `json:"breaker_openings"`
 	Pass         bool                          `json:"pass"`
 	Failures     []string                      `json:"failures,omitempty"`
 	Windows      []stats                       `json:"windows"` // each second from the first request
 }
 
-var phaseNames = []string{"healthy", "fault", "recovery"}
+var phaseNames = []string{"warmup", "healthy", "fault", "recovery"}
 
-func summarizeFault(prefix, raw, fault string) (faultRun, error) {
+// replicaFaults are the faults of annshard-1, judged by its share.
+var replicaFaults = map[string]bool{"F1": true, "F5": true, "F6": true}
+
+// summarizeFault reads the files of the run prefix, its samples (raw) and
+// its per-second reads, and judges it.
+func summarizeFault(prefix, raw, readsPath, fault string) (faultRun, error) {
 	var r loadReport
 	if err := readJSON(prefix+".json", &r); err != nil {
 		return faultRun{}, err
@@ -56,18 +76,43 @@ func summarizeFault(prefix, raw, fault string) (faultRun, error) {
 		return faultRun{}, err
 	}
 	start := float64(r.Start.UnixMilli())
+	reads, err := readReads(readsPath, start)
+	if err != nil {
+		return faultRun{}, err
+	}
+	changes, err := readOpenings(prefix + ".breaker")
+	if err != nil {
+		return faultRun{}, err
+	}
 	inject, removal := marks["inject"]-start, marks["remove"]-start
 	end := (r.Warmup + r.Duration) * 1000
 	f := faultRun{Name: filepath.Base(prefix), Fault: fault, InjectS: inject / 1000, RemoveS: removal / 1000, Phases: map[string]stats{}}
-	bounds := []float64{30_000, inject, removal, end}
+	bounds := []float64{0, 30_000, inject, removal, end}
 	for i, p := range phaseNames {
 		f.Phases[p] = describe(samples, bounds[i], bounds[i+1])
 	}
 	healthy, during := f.Phases["healthy"], f.Phases["fault"]
 	f.Excess = excess(during, healthy)
 	if t, ok := recovery(samples, healthy, removal, end); ok {
-		f.Recovery = &t
+		f.WindowRecovery = &t
+		v := float64(t)
+		f.Recovery = &v
 	}
+	if replicaFaults[fault] {
+		endS := int(end / 1000)
+		if v, ok := reads.share(210, 270); ok {
+			f.ReplicaShare = &v
+		}
+		f.ReplicaShares = reads.shares(endS)
+		f.Return = reads.returned(removal/1000, endS)
+		f.Recovery = later(f.WindowRecovery, f.Return)
+	}
+	if f.OutlierDetection = reads.outlierDetection(); f.OutlierDetection {
+		if v, ok := reads.delta("recserve_shard_ejections_total", nil, 30, 90); ok {
+			f.HealthyEjections = &v
+		}
+	}
+	f.Breaker = reads.openings(changes)
 	f.Windows = windows(samples, 0, end)
 	if f.Noisy, err = noisy(prefix); err != nil {
 		return faultRun{}, err
@@ -92,15 +137,6 @@ func summarizeFault(prefix, raw, fault string) (faultRun, error) {
 			f.Silent = append(f.Silent, describe(samples, inject+w[0], inject+w[1]).Reasons["shards_partial"])
 		}
 	}
-	if fault == "F1" || fault == "F5" {
-		c0, err0 := readCPU(prefix + ".late0.cpu")
-		c1, err1 := readCPU(prefix + ".late1.cpu")
-		if err := errors.Join(err0, err1); err != nil {
-			return faultRun{}, err
-		}
-		v := (c1["annshard-1"] - c0["annshard-1"]) / 1e6
-		f.ReplicaCPU = &v
-	}
 	if fault == "F4" {
 		if f.LagDrainedS, err = lagDrained(prefix+".lag", marks["remove"]); err != nil {
 			return faultRun{}, err
@@ -111,13 +147,15 @@ func summarizeFault(prefix, raw, fault string) (faultRun, error) {
 		}
 		f.Histories = strings.TrimSpace(string(data))
 	}
-	f.Failures = judge(f)
-	f.Pass = len(f.Failures) == 0
+	if fault != "none" {
+		f.Failures = judge(f)
+		f.Pass = len(f.Failures) == 0
+	}
 	return f, nil
 }
 
-// readCounters takes each phase's hedges and failovers from the gateway's
-// metrics read at the phase boundaries (b0 to b3).
+// readCounters takes the hedges and failovers of each phase from 30 s from
+// the gateway's metrics read at the phase boundaries (b0 to b3).
 func (f *faultRun) readCounters(prefix string) error {
 	var m [4]metrics
 	for i := range m {
@@ -127,7 +165,7 @@ func (f *faultRun) readCounters(prefix string) error {
 		}
 	}
 	f.Hedges, f.Failovers = map[string]map[string]float64{}, map[string]map[string]float64{}
-	for i, p := range phaseNames {
+	for i, p := range phaseNames[1:] {
 		f.Hedges[p], f.Failovers[p] = map[string]float64{}, map[string]float64{}
 		for _, x := range m[i+1]["recserve_shard_hedges_total"].GetMetric() {
 			shard, result := label(x.GetLabel(), "shard"), label(x.GetLabel(), "result")
@@ -140,6 +178,23 @@ func (f *faultRun) readCounters(prefix string) error {
 		}
 	}
 	return nil
+}
+
+// phaseAt names the phase that holds s seconds from the first request.
+func (f faultRun) phaseAt(s float64) string {
+	switch {
+	case s < 0:
+		return "before the load"
+	case s < 30:
+		return "warmup"
+	case s < f.InjectS:
+		return "healthy"
+	case s < f.RemoveS:
+		return "fault"
+	case s < float64(len(f.Windows)):
+		return "recovery"
+	}
+	return "after the load"
 }
 
 // judge returns the criteria f fails; a valid run passes with none.
@@ -161,24 +216,48 @@ func judge(f faultRun) []string {
 			}
 		}
 	}
-	recoveredWithin := func(s int) {
+	recoveredWithin := func(s float64) {
 		if f.Recovery == nil || *f.Recovery > s {
-			fail("not recovered within %d s", s)
+			fail("not recovered within %g s", s)
 		}
 	}
-	replicaServes := func() {
-		if f.ReplicaCPU == nil || *f.ReplicaCPU <= 0 {
-			fail("annshard-1 used no CPU in the last 60 s")
+	replicaBack := func() {
+		switch {
+		case f.ReplicaShare == nil:
+			fail("no reads at 210 and 270 s, or no call answered between them")
+		case *f.ReplicaShare < shareLate:
+			fail("annshard-1's share in [210, 270 s) %.2f%%", 100**f.ReplicaShare)
+		}
+		if f.Return == nil {
+			fail("annshard-1 not back: no 10 s with a share of at least 30%% in each second")
+		}
+	}
+	// With outlier detection: no ejection in the healthy phase, and the
+	// excess of shards_partial in the span the fault names, if any, at most
+	// 1 point.
+	outliers := func(span string, partial float64) {
+		if !f.OutlierDetection {
+			return
+		}
+		switch {
+		case f.HealthyEjections == nil:
+			fail("no reads at 30 and 90 s for the ejections")
+		case *f.HealthyEjections != 0:
+			fail("%.0f ejections in the healthy phase", *f.HealthyEjections)
+		}
+		if span != "" && partial > 0.01 {
+			fail("shards_partial in %s exceeds the healthy phase's share by %.2f points", span, 100*partial)
 		}
 	}
 	switch f.Fault {
 	case "F1":
 		excessBut(f.Excess, "")
 		recoveredWithin(10)
-		replicaServes()
+		replicaBack()
 	case "F2":
 		excessBut(f.Excess, "shards_partial")
 		recoveredWithin(5)
+		outliers("", 0)
 	case "F3":
 		excessBut(f.Excess, "history_unavailable")
 		recoveredWithin(5)
@@ -198,9 +277,16 @@ func judge(f faultRun) []string {
 	case "F5":
 		excessBut(f.SilentExcess, "")
 		recoveredWithin(10)
-		replicaServes()
+		replicaBack()
+		var partial float64
+		if len(f.Silent) > 0 {
+			partial = f.Silent[0] - f.Phases["healthy"].Reasons["shards_partial"]
+		}
+		outliers("[0, 13 s) after the pause", partial)
 	case "F6":
 		recoveredWithin(5)
+		replicaBack()
+		outliers("the fault phase", f.Excess["shards_partial"])
 	default:
 		fail("unknown fault %q", f.Fault)
 	}

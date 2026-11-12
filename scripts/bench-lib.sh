@@ -4,7 +4,7 @@
 # (make bench-ref). Raw samples go to OUT/raw, which git ignores.
 set -euo pipefail
 
-REF=${REF:-$(sed -n 's/^ *"median_ns": \([0-9.]*\),*$/\1/p' bench-results/m6/noise-reference.json)}
+REF=${REF:-$(sed -n 's/^ *"median_ns": \([0-9.]*\),*$/\1/p' bench-results/m7/noise-reference.json)}
 COMPOSE=(docker compose -f deploy/compose.yaml -f deploy/bench.compose.yaml)
 SERVICES=(ingest annshard-0 annshard-1 annshard-2 annshard-3 gateway)
 CONTAINERS=(gateway annshard-0 annshard-1 annshard-2 annshard-3 valkey kafka ingest)
@@ -29,9 +29,9 @@ cgroups() {
 	return 0
 }
 
-# cpu_snapshot FILE: each container's CPU time in ns, from its cgroup; a
-# stopped container is left out.
-cpu_snapshot() {
+# cpu_times: a line "<container> <ns>" of each container's CPU time, from
+# its cgroup; a stopped container is left out.
+cpu_times() {
 	local e c f
 	for e in "${CGROUPS[@]}"; do
 		c=${e%% *} f=${e#* }
@@ -41,13 +41,13 @@ cpu_snapshot() {
 		else
 			echo "$c $(<"$f")"
 		fi
-	done >"$1"
+	done
 }
 
 # snapshot PREFIX TAG: the gateway's metrics and the containers' CPU time.
 snapshot() {
 	curl -sf "http://$(ip_of gateway):8080/metrics" >"$1.$2.metrics"
-	cpu_snapshot "$1.$2.cpu"
+	cpu_times >"$1.$2.cpu"
 }
 
 # noise PREFIX SIDE: a baseline on CPU 1, flagged against REF.

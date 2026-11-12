@@ -8,7 +8,7 @@ COMPOSE := docker compose -f deploy/compose.yaml
 
 .DEFAULT_GOAL := help
 BENCH   := DATA=$(abspath $(DATA)) VERSION=$(VERSION)
-.PHONY: bench-ref bench-sweep bench-profile bench-compare bench-fault bench-hedge bench-swap bench-kind bench-vegeta bench-ann report
+.PHONY: bench-ref bench-sweep bench-profile bench-compare bench-fault bench-hedge bench-swap bench-kind bench-vegeta bench-ann bench-quality report
 .PHONY: help build test test-real e2e lint fmt proto data bundle images infra-up infra-down up down test-alerts kind-up kind-swap kind-check kind-netpol kind-down
 
 help: ## Show available targets
@@ -76,12 +76,12 @@ kind-down: ## Delete the kind cluster
 	kind delete cluster --name recserve
 
 bench-ref: build ## Take the session's noise reference on an idle machine (docs/BENCHMARKS.md), before the bench- targets
-	mkdir -p bench-results/m6 && taskset -c 1 bin/noisebase -n 10 -cpu 1 -out bench-results/m6/noise-reference.json
+	mkdir -p bench-results/m7 && taskset -c 1 bin/noisebase -n 10 -cpu 1 -out bench-results/m7/noise-reference.json
 
 bench-sweep: build ## Load sweep in compose (docs/BENCHMARKS.md): SCENARIO replay, writes or repeats, CACHE on or off, RATES (empty: the grid, to GRID_MAX if set); DATA, VERSION
 	$(BENCH) GRID_MAX=$(GRID_MAX) scripts/bench-sweep.sh $(SCENARIO) $(CACHE) $(RATES)
 
-bench-fault: build ## Fault runs in compose (docs/BENCHMARKS.md): FAULT F1 to F6, RATE half the headline rate; DATA, VERSION
+bench-fault: build ## Fault runs in compose (docs/BENCHMARKS.md): FAULT F1 to F6 (cache off), or none for the breaker's runs (cache on), RATE half the headline rate; DATA, VERSION
 	$(BENCH) scripts/bench-fault.sh $(FAULT) $(RATE)
 
 bench-hedge: build ## The hedge delay's default from shard call latencies in compose (docs/BENCHMARKS.md): RATE half the headline rate; DATA, VERSION
@@ -98,6 +98,11 @@ bench-vegeta: build ## loadgen and vegeta at RATE, half the headline rate, three
 
 bench-ann: build ## ANN in docs/BENCHMARKS.md, STEP profile or table: annbench and faiss on glove and synth in ANN_DATA (DATA/ann); PY, a Python with faiss-cpu 1.15.1, h5py and numpy
 	$(BENCH) ANN_DATA=$(ANN_DATA) PY=$(PY) scripts/bench-ann.sh $(STEP)
+
+bench-quality: ## Recommendation quality (docs/BENCHMARKS.md) into bench-results/m7/quality.md: TestRealDataQuality on DATA and the bundle DATA/bundle/VERSION; RECSERVE_ORT_LIB for its ONNX models
+	mkdir -p bench-results/m7
+	RECSERVE_DATA=$(abspath $(DATA)) RECSERVE_BUNDLE=$(abspath $(DATA))/bundle/$(VERSION) RECSERVE_QUALITY_OUT=$(abspath bench-results/m7/quality.md) \
+		$(GO) test -count=1 -timeout 60m -run '^TestRealDataQuality$$' ./internal/recommend/
 
 report: ## Charts of docs/BENCHMARKS.md's M6 results into bench-results/m6/figures (needs uv)
 	cd tools/report && uv run --locked python report.py $(abspath bench-results/m6) $(abspath bench-results/m6/figures)

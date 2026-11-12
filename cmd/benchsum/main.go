@@ -5,8 +5,10 @@
 //	benchsum rate -dir D -rate R                 whether rate R meets the headline condition, and whether the sweep stops
 //	benchsum next -dir D [-bisect] [-grid-max R] the sweep's next rate, or "done headline=H" (H with -bisect)
 //	benchsum sweep -dir D                        a sweep's table, from its run summaries
-//	benchsum fault -prefix P -samples S -fault F a fault run judged: P.fault.json
+//	benchsum fault -prefix P -samples S -reads R -fault F
+//	                                             a fault run judged (F none: a breaker run, for validity only): P.fault.json
 //	benchsum faults -dir D                       the fault runs' table
+//	benchsum breakers -dir D                     the breaker's openings in the fault runs, one row each
 //	benchsum compare -dir D                      before and after an optimization (scripts/bench-compare.sh)
 //	benchsum quantile -after M [-before M0] -name N [-label k=v] -q Q
 //	                                             a quantile of a histogram in a /metrics scrape, or between two
@@ -38,14 +40,15 @@ func main() {
 
 func run(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("a subcommand is required: run, rate, next, sweep, fault, faults, swap, swaps, phases, quantile, hedge or histories")
+		return fmt.Errorf("a subcommand is required: run, rate, next, sweep, fault, faults, breakers, swap, swaps, phases, quantile, hedge or histories")
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	prefix := fs.String("prefix", "", "path of the run's files without their suffixes")
 	samples := fs.String("samples", "", "the run's samples, written by loadgen -samples")
+	reads := fs.String("reads", "", "fault: the run's per-second reads, written by scripts/bench-fault.sh")
 	dir := fs.String("dir", "", "directory of a sweep's or of the fault runs' files")
 	rate := fs.Float64("rate", 0, "rate of the sweep")
-	fault := fs.String("fault", "", "F1 to F6, as docs/BENCHMARKS.md names them")
+	fault := fs.String("fault", "", "F1 to F6, as docs/BENCHMARKS.md names them, or none")
 	after := fs.String("after", "", "a /metrics scrape")
 	before := fs.String("before", "", "an earlier scrape of the same process")
 	name := fs.String("name", "", "histogram name")
@@ -109,12 +112,15 @@ func run(args []string, out io.Writer) error {
 		sweepTable(&b, byRate(runs), slices.Sorted(maps.Keys(containers)))
 		return printf(out, "%s", b.String())
 	case "fault":
-		f, err := summarizeFault(*prefix, *samples, *fault)
+		f, err := summarizeFault(*prefix, *samples, *reads, *fault)
 		if err != nil {
 			return err
 		}
 		if err := writeJSON(*prefix+".fault.json", f); err != nil {
 			return err
+		}
+		if f.Fault == "none" {
+			return printf(out, "%s %s: valid %v %v, %d breaker openings\n", f.Name, f.Fault, f.Valid, f.Invalid, len(f.Breaker))
 		}
 		return printf(out, "%s %s: valid %v %v, pass %v %v\n", f.Name, f.Fault, f.Valid, f.Invalid, f.Pass, f.Failures)
 	case "compare":
@@ -126,6 +132,12 @@ func run(args []string, out io.Writer) error {
 	case "faults":
 		var b strings.Builder
 		if err := faultTable(&b, *dir); err != nil {
+			return err
+		}
+		return printf(out, "%s", b.String())
+	case "breakers":
+		var b strings.Builder
+		if err := breakerTable(&b, *dir); err != nil {
 			return err
 		}
 		return printf(out, "%s", b.String())
@@ -215,8 +227,8 @@ func faultTable(w *strings.Builder, dir string) error {
 		return err
 	}
 	slices.Sort(paths)
-	fmt.Fprintln(w, "| Run | Valid | Pass | Healthy p99 | Fault p99 | Fault max | Recovery p99 | Fault degraded | Excess | Recovery s | Errors | Failures |")
-	fmt.Fprintln(w, "|---|---|---|---|---|---|---|---|---|---|---|---|")
+	fmt.Fprintln(w, "| Run | Valid | Pass | Healthy p99 | Fault p99 | Fault max | Recovery p99 | Fault degraded | Excess | Window recovery s | annshard-1 back s | annshard-1 [210, 270 s) | Recovery s | Outlier detection | Errors | Failures |")
+	fmt.Fprintln(w, "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
 	for _, p := range paths {
 		var f faultRun
 		if err := readJSON(p, &f); err != nil {
@@ -230,12 +242,39 @@ func faultTable(w *strings.Builder, dir string) error {
 			}
 		}
 		slices.Sort(ex)
-		rec := "not recovered"
-		if f.Recovery != nil {
-			rec = fmt.Sprint(*f.Recovery)
+		pass := fmt.Sprint(f.Pass)
+		if f.Fault == "none" {
+			pass = "not judged"
 		}
-		fmt.Fprintf(w, "| %s | %v | %v | %.2f | %.2f | %.2f | %.2f | %.1f%% | %s | %s | %d | %s |\n", f.Name, f.Valid, f.Pass, h.P99, d.P99, d.Max, r.P99,
-			100*d.Degraded, strings.Join(ex, ", "), rec, h.Errors+d.Errors+r.Errors, strings.Join(f.Failures, "; "))
+		window, back, share, rec := "not recovered", "", "", "not recovered"
+		if f.WindowRecovery != nil {
+			window = fmt.Sprint(*f.WindowRecovery)
+		}
+		if replicaFaults[f.Fault] {
+			back, share = "not back", "no reads"
+			if f.Return != nil {
+				back = fmt.Sprintf("%.3f", *f.Return)
+			}
+			if f.ReplicaShare != nil {
+				share = fmt.Sprintf("%.1f%%", 100**f.ReplicaShare)
+			}
+		}
+		if f.Recovery != nil {
+			rec = fmt.Sprintf("%.3f", *f.Recovery)
+		}
+		od := "no"
+		if f.OutlierDetection {
+			od = "yes, ejections in [30, 90 s): no reads"
+			if f.HealthyEjections != nil {
+				od = fmt.Sprintf("yes, ejections in [30, 90 s): %.0f", *f.HealthyEjections)
+			}
+		}
+		var errs int
+		for _, ph := range phaseNames {
+			errs += f.Phases[ph].Errors
+		}
+		fmt.Fprintf(w, "| %s | %v | %s | %.2f | %.2f | %.2f | %.2f | %.1f%% | %s | %s | %s | %s | %s | %s | %d | %s |\n", f.Name, f.Valid, pass, h.P99, d.P99, d.Max, r.P99,
+			100*d.Degraded, strings.Join(ex, ", "), window, back, share, rec, od, errs, strings.Join(f.Failures, "; "))
 	}
 	return nil
 }
