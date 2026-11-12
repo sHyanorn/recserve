@@ -21,7 +21,7 @@ type runSummary struct {
 	stats
 	PastBudget    float64            `json:"past_budget_share"` // history read or cache call past -budget-history, over recommend requests
 	CacheHitRate  float64            `json:"cache_hit_rate"`
-	CPUPerRequest map[string]float64 `json:"cpu_ms_per_request"` // each container's CPU time over the window, per answer
+	CPUPerRequest map[string]float64 `json:"cpu_ms_per_request"` // each container's CPU time over the window, per recommendation answered
 }
 
 // summarizeRun reads the files of the run prefix (dir/name) and raw, its
@@ -113,7 +113,7 @@ func meetsAsWritten(runs []runSummary) bool {
 func sweepTable(w *strings.Builder, byRate map[float64][]runSummary, containers []string) {
 	fmt.Fprintf(w, "| Rate | Verdict | D005 as written | p50 | p90 | p99 | p99.9 | max | p99 of each run | Degraded, each run | Past budget | Cache hits |")
 	for _, c := range containers {
-		fmt.Fprintf(w, " %s ms CPU |", c)
+		fmt.Fprintf(w, " %s ms CPU per recommendation |", c)
 	}
 	fmt.Fprintf(w, " Noisy |\n|%s\n", strings.Repeat("---|", 13+len(containers)))
 	for _, rate := range slices.Sorted(maps.Keys(byRate)) {

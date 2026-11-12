@@ -70,8 +70,8 @@ func compareTable(w *strings.Builder, dir string) error {
 	for _, rate := range rates {
 		b, a := key{rate, "before"}, key{rate, "after"}
 		row(w, fmt.Sprintf("%.0f/s p99 ms", rate), p99[b], p99[a])
-		row(w, fmt.Sprintf("%.0f/s replicas' CPU ms per request", rate), replicas[b], replicas[a])
-		row(w, fmt.Sprintf("%.0f/s gateway's CPU ms per request", rate), gateway[b], gateway[a])
+		row(w, fmt.Sprintf("%.0f/s replicas' CPU ms per recommendation", rate), replicas[b], replicas[a])
+		row(w, fmt.Sprintf("%.0f/s gateway's CPU ms per recommendation", rate), gateway[b], gateway[a])
 	}
 	if ann.points > 0 {
 		fmt.Fprintf(w, "\nannbench points left noisy after three attempts: %d of %d\n", ann.noisy, ann.points)

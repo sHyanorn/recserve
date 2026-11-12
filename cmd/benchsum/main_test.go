@@ -3,6 +3,7 @@ package main
 import (
 	"compress/gzip"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -333,5 +334,59 @@ func TestOutcomeErrorIsAnError(t *testing.T) {
 	st := describe(s, 0, 10)
 	if st.Errors != 2 || st.Busy != 0 || st.Answers != 1 || st.Max != 2 || st.Events != 1 || st.EventP99 != 3 {
 		t.Fatalf("%+v", st)
+	}
+}
+
+// A container's CPU time is per recommendation answered: 100 ms over 90
+// recommendations and 10 events is 1.11 ms, and the tables name it so.
+func TestCPUPerRecommendationAnswered(t *testing.T) {
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "200-before-run1")
+	write := func(name, body string) {
+		if err := os.WriteFile(prefix+name, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".json", `{"target_rate":200,"achieved_rate":200,"warmup_s":0,"duration_s":1,"valid":true}`)
+	write(".at0.metrics", "")
+	write(".at1.metrics", "")
+	write(".at0.cpu", "gateway 0\n")
+	write(".at1.cpu", "gateway 100000000\n")
+	write(".noise-before.json", `{"noisy": false}`)
+	write(".noise-after.json", `{"noisy": false}`)
+	var b strings.Builder
+	b.WriteString("i,path,due_ms,latency_ms,status,outcome,degraded,answered,shards\n")
+	for i := range 100 {
+		if i%10 == 9 {
+			fmt.Fprintf(&b, "%d,/v1/events,%d,1,202,events_ok,,-1,-1\n", i, i)
+		} else {
+			fmt.Fprintf(&b, "%d,/v1/recommend,%d,2,200,recommend_ok,,2,2\n", i, i)
+		}
+	}
+	raw := prefix + ".csv.gz"
+	if err := writeGz(raw, b.String()); err != nil {
+		t.Fatal(err)
+	}
+	s, err := summarizeRun(prefix, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := s.CPUPerRequest["gateway"], 100.0/90; math.Abs(got-want) > 1e-12 || s.Answers != 90 || s.Events != 10 {
+		t.Fatalf("gateway %v ms per recommendation, want %v; %d answers, %d events", got, want, s.Answers, s.Events)
+	}
+	var sweep strings.Builder
+	sweepTable(&sweep, map[float64][]runSummary{200: {s}}, []string{"gateway"})
+	if !strings.Contains(sweep.String(), "| gateway ms CPU per recommendation |") {
+		t.Errorf("sweep table:\n%s", sweep.String())
+	}
+	if err := writeJSON(prefix+".summary.json", s); err != nil {
+		t.Fatal(err)
+	}
+	var cmp strings.Builder
+	if err := compareTable(&cmp, dir); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cmp.String(), "| 200/s gateway's CPU ms per recommendation | 1.11 to 1.11 |") {
+		t.Errorf("compare table:\n%s", cmp.String())
 	}
 }
