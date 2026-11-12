@@ -41,7 +41,7 @@ func TestFailoverCountsTheFailedReplica(t *testing.T) {
 	version := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2))
 	failing, healthy := annshardtest.Start(t, root, grpc.UnaryInterceptor(failSearches)), annshardtest.Start(t, root)
 	c := annshardtest.Dial(t, [][]string{{failing, healthy}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}})
-	s, err := c.Prepare(context.Background(), version, 50)
+	s, err := annshardtest.PrepareAll(t, c, version, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestFailureIsNotHiddenByTimeout(t *testing.T) {
 	}))
 	silent := infratest.NewProxy(t, annshardtest.Start(t, root))
 	c := annshardtest.Dial(t, [][]string{{failing, silent.Addr()}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}})
-	s, err := c.Prepare(context.Background(), version, 50)
+	s, err := annshardtest.PrepareAll(t, c, version, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestReplicaWithAnItemOutsideFails(t *testing.T) {
 		t.Fatalf("err = %v, want one that names the replica %s and the version", err, stray)
 	}
 
-	both, err := annshardtest.Dial(t, [][]string{{stray, annshardtest.Start(t, root)}}, annshard.Options{Config: cfg}).Prepare(ctx, version, 50)
+	both, err := annshardtest.PrepareAll(t, annshardtest.Dial(t, [][]string{{stray, annshardtest.Start(t, root)}}, annshard.Options{Config: cfg}), version, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestReplicaDiesDuringSearches(t *testing.T) {
 	})
 	dying := infratest.NewProxy(t, annshardtest.Start(t, root, hold))
 	c := annshardtest.Dial(t, [][]string{{dying.Addr(), annshardtest.Start(t, root)}}, annshard.Options{Config: cfg})
-	s, err := c.Prepare(context.Background(), version, 200)
+	s, err := annshardtest.PrepareAll(t, c, version, 200)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestSearchLatencyObservesEveryCall(t *testing.T) {
 	version := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 50, 2))
 	failing, healthy := annshardtest.Start(t, root, grpc.UnaryInterceptor(failSearches)), annshardtest.Start(t, root, grpc.UnaryInterceptor(slowSearches))
 	c := annshardtest.Dial(t, [][]string{{failing, healthy}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}})
-	s, err := c.Prepare(context.Background(), version, 50)
+	s, err := annshardtest.PrepareAll(t, c, version, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestCallsByReplicaAndResult(t *testing.T) {
 	healthy := annshardtest.Start(t, root)
 	search := func(c *annshard.Client, n int, timeout time.Duration) {
 		t.Helper()
-		s, err := c.Prepare(context.Background(), version, 50)
+		s, err := annshardtest.PrepareAll(t, c, version, 50)
 		if err != nil {
 			t.Fatal(err)
 		}

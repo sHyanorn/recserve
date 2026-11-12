@@ -103,7 +103,7 @@ func TestReplicasKeepTheServingVersion(t *testing.T) {
 	annshardtest.WriteVectors(t, rootA, matrices[0])
 	a := annshardtest.Start(t, rootA)
 	cfg := shard.Config{Shards: 1, Mode: shard.Exact}
-	c := annshardtest.Dial(t, [][]string{{a, annshardtest.Start(t, rootB)}}, annshard.Options{Config: cfg, Serving: func() string { return v1 }})
+	c := annshardtest.Dial(t, [][]string{{a, annshardtest.Start(t, rootB)}}, annshard.Options{Config: cfg, Serving: func() (string, time.Time) { return v1, time.Time{} }})
 	ctx := context.Background()
 	var s2 *annshard.Shards
 	for _, v := range []string{v1, v3, v2} { // a holds v1 and v3, v3 named last
@@ -182,7 +182,7 @@ func TestReplicaCatchesUpOnConnecting(t *testing.T) {
 	a, stopA := annshardtest.StartOn(t, "127.0.0.1:0", root)
 	b, stopB := annshardtest.StartOn(t, "127.0.0.1:0", root)
 	stopB()
-	c := annshardtest.Dial(t, [][]string{{a, b}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, Serving: func() string { return v1 }})
+	c := annshardtest.Dial(t, [][]string{{a, b}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, Serving: func() (string, time.Time) { return v1, time.Time{} }})
 	if _, err := c.Prepare(context.Background(), v1, 100); err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestReplicaFollowsTheVersionServed(t *testing.T) {
 	addr := annshardtest.Start(t, root)
 	var served atomic.Pointer[string]
 	served.Store(new(string))
-	c := annshardtest.Dial(t, [][]string{{addr}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, Serving: func() string { return *served.Load() }})
+	c := annshardtest.Dial(t, [][]string{{addr}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, Serving: func() (string, time.Time) { return *served.Load(), time.Time{} }})
 	if _, err := c.Prepare(context.Background(), v1, 100); err != nil {
 		t.Fatal(err)
 	}

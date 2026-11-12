@@ -113,7 +113,7 @@ const property13HedgeDelay = 10 * time.Millisecond
 func TestProperty13HedgesStayWithinBudget(t *testing.T) {
 	err := checkProperty13(t, 150, func(addrs []string, version string) func(ctx context.Context, k int) error {
 		c := annshardtest.Dial(t, [][]string{addrs}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, HedgeDelay: property13HedgeDelay})
-		s, err := c.Prepare(context.Background(), version, 200)
+		s, err := annshardtest.PrepareAll(t, c, version, 200)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -117,7 +117,7 @@ func TestSilentReplicaStopsCostingHedges(t *testing.T) {
 	silent := infratest.NewProxy(t, annshardtest.Start(t, root))
 	cfg := shard.Config{Shards: 1, Mode: shard.Exact}
 	c := annshardtest.Dial(t, [][]string{{silent.Addr(), annshardtest.Start(t, root)}}, annshard.Options{Config: cfg, HedgeDelay: 20 * time.Millisecond})
-	s, err := c.Prepare(context.Background(), version, 100)
+	s, err := annshardtest.PrepareAll(t, c, version, 100)
 	if err != nil {
 		t.Fatal(err)
 	}

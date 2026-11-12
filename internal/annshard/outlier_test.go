@@ -89,7 +89,7 @@ func newOutlierShard(t *testing.T, hedgeDelay time.Duration) *outlierShard {
 	o.b, o.stopB = annshardtest.StartOn(t, "127.0.0.1:0", root, scripted(&o.bMode))
 	o.c = annshardtest.Dial(t, [][]string{{o.a, o.b}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, HedgeDelay: hedgeDelay})
 	var err error
-	if o.s, err = o.c.Prepare(context.Background(), version, 50); err != nil {
+	if o.s, err = annshardtest.PrepareAll(t, o.c, version, 50); err != nil {
 		t.Fatal(err)
 	}
 	return o
