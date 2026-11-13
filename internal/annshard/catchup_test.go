@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -242,4 +243,68 @@ func TestReplicaFollowsTheVersionServed(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitReady(t, addr)
+}
+
+// A replica that failed to prepare the version served is told of the next
+// one within a second of its activation: the wait after a failure is for the
+// version that failed only (D044).
+func TestFailedPrepareDoesNotDelayTheNextVersion(t *testing.T) {
+	r := rand.New(rand.NewPCG(18, 18))
+	root, elsewhere := t.TempDir(), t.TempDir()
+	v1 := annshardtest.WriteVectors(t, elsewhere, shardtest.RandomMatrix(r, 100, 2)) // one the replica cannot build
+	v2 := annshardtest.WriteVectors(t, root, shardtest.RandomMatrix(r, 100, 2))
+	var mu sync.Mutex
+	failed := 0        // Prepares naming v1 served that failed
+	var told time.Time // when the first Prepare naming v2 served returned
+	seen := grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		resp, err := handler(ctx, req)
+		if p, ok := req.(*annshardpb.PrepareRequest); ok {
+			mu.Lock()
+			switch {
+			case p.GetServingVersion() == v1 && err != nil:
+				failed++
+			case p.GetServingVersion() == v2 && err == nil && told.IsZero():
+				told = time.Now()
+			}
+			mu.Unlock()
+		}
+		return resp, err
+	})
+	addr := annshardtest.Start(t, root, seen)
+	var served atomic.Pointer[string]
+	served.Store(&v1)
+	c := annshardtest.Dial(t, [][]string{{addr}}, annshard.Options{Config: shard.Config{Shards: 1, Mode: shard.Exact}, Serving: func() string { return *served.Load() }})
+	waitFor := func(what string, done func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+			mu.Lock()
+			ok := done()
+			mu.Unlock()
+			if ok {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: not within 10 s", what)
+			}
+		}
+	}
+	waitFor("the replica fails to prepare v1", func() bool { return failed > 0 })
+	if _, err := c.Prepare(context.Background(), v2, 100); err != nil {
+		t.Fatal(err)
+	}
+	if annshardtest.Ready(t, addr) {
+		t.Fatal("ready on v2 before it is served")
+	}
+	served.Store(&v2)
+	activated := time.Now()
+	waitFor("the replica is told v2 is served", func() bool { return !told.IsZero() })
+	mu.Lock()
+	took := told.Sub(activated)
+	mu.Unlock()
+	if took > 2*time.Second {
+		t.Fatalf("the replica was told v2 is served %v after its activation", took)
+	}
+	if !annshardtest.Ready(t, addr) {
+		t.Fatal("not ready on v2 once told it is served")
+	}
 }

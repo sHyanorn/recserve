@@ -277,12 +277,14 @@ const followEvery = time.Second
 // watch keeps the connection to r, a replica of shard i, open until Close.
 // While it is up, it has r prepare the version served whenever r has not
 // been prepared with that version on this connection, and after a failure
-// asks again catchUpWait later: a replica that restarted, was down during a
-// prepare or could not prepare becomes ready without a search finding it
-// lacking, and every replica learns of a swap once it is active (D044).
+// asks again for that version catchUpWait later: a replica that restarted,
+// was down during a prepare or could not prepare becomes ready without a
+// search finding it lacking, and every replica learns of a swap once it is
+// active, also one that has just failed to prepare the version before (D044).
 func (c *Client) watch(r *replica, i int) {
 	var held string     // the version served that r was prepared with on this connection
-	var retry time.Time // after a failure, the time to ask again
+	var failed string   // the version served whose Prepare failed last
+	var retry time.Time // the time to ask again for failed
 	for {
 		st := r.conn.GetState()
 		if st != connectivity.Ready {
@@ -292,12 +294,12 @@ func (c *Client) watch(r *replica, i int) {
 		case connectivity.Idle:
 			r.conn.Connect()
 		case connectivity.Ready:
-			if v := c.opt.Serving(); v != "" && v != held && !time.Now().Before(retry) {
+			if v := c.opt.Serving(); v != "" && v != held && (v != failed || !time.Now().Before(retry)) {
 				if err := c.prepareOn(r, c.index(v, i), v); err == nil {
 					held = v
 				} else if c.ctx.Err() == nil {
 					c.opt.Log.Warn("a replica could not prepare the version served", "replica", r.addr, "version", v, "shard", i, "err", err)
-					retry = time.Now().Add(catchUpWait)
+					failed, retry = v, time.Now().Add(catchUpWait)
 				}
 			}
 		}
