@@ -12,6 +12,7 @@ import (
 
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/onnx"
+	"github.com/sHyanorn/recserve/internal/shard"
 	"github.com/sHyanorn/recserve/internal/vec"
 )
 
@@ -111,28 +112,79 @@ func BenchmarkRankRealData(b *testing.B) {
 			b.Error(err)
 		}
 	})
+	p := newPipeline(b, bd, nil)
+	var cases []rankCase
+	for _, g := range goldenCases(b, dir) {
+		cases = append(cases, newRankCase(b, p, g.History))
+	}
+	benchRank(b, p, cases)
+}
+
+// BenchmarkRealExactSearch is one exact search of every item of the bundle
+// in RECSERVE_BUNDLE for the VectorTop best, by one in-process shard, with
+// its golden cases' user vectors and histories (README, Scale); run it with
+// -cpu 1 on one core.
+func BenchmarkRealExactSearch(b *testing.B) {
+	dir := os.Getenv("RECSERVE_BUNDLE")
+	if dir == "" {
+		b.Skip("RECSERVE_BUNDLE not set")
+	}
+	_, m, err := bundle.Vectors(dir)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cfg := shard.DefaultConfig
+	cfg.Shards = 1
+	s, err := shard.Build(m, cfg)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cases := goldenCases(b, dir)
+	seen := make([]map[int32]bool, len(cases))
+	for i, g := range cases {
+		seen[i] = map[int32]bool{}
+		for _, id := range g.History {
+			seen[i][id] = true
+		}
+	}
+	i := 0
+	for b.Loop() {
+		if _, err := s.Search(context.Background(), 0, cases[i%len(cases)].UserEmb, VectorTop, seen[i%len(cases)]); err != nil {
+			b.Fatal(err)
+		}
+		i++
+	}
+	b.ReportMetric(float64(m.Rows()-1), "items")
+	b.ReportMetric(float64(m.Dim), "dim")
+}
+
+// goldenCase is the part of a golden case the benchmarks read.
+type goldenCase struct {
+	History []int32   `json:"history"`
+	UserEmb []float32 `json:"user_emb"`
+}
+
+// goldenCases reads the golden cases of the bundle in dir.
+func goldenCases(b *testing.B, dir string) []goldenCase {
 	f, err := os.Open(filepath.Join(dir, "golden.jsonl"))
 	if err != nil {
 		b.Fatal(err)
 	}
 	defer f.Close() //nolint:errcheck // read only
-	p := newPipeline(b, bd, nil)
-	var cases []rankCase
+	var cases []goldenCase
 	sc := bufio.NewScanner(f)
 	sc.Buffer(nil, 1<<20)
 	for sc.Scan() {
-		var g struct {
-			History []int32 `json:"history"`
-		}
+		var g goldenCase
 		if err := json.Unmarshal(sc.Bytes(), &g); err != nil {
 			b.Fatal(err)
 		}
-		cases = append(cases, newRankCase(b, p, g.History))
+		cases = append(cases, g)
 	}
 	if err := sc.Err(); err != nil {
 		b.Fatal(err)
 	}
-	benchRank(b, p, cases)
+	return cases
 }
 
 // initORTIfSet initializes ONNX Runtime when RECSERVE_ORT_LIB names it, so

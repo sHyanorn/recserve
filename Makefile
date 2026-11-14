@@ -10,7 +10,7 @@ COMPOSE := docker compose -f deploy/compose.yaml
 
 .DEFAULT_GOAL := help
 BENCH   := DATA=$(abspath $(DATA)) VERSION=$(VERSION) REF_FILE=$(REF_FILE)
-.PHONY: bench-ref bench-sweep bench-profile bench-compare bench-fault bench-hedge bench-swap bench-kind bench-vegeta bench-ann bench-quality bench-bundles report
+.PHONY: bench-ref bench-sweep bench-profile bench-compare bench-fault bench-hedge bench-swap bench-kind bench-vegeta bench-ann bench-quality bench-bundles bench-exact report
 .PHONY: help build test test-real e2e lint fmt proto data bundle images infra-up infra-down up down test-alerts kind-up kind-swap kind-check kind-netpol kind-down
 
 help: ## Show available targets
@@ -112,6 +112,11 @@ bench-bundles: ## A bundle against the baseline (docs/BENCHMARKS.md, seqrec-lab'
 	RECSERVE_DATA=$(abspath $(DATA)) RECSERVE_BUNDLE=$(abspath $(DATA))/bundle/$(VERSION) RECSERVE_BUNDLE_B=$(abspath $(BUNDLE_B)) \
 		RECSERVE_COMPARE_OUT=$(abspath bench-results/m7)/bundles-$(notdir $(abspath $(BUNDLE_B))).md \
 		$(GO) test -count=1 -timeout 60m -run '^TestRealDataQuality$$' ./internal/recommend/
+
+bench-exact: ## Exact search of every item of the bundle DATA/bundle/VERSION on CPU 1 into bench-results/m8/exact-search.txt (README, Scale)
+	mkdir -p bench-results/m8
+	RECSERVE_BUNDLE=$(abspath $(DATA))/bundle/$(VERSION) taskset -c 1 $(GO) test -count=1 -run '^$$' -bench '^BenchmarkRealExactSearch$$' \
+		-benchtime 2000x -count 10 -cpu 1 ./internal/recommend/ | tee bench-results/m8/exact-search.txt
 
 report: ## Charts of docs/BENCHMARKS.md's M6 results into bench-results/m6/figures (needs uv)
 	cd tools/report && uv run --locked python report.py $(abspath bench-results/m6) $(abspath bench-results/m6/figures)
