@@ -89,6 +89,12 @@ func (c qualityCondition) hook() func(context.Context, string, int) error {
 // request, and no other, and if c fails a stage in no request.
 func runCondition(p *Pipeline, c qualityCondition, events []dataset.Row) ([]int, int, error) {
 	p.stall = c.hook()
+	return runConditionOn(func(int64) (*Pipeline, error) { return p, nil }, c, events)
+}
+
+// runConditionOn is runCondition with the pipeline of each request given
+// by its time.
+func runConditionOn(pipeline func(ts int64) (*Pipeline, error), c qualityCondition, events []dataset.Row) ([]int, int, error) {
 	ranks := make([]int, len(events))
 	degraded := make([][]string, len(events))
 	forced := make([]int32, len(events))
@@ -96,6 +102,10 @@ func runCondition(p *Pipeline, c qualityCondition, events []dataset.Row) ([]int,
 	g.SetLimit(runtime.GOMAXPROCS(0))
 	for i, e := range events {
 		g.Go(func() error {
+			p, err := pipeline(e.TS)
+			if err != nil {
+				return fmt.Errorf("event %d: %w", i, err)
+			}
 			var n atomic.Int32
 			resp, err := p.Recommend(context.WithValue(ctx, forcedKey{}, &n), Request{User: e.User, K: qualityK, TS: e.TS})
 			if err != nil {
