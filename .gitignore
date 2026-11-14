@@ -12,3 +12,4 @@ __pycache__/
 !internal/onnx/onnxtest/testdata/*.onnx
 bench-results/m6/**/raw/
 bench-results/m7/**/raw/
+bench-results/m8/**/valid-ranks.txt.gz
