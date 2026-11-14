@@ -1,0 +1,27 @@
+# Components
+
+Every component in place, with the decisions that define it. The README gives the overview.
+
+- Retrieval from co-occurrence, popularity and vectors, searched exactly or with a hand-written HNSW in two shards, in the gateway or on replicas (D016, D024, D028)
+- Shard tier over gRPC: `annshard` replicas answer only from the index a request names, and the gateway merges their results as it does its own shards' (D040)
+- Per shard, a search goes to the next replica at once when one fails and to a second one when the first is slow, at most one hedge per search and about one search in ten; a keepalive takes a replica that went silent out of use (D041)
+- Bundle swaps across replicas: every replica prepares the version, one per shard is enough to go on, and a replica that missed it, or restarted, catches up as soon as the gateway's connection to it is up; a replica keeps two versions and never drops the one the last `Prepare` to reach it names as served, which is the version the gateway serves except for about a second after a swap, with several gateways, or after a `Prepare` it ran late (D042, D043, D044, D057)
+- Replica readiness on `grpc.health.v1`: ready while it holds the version the last `Prepare` to reach it names as served, so a rolling restart that waits for it keeps every shard served (D044)
+- Shutdown on SIGTERM: a replica reports not ready and drains its calls within `-drain`; the gateway answers `/readyz` with 503, goes on answering for `-shutdown-delay` with each response closing its connection, then drains (D045)
+- A bundle's version is the digest of its files, checked by the gateway and by every replica (D046)
+- User encoder and ranker through ONNX Runtime (D026, D027); a logistic-regression ranker over six features, trained on the valid split in `tools/bundle`, whose bundle carries golden features that the gateway recomputes at load, within 1e-6 (D027)
+- A/B arms by a hash of the experiment and the user, ranked or in retrieval order, in the response, the cache key and an exposure log (D049)
+- Rate and in-flight limits answering 503 at once, without touching readiness; kind's values come from M6's capacity estimate (D050)
+- OpenTelemetry traces from the gateway's API through each stage to the replicas' searches, exported over OTLP; Jaeger in compose (D051)
+- Seen-item filter, deduplication and MMR; per-stage deadlines with degradation reasons and shard coverage in every response (D029)
+- Result cache keyed by bundle version, A/B arm and the user's history (D030)
+- Two-phase bundle swap: prepare and verify in the background, atomic activation, previous bundle closed once no request holds it (D031)
+- Events through Kafka to an ingest consumer that applies them idempotently and commits after applying (D034, D035)
+- User histories and the result cache on Valkey, shared by the gateways; concurrent misses on one key computed once (D033, D036)
+- Circuit breaker on the gateway's Valkey calls; connections to Valkey opened and replaced outside the request path (D037)
+- Tests on the built binaries with ingest killed, Valkey paused, Kafka stopped, and, on four `annshard` processes, a replica killed, a swap, an empty restart, a rejected swap, swaps in a row over three bundles and a rolling restart of the replicas under requests (`make e2e`)
+- Prometheus metrics, among them each replica call's latency, from which the hedge delay is set (D041); pprof on the gateway's admin listener and, with `-debug-addr`, on the replicas (D052)
+- Load generator corrected for coordinated omission, with per-second windows and a workload of repeated requests; `make bench-*` targets that run the load sweeps, six fault injections with toxiproxy and container control, bundle swaps under load and the ANN measurements, each with noise baselines and an environment record, judged by `cmd/benchsum` against criteria committed before the runs (D052)
+- Inner products in AVX2 for exact search and in AVX for HNSW, each summed in one fixed order that the Go code on other CPUs matches to the bit (D053, D055)
+- Images run as a non-root user on distroless; compose with Prometheus, an alert on replica failovers, and Grafana (D047)
+- kind manifests: replicas as a StatefulSet ready by `grpc.health.v1`, gateways with an HPA, Pod Security `restricted`, and a NetworkPolicy that only the gateways pass, whose enforcement CI checks; a swap is a rollout of the gateways that keeps the replicas to two versions; at 100 requests/s through rolling restarts of both and a swap, with the gateways' stage budgets at SPEC §5's values, three runs had no failed response and at most 0.133% of a phase's responses degraded (D047, D048; `bench-results/m6/kind`)

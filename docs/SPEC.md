@@ -38,7 +38,7 @@ An online recommendation and search serving system written in Go. A request goes
 
 ## 3. Scale, stated plainly
 
-The catalog served is Amazon Reviews 2023 Video_Games, 5-core: 25.6k items (137.2k before filtering). Exact search over that many 64-dimensional vectors takes about 2 ms on one core (scaled from the 1M-vector measurement in M0), so at this size neither ANN nor sharding is needed; the service shards it anyway to exercise the mechanism. ANN and shard performance is measured separately on 1M-scale vectors (glove-100-angular and synthetic vectors, D008), and the report says which figures come from which.
+The catalog served is Amazon Reviews 2023 Video_Games, 5-core: 25.6k items, 137.2k before filtering. Exact search over its 22,976 items that have a vector, at 256 dimensions, takes a median of 1.784 ms on one core, measured by `make bench-exact` into `bench-results/m8/exact-search.txt`. Items whose vector is zero are left out of the shards (D028). At this size neither ANN nor sharding is needed; the service shards it anyway to exercise the mechanism. ANN and shard performance is measured separately on 1M-scale vectors: glove-100-angular and synthetic vectors (D008), and the report says which figures come from which.
 
 All load tests run on one 4-vCPU VM. Kafka, Valkey, the shards and their replicas, the gateway, the ingest consumer and the load generator share its CPUs and memory, so the figures show behavior under load and relative effects (a fault, a cache, a degradation); they do not predict the capacity of a real multi-machine deployment. Headline figures come from docker compose; the kind cluster is used to check deployment behavior, not for throughput, since its own control plane runs on the same CPUs.
 

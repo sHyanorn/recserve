@@ -358,6 +358,26 @@ On kind (D022), loadgen sends a fixed rate of 100 requests/s for 5 minutes while
 
 ## Results
 
+### The README's results as of commit 6232424
+
+Kept here in full when the README was shortened.
+
+In the latest fault runs (275 requests/s on one 4-vCPU VM, result cache off, three runs per fault), four faults passed their criteria with no error and a fault-phase p99 of 6.8 to 20.5 ms: a replica killed, a replica paused, a replica whose searches hang, and 50 ms of latency on a shard. Valkey down failed: one run took 7 s to recover with 5 s allowed. The ingest consumer paused was not judged: one of its runs had no valid attempt. The runs are in this file (M7, second set), judged by its fault criteria of M6 as amended for M7.
+
+Measured in M6 and M7 on 4-vCPU cloud VMs, with every service on the same three CPUs ([report with charts](../bench-results/m6/report.md), this file). The figures are that machine's and that topology's, and figures from different VMs are not compared.
+
+| What | Result |
+|---|---|
+| Headline: the highest rate with p99 ≤ 50 ms and at most 1% of the responses degraded; replay, cache off | 550 requests/s, p99 4.6 to 5.1 ms (with the earlier 3 ms history budget) |
+| One gateway on 2 CPUs | about 1,800 requests/s, an estimate from its CPU per request |
+| Faults at half the headline, three runs each | replica killed, 50 ms on a shard, Valkey down, searches hanging: pass by the criteria as written, though for the replica faults the criteria cannot show that a restarted replica serves again or how fast searches recover; ingest paused, replica paused: fail, each on one second with Valkey's circuit breaker open |
+| Faults with the cache off, three runs each (M7) | replica killed, replica paused, searches hanging, Valkey down: pass; the replica answering again within 5 s of the fault's end and taking half of its shard's calls in the last minute; 50 ms on a shard: fail, on one second with the Valkey breaker open; consumer paused: not judged, two valid runs of three |
+| Outlier detection (M7), cache off | replica paused: fault phase p99 5.1 to 5.5 ms against 17.4 to 17.7 without it, pass; searches hanging: 5.7 to 6.4 ms against 18.2 to 18.4, fail, one run of three recovering in 13 s with 5 allowed; 50 ms on a shard: fail, on one second with the Valkey breaker open, one run of three not valid |
+| Faults with the cache off and outlier detection, second set (M7, another VM), three runs each | replica killed, 50 ms on a shard, replica paused, searches hanging: pass, fault phase p99 6.8 to 20.5 ms; Valkey down: fail, one run recovering in 7 s with 5 allowed; consumer paused: not judged, two valid runs of three; with no fault and the cache on, no breaker opening in five runs |
+| Recommendation quality on 43,249 test events, each degradation forced (M7) | recall@10 0.0181 healthy, 0.0098 without co-occurrence, 0.0050 without the ranker; without the encoder, with a shard missing or with HNSW at ef 400, every difference within 0.0004 of healthy |
+| `vec.Dot` in AVX2 | the replicas' CPU per request 37% lower, p99 a quarter lower at 200 requests/s |
+| HNSW on glove-100, one thread | p99 1.0 to 1.3 times faiss's at the same ef; recall@100 reaches 0.95 only at a p99 of 7.66 ms |
+
 ### M0 (2026-11-08 and 09)
 
 One cloud VM: Intel Xeon @ 2.10GHz, 4 vCPU, 15 GB, kernel 6.18.44, Go 1.27.3. Session noise reference 820,984 ns per pass (`bench-results/m0/noise-reference.json`, upper median; threshold 903,082 ns); for the coder/hnsw rerun 816,650 ns (`noise-reference-2.json`, true median). Raw results are in `bench-results/m0`.
