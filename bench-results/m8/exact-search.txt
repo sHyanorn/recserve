@@ -1,0 +1,16 @@
+goos: linux
+goarch: amd64
+pkg: github.com/sHyanorn/recserve/internal/recommend
+cpu: Intel(R) Xeon(R) Processor @ 2.30GHz
+BenchmarkRealExactSearch 	    2000	   1890253 ns/op	       256.0 dim	     22976 items
+BenchmarkRealExactSearch 	    2000	   1700234 ns/op	       256.0 dim	     22976 items
+BenchmarkRealExactSearch 	    2000	   1759784 ns/op	       256.0 dim	     22976 items
+BenchmarkRealExactSearch 	    2000	   1665349 ns/op	       256.0 dim	     22976 items
+BenchmarkRealExactSearch 	    2000	   1663368 ns/op	       256.0 dim	     22976 items
+BenchmarkRealExactSearch 	    2000	   1736165 ns/op	       256.0 dim	     22976 items
+BenchmarkRealExactSearch 	    2000	   1808581 ns/op	       256.0 dim	     22976 items
+BenchmarkRealExactSearch 	    2000	   1826961 ns/op	       256.0 dim	     22976 items
+BenchmarkRealExactSearch 	    2000	   1824580 ns/op	       256.0 dim	     22976 items
+BenchmarkRealExactSearch 	    2000	   1816816 ns/op	       256.0 dim	     22976 items
+PASS
+ok  	github.com/sHyanorn/recserve/internal/recommend	36.499s

@@ -121,9 +121,10 @@ func BenchmarkRankRealData(b *testing.B) {
 }
 
 // BenchmarkRealExactSearch is one exact search of every item of the bundle
-// in RECSERVE_BUNDLE for the VectorTop best, by one in-process shard, with
-// its golden cases' user vectors and histories (README, Scale); run it with
-// -cpu 1 on one core.
+// in RECSERVE_BUNDLE whose vector is not zero (D028) for the VectorTop best,
+// by one in-process shard, with its golden cases' user vectors and histories
+// (README, Scale); items is the number searched. Run it with -cpu 1 on one
+// core.
 func BenchmarkRealExactSearch(b *testing.B) {
 	dir := os.Getenv("RECSERVE_BUNDLE")
 	if dir == "" {
@@ -154,7 +155,7 @@ func BenchmarkRealExactSearch(b *testing.B) {
 		}
 		i++
 	}
-	b.ReportMetric(float64(m.Rows()-1), "items")
+	b.ReportMetric(float64(m.Rows()-1-s.Zeroes()), "items")
 	b.ReportMetric(float64(m.Dim), "dim")
 }
 
