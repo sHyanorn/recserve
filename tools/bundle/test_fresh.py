@@ -3,7 +3,7 @@ and ties."""
 
 import numpy as np
 
-from fresh import State, event_id, popularity_rank
+from fresh import State, event_id, popularity_rank, select_window
 
 IX = {f"i{k}": k for k in range(1, 5)}
 
@@ -42,3 +42,10 @@ def test_ties_to_the_lower_id_and_popularity_rank():
     assert popularity_rank(s, 1, 10, 10, set()) == 4  # no events: after every item with some, then by ID
     assert popularity_rank(s, 4, 10, 10, {4}) == 0
     assert np.array_equal(s.counts(10, 10), [0, 0, 1, 1, 2])
+
+
+def test_select_window():
+    # 0.05812 and 0.05808 are equal to four decimals: the higher NDCG@10, then the shorter window.
+    assert select_window([(1, 0.04, 0.03), (14, 0.05812, 0.0322), (30, 0.05808, 0.0309)]) == 14
+    assert select_window([(7, 0.05, 0.02), (14, 0.05, 0.02)]) == 7
+    assert select_window([(7, 0.0499, 0.09), (14, 0.0501, 0.02)]) == 14

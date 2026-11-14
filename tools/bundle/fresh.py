@@ -12,7 +12,9 @@ writes OUT/popularity_<d>d.npy, the rank of each valid event's item under the
 popularity reference with a window of d days (every item ranked by its events
 in [ts - d days, ts), ties to the lower internal ID, the history's items left
 out, 0 for an item in the history), and prints each window's metrics and the
-SHA-256 of its ranks. It reads the train and valid splits only.
+SHA-256 of its ranks, then the window selected by the registration's rule
+(docs/registration/m8-freshness.md, 6.2). It reads the train and valid
+splits only.
 """
 
 import argparse
@@ -136,8 +138,9 @@ def main(data, ids_path, out, category, days):
     for evs in seen.values():
         evs.sort()
     os.makedirs(out, exist_ok=True)
+    scores = []
     for d in days:
-        ranks = np.zeros(len(valid), dtype=np.int32)
+        ranks = np.zeros(len(valid), dtype=np.int64)
         for k, (u, raw, ts) in enumerate(valid):
             history = {i for t, i in seen[u] if t < ts}
             ranks[k] = popularity_rank(state, item_ix[raw], ts, d * DAY, history)
@@ -149,6 +152,14 @@ def main(data, ids_path, out, category, days):
         with open(path, "rb") as f:
             digest = hashlib.sha256(f.read()).hexdigest()
         print(f"{d}d: recall@10 {hit.mean():.4f} recall@20 {r20:.4f} NDCG@10 {ndcg:.4f} sha256 {digest}")
+        scores.append((d, hit.mean(), ndcg))
+    print(f"selected: {select_window(scores)}d")
+
+
+def select_window(scores):
+    """The window of (days, recall@10, NDCG@10) with the highest recall@10
+    to four decimals, then the highest NDCG@10, then the fewest days."""
+    return min(scores, key=lambda s: (-round(s[1], 4), -s[2], s[0]))[0]
 
 
 if __name__ == "__main__":
