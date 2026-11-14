@@ -1,5 +1,6 @@
 GO      ?= go
 DATA    ?= data
+CATEGORY ?= Video_Games
 ENCODER ?= mean
 BUNDLE  ?=
 TAG     ?= dev
@@ -37,8 +38,8 @@ proto: ## Lint the proto files and regenerate their Go code (needs buf v1.75.0)
 	buf lint
 	buf generate
 
-data: ## Download the Amazon 2023 Video_Games split and metadata into DATA
-	scripts/data.sh $(DATA)
+data: ## Download an Amazon 2023 category's split into DATA: CATEGORY, Video_Games (with its metadata) by default
+	scripts/data.sh $(DATA) $(CATEGORY)
 
 bundle: ## Build the baseline bundle into DATA/bundle (needs uv); ENCODER=onnx adds user_encoder.onnx, RANKER=1 a trained ranker.onnx
 	cd tools/bundle && uv run --locked python build.py $(abspath $(DATA)) $(abspath $(DATA))/bundle --encoder $(ENCODER) $(if $(RANKER),--ranker)
