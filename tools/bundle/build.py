@@ -1,18 +1,21 @@
 """Build a baseline bundle (docs/SPEC.md §8) from an Amazon 2023 category's split.
 
-usage: build.py DATA OUT [--encoder mean|onnx] [--ranker] [--category C]
+usage: build.py DATA OUT [--encoder mean|onnx] [--ranker] [--category C] [--baseline]
 
 DATA holds the files downloaded by scripts/data.sh for the category C,
 Video_Games by default. Writes OUT/<version>/ with item vectors from
-implicit-feedback ALS trained on the train split, a co-occurrence table, a
-popularity list, golden cases and manifest.json, and prints the version. With --encoder onnx the bundle carries user_encoder.onnx,
-which gives the last MAX_SEQ_LEN history items the user vector ALS would fit
-for them (fold_in, D058), and the golden user vectors come from running it
-with ONNX Runtime. With --encoder mean (the default) it has no encoder, and
-the service takes the mean of those items' vectors. With --ranker the bundle also carries
-ranker.onnx, a logistic regression over the six features of SPEC §8 trained
-on the valid split (D027), and each golden case carries its candidates and
-their features, which the service recomputes.
+implicit-feedback ALS trained on the train split, with the category's
+settings in ALS or, with --baseline or for a category not there,
+BASELINE_ALS; a co-occurrence table, a popularity list, golden cases and
+manifest.json, and prints the version. With --encoder onnx the bundle
+carries user_encoder.onnx, which gives the last MAX_SEQ_LEN history items
+the user vector ALS would fit for them (fold_in, D058), and the golden user
+vectors come from running it with ONNX Runtime. With --encoder mean (the
+default) it has no encoder, and the service takes the mean of those items'
+vectors. With --ranker the bundle also carries ranker.onnx, a logistic
+regression over the six features of SPEC §8 trained on the valid split
+(D027), and each golden case carries its candidates and their features,
+which the service recomputes.
 """
 
 import argparse
@@ -39,8 +42,11 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 
 SEED = 1  # the only source of randomness: ALS initialization and golden sampling
-DIM = 64
-ALS = {"factors": DIM, "regularization": 0.05, "alpha": 1.0, "iterations": 15}
+# The ALS settings of the baseline bundle, b7ff0634dd7b (B0).
+BASELINE_ALS = {"factors": 64, "regularization": 0.05, "alpha": 1.0, "iterations": 15}
+# Each category's ALS settings, selected on its valid split by als_grid.py
+# (D058); a category not listed is built with BASELINE_ALS.
+ALS = {}
 COOC_WINDOW = 5  # items within this many positions of each other in a user's sequence
 COOC_TOP = 50
 POPULAR_DAYS = 30
@@ -359,7 +365,7 @@ def version_of(sums):
     return hashlib.sha256("".join(f"{name}{sums[name]}" for name in sorted(sums)).encode()).hexdigest()[:12]
 
 
-def main(data, out, encoder, ranker, category="Video_Games"):
+def main(data, out, encoder, ranker, category="Video_Games", baseline=False):
     train = read_split(data, "train", category)
     test = read_split(data, "test", category)
     valid = read_split(data, "valid", category)
@@ -367,7 +373,8 @@ def main(data, out, encoder, ranker, category="Video_Games"):
     item_ix = {item: n + 1 for n, item in enumerate(items)}  # 0 is padding
     n = len(items) + 1
 
-    vecs = als_vectors(train, item_ix, ALS)
+    als = BASELINE_ALS if baseline else ALS.get(category, BASELINE_ALS)
+    vecs = als_vectors(train, item_ix, als)
 
     seqs = sequences(train, item_ix)
     pair = defaultdict(Counter)
@@ -389,7 +396,7 @@ def main(data, out, encoder, ranker, category="Video_Games"):
     popular = np.array([i for i, _ in sorted(recent.items(), key=lambda kv: (-kv[1], kv[0]))[:POPULAR_TOP]], dtype=np.int64)
 
     if encoder == "onnx":
-        m = fold_in_matrix(vecs, ALS["regularization"])
+        m = fold_in_matrix(vecs, als["regularization"])
         enc = fold_in_encoder(vecs, m).SerializeToString()
         sess = session(enc)
 
@@ -453,9 +460,9 @@ def main(data, out, encoder, ranker, category="Video_Games"):
     sums = {name: sha256(f"{d}/{name}") for name in files}
     # A change of any setting changes a file, and so the version.
     version = version_of(sums)
-    build = {"seed": SEED, "als": ALS, "implicit": implicit.__version__, "cooc_window": COOC_WINDOW, "popular_days": POPULAR_DAYS}
+    build = {"seed": SEED, "als": als, "implicit": implicit.__version__, "cooc_window": COOC_WINDOW, "popular_days": POPULAR_DAYS}
     if enc:
-        build["user_encoder"] = {"graph": "als_fold_in", "regularization": ALS["regularization"], "opset": OPSET, "onnx": onnx.__version__, "onnxruntime": ort.__version__}
+        build["user_encoder"] = {"graph": "als_fold_in", "regularization": als["regularization"], "opset": OPSET, "onnx": onnx.__version__, "onnxruntime": ort.__version__}
     if rank:
         build["ranker"] = {"model": "logistic_regression", "scikit_learn": sklearn.__version__, **RANKER, **ranker_stats}
     manifest = {
@@ -464,7 +471,7 @@ def main(data, out, encoder, ranker, category="Video_Games"):
         "dataset": f"amazon2023-{category.lower()}-5core-timestamp",
         "train_cutoff_ts": cutoff,
         "item_count": len(items),
-        "dim": DIM,
+        "dim": vecs.shape[1],
         "metric": "dot",
         "normalized": False,
         "max_seq_len": MAX_SEQ_LEN,
@@ -490,6 +497,7 @@ if __name__ == "__main__":
     p.add_argument("out")
     p.add_argument("--encoder", choices=["mean", "onnx"], default="mean")
     p.add_argument("--category", default="Video_Games")
+    p.add_argument("--baseline", action="store_true", help="the baseline's ALS settings, BASELINE_ALS, whatever the category")
     p.add_argument("--ranker", action="store_true", help="train and add a logistic-regression ranker")
     a = p.parse_args()
-    main(a.data, a.out, a.encoder, a.ranker, a.category)
+    main(a.data, a.out, a.encoder, a.ranker, a.category, a.baseline)
