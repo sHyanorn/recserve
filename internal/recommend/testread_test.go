@@ -46,15 +46,9 @@ func openTestRead(reg, log, category string, n int, conditions string, commit fu
 	if n < 1 || n > testReadsAllowed[category] {
 		return fmt.Errorf("read %d of %s: the registration allows %d", n, category, testReadsAllowed[category])
 	}
-	logged, err := os.ReadFile(log)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	done, err := loggedReads(log, category)
+	if err != nil {
 		return err
-	}
-	var done int
-	for line := range strings.Lines(string(logged)) {
-		if f := strings.Fields(line); len(f) == 4 && f[2] == category {
-			done++
-		}
 	}
 	if done != n-1 {
 		return fmt.Errorf("%s holds %d reads of %s; read %d follows %d", log, done, category, n, n-1)
@@ -76,6 +70,21 @@ func openTestRead(reg, log, category string, n int, conditions string, commit fu
 	}
 	_, err = fmt.Fprintf(f, "%s %s %s %s\n", time.Now().UTC().Format(time.RFC3339), head, category, conditions)
 	return errors.Join(err, f.Close())
+}
+
+// loggedReads returns the number of reads of category in the log.
+func loggedReads(log, category string) (int, error) {
+	logged, err := os.ReadFile(log)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return 0, err
+	}
+	var done int
+	for line := range strings.Lines(string(logged)) {
+		if f := strings.Fields(line); len(f) == 4 && f[2] == category {
+			done++
+		}
+	}
+	return done, nil
 }
 
 // gitHead returns the commit checked out, or an error if a tracked file

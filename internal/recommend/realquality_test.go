@@ -2,6 +2,7 @@ package recommend
 
 import (
 	"bufio"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"fmt"
@@ -356,8 +357,38 @@ func meanOf(v []float64) float64 {
 // condition is not valid. The table goes to the file RECSERVE_QUALITY_OUT
 // names, if set, and to the log. With RECSERVE_BUNDLE_B, a bundle
 // directory, it then compares that bundle with the first
-// (compareRealBundles).
+// (compareRealBundles). A run is a test read of
+// docs/registration/m8-freshness.md, section 9: on Video_Games it takes
+// the next of the registered reads after openTestRead's check, and it
+// refuses Musical_Instruments, whose one read is TestRealDataFreshness's.
 func TestRealDataQuality(t *testing.T) {
+	data, dir := os.Getenv("RECSERVE_DATA"), os.Getenv("RECSERVE_BUNDLE")
+	if data == "" || dir == "" {
+		t.Skip("RECSERVE_DATA and RECSERVE_BUNDLE not set")
+	}
+	category := cmp.Or(os.Getenv("RECSERVE_CATEGORY"), "Video_Games")
+	if category == "Musical_Instruments" {
+		t.Fatal("Musical_Instruments' test split is read by TestRealDataFreshness only (docs/registration/m8-freshness.md, section 9)")
+	}
+	if category == "Video_Games" {
+		plan := [][]string{{"TestRealDataQuality", manifestVersion(t, dir)}}
+		var outs []string
+		for _, name := range []string{"RECSERVE_QUALITY_OUT", "RECSERVE_COMPARE_OUT"} {
+			if out := os.Getenv(name); out != "" {
+				outs = append(outs, out)
+			}
+		}
+		if b := os.Getenv("RECSERVE_BUNDLE_B"); b != "" {
+			plan = append(plan, []string{"B", manifestVersion(t, b)})
+		}
+		done, err := loggedReads(testReadsLog, category)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := openTestRead(registrationPath, testReadsLog, category, done+1, conditionsHash(plan), gitHead, outs...); err != nil {
+			t.Fatal(err)
+		}
+	}
 	rd := loadRealData(t)
 	appendTest(t, rd)
 	rows, noVector := qualityRows(t, rd.bundle, rd.store, rd.test)
