@@ -1,5 +1,7 @@
 # recserve
 
+[![CI](https://github.com/sHyanorn/recserve/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sHyanorn/recserve/actions/workflows/ci.yml?query=branch%3Amain)
+
 A recommendation serving system in Go: retrieval, features, ranking and rerank behind one HTTP API, with a sharded vector tier, caching, degradation, rate limiting, A/B assignment, metrics and tracing.
 
 The gateway searches item vectors split into shards, in its own process or on `annshard` replicas over gRPC. User histories, fed by Kafka through an ingest consumer, and the result cache are in Valkey. It runs in compose, and in kind with only the gateways and the replicas.
