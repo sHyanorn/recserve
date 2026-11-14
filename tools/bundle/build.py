@@ -1,6 +1,7 @@
 """Build a baseline bundle (docs/SPEC.md §8) from an Amazon 2023 category's split.
 
-usage: build.py DATA OUT [--encoder mean|onnx] [--ranker] [--category C] [--baseline]
+usage: build.py DATA OUT [--encoder mean|onnx] [--ranker | --ranker-from DIR] [--category C]
+                [--baseline] [--cutoff T]
 
 DATA holds the files downloaded by scripts/data.sh for the category C,
 Video_Games by default. Writes OUT/<version>/ with item vectors from
@@ -15,7 +16,9 @@ default) it has no encoder, and the service takes the mean of those items'
 vectors. With --ranker the bundle also carries ranker.onnx, a logistic
 regression over the six features of SPEC §8 trained on the valid split
 (D027), and each golden case carries its candidates and their features,
-which the service recomputes.
+which the service recomputes; with --ranker-from DIR it carries the ranker
+of the bundle in DIR instead. With --cutoff T every event before T, of any
+split, takes the train split's place: a bundle rebuilt at T.
 """
 
 import argparse
@@ -365,13 +368,16 @@ def version_of(sums):
     return hashlib.sha256("".join(f"{name}{sums[name]}" for name in sorted(sums)).encode()).hexdigest()[:12]
 
 
-def main(data, out, encoder, ranker, category="Video_Games", baseline=False):
+def main(data, out, encoder, ranker, category="Video_Games", baseline=False, cutoff_at=None, ranker_from=None):
     train = read_split(data, "train", category)
     test = read_split(data, "test", category)
     valid = read_split(data, "valid", category)
     items = sorted({i for rows in (train, valid, test) for _, i, _ in rows})
     item_ix = {item: n + 1 for n, item in enumerate(items)}  # 0 is padding
     n = len(items) + 1
+    if cutoff_at is not None:
+        # Every event before cutoff_at, of any split, takes the train split's place.
+        train = [r for r in train + valid + test if r[2] < cutoff_at]
 
     als = BASELINE_ALS if baseline else ALS.get(category, BASELINE_ALS)
     vecs = als_vectors(train, item_ix, als)
@@ -409,7 +415,19 @@ def main(data, out, encoder, ranker, category="Video_Games", baseline=False):
             return mean_vector(vecs, h)
 
     rank = None
-    if ranker:
+    if ranker_from:
+        # Another bundle's ranker, checked against its manifest; its labels' events count as used.
+        with open(f"{ranker_from}/manifest.json") as f:
+            src = json.load(f)
+        if src.get("ranker_features") != RANKER_FEATURES or sha256(f"{ranker_from}/ranker.onnx") != src["sha256"].get("ranker.onnx"):
+            sys.exit(f"{ranker_from} has no ranker over {RANKER_FEATURES} that matches its manifest")
+        with open(f"{ranker_from}/ranker.onnx", "rb") as f:
+            rank = f.read()
+        if msg := check_ranker(session(rank), len(RANKER_FEATURES)):
+            sys.exit(f"ranker: {msg}")
+        cutoff = max(cutoff, src["train_cutoff_ts"])
+        ranker_stats = {"from": src["model_version"]}
+    elif ranker:
         # The labels must come after every event the features are built from.
         if not cutoff < min(ts for _, _, ts in valid):
             sys.exit("the valid split must start after the train split")
@@ -465,6 +483,8 @@ def main(data, out, encoder, ranker, category="Video_Games", baseline=False):
         build["user_encoder"] = {"graph": "als_fold_in", "regularization": als["regularization"], "opset": OPSET, "onnx": onnx.__version__, "onnxruntime": ort.__version__}
     if rank:
         build["ranker"] = {"model": "logistic_regression", "scikit_learn": sklearn.__version__, **RANKER, **ranker_stats}
+    if cutoff_at is not None:
+        build["cutoff"] = cutoff_at
     manifest = {
         "format_version": 1,
         "model_version": version,
@@ -498,6 +518,9 @@ if __name__ == "__main__":
     p.add_argument("--encoder", choices=["mean", "onnx"], default="mean")
     p.add_argument("--category", default="Video_Games")
     p.add_argument("--baseline", action="store_true", help="the baseline's ALS settings, BASELINE_ALS, whatever the category")
-    p.add_argument("--ranker", action="store_true", help="train and add a logistic-regression ranker")
+    r = p.add_mutually_exclusive_group()
+    r.add_argument("--ranker", action="store_true", help="train and add a logistic-regression ranker")
+    r.add_argument("--ranker-from", metavar="DIR", help="add the ranker of the bundle in DIR")
+    p.add_argument("--cutoff", type=int, metavar="T", help="build from every event before T (ms), of any split, in place of the train split")
     a = p.parse_args()
-    main(a.data, a.out, a.encoder, a.ranker, a.category, a.baseline)
+    main(a.data, a.out, a.encoder, a.ranker, a.category, a.baseline, a.cutoff, a.ranker_from)
