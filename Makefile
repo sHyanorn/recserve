@@ -10,7 +10,7 @@ COMPOSE := docker compose -f deploy/compose.yaml
 
 .DEFAULT_GOAL := help
 BENCH   := DATA=$(abspath $(DATA)) VERSION=$(VERSION) REF_FILE=$(REF_FILE)
-.PHONY: bench-ref bench-sweep bench-profile bench-compare bench-fault bench-hedge bench-swap bench-kind bench-vegeta bench-ann bench-quality bench-bundles bench-exact bench-als-grid valid-reference bench-windows report
+.PHONY: bench-ref bench-sweep bench-profile bench-compare bench-fault bench-hedge bench-swap bench-kind bench-vegeta bench-ann bench-quality bench-bundles bench-exact bench-als-grid valid-reference bench-windows rebuilds bench-read report
 .PHONY: help build test test-real e2e lint fmt proto data bundle images infra-up infra-down up down test-alerts kind-up kind-swap kind-check kind-netpol kind-down
 
 help: ## Show available targets
@@ -128,6 +128,20 @@ bench-windows: ## The popularity reference on CATEGORY's valid split for each wi
 	cat bench-results/m8/$(CATEGORY)/windows.txt
 	RECSERVE_DATA=$(abspath $(DATA)) RECSERVE_BUNDLE=$(abspath $(DATA))/bundle/$(VERSION) RECSERVE_CATEGORY=$(CATEGORY) RECSERVE_POPULARITY_DIR=$(abspath bench-results/m8/$(CATEGORY))/popularity \
 		$(GO) test -count=1 -timeout 30m -run '^TestRealDataPopularityReference$$' ./internal/recommend/
+
+rebuilds: ## Bundles rebuilt every DAYS days through CATEGORY's test period (docs/registration/m8-freshness.md, section 4) into OUT, from DATA, with the ranker of the bundle FROM; a rerun builds only those missing
+	@test -n "$(DAYS)" -a -n "$(FROM)" -a -n "$(OUT)" || { echo "set DAYS, FROM and OUT"; exit 1; }
+	cd tools/bundle && uv run --locked python rebuilds.py $(abspath $(DATA)) $(abspath $(OUT)) --days $(DAYS) --ranker-from $(abspath $(FROM)) --category $(CATEGORY)
+
+bench-read: ## Test read READ of CATEGORY (docs/registration/m8-freshness.md, section 9) into bench-results/m8/CATEGORY/read-READ.md: TestRealDataFreshness on DATA and B1, DATA/bundle/VERSION; B0, S6 and S8 the bundles' directories, REBUILT the directory of rebuilds' 7, 30 and 30s8; READ1_RANKS for Video_Games' read 2; RANKS, a new directory outside the repository; RECSERVE_ORT_LIB
+	@test -n "$(READ)" -a -n "$(VERSION)" -a -n "$(RANKS)" || { echo "set READ, VERSION and RANKS"; exit 1; }
+	mkdir -p bench-results/m8/$(CATEGORY)
+	RECSERVE_DATA=$(abspath $(DATA)) RECSERVE_BUNDLE=$(abspath $(DATA))/bundle/$(VERSION) RECSERVE_CATEGORY=$(CATEGORY) RECSERVE_READ=$(READ) \
+		RECSERVE_BUNDLE_B0=$(if $(B0),$(abspath $(B0))) RECSERVE_BUNDLE_S6=$(if $(S6),$(abspath $(S6))) RECSERVE_BUNDLE_S8=$(if $(S8),$(abspath $(S8))) \
+		RECSERVE_REBUILT_7=$(if $(REBUILT),$(abspath $(REBUILT))/7) RECSERVE_REBUILT_30=$(if $(REBUILT),$(abspath $(REBUILT))/30) \
+		RECSERVE_REBUILT_30S8=$(if $(REBUILT),$(abspath $(REBUILT))/30s8) RECSERVE_READ1_RANKS=$(if $(READ1_RANKS),$(abspath $(READ1_RANKS))) \
+		RECSERVE_FRESHNESS_OUT=$(abspath bench-results/m8/$(CATEGORY))/read-$(READ).md RECSERVE_RANKS_DIR=$(abspath $(RANKS)) \
+		$(GO) test -count=1 -timeout 0 -run '^TestRealDataFreshness$$' ./internal/recommend/
 
 bench-exact: ## Exact search of every item of the bundle DATA/bundle/VERSION on CPU 1 into bench-results/m8/exact-search.txt (README, Scale)
 	mkdir -p bench-results/m8

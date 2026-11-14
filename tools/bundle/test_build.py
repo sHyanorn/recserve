@@ -8,6 +8,7 @@ import json
 
 import build  # first: it limits BLAS to one thread before numpy loads
 import fresh
+import rebuilds
 import verify
 
 import numpy as np
@@ -105,3 +106,18 @@ def test_stream_rankers_and_a_rebuild_with_one(tmp_path, capsys):
     assert (r / "ranker.onnx").read_bytes() == (s8 / "ranker.onnx").read_bytes()
     assert {json.loads(line)["ts"] for line in (r / "golden.jsonl").read_text().splitlines()} == {mr["train_cutoff_ts"] + 1}
     assert capsys.readouterr().out.count("ok:") == 4
+
+
+def test_rebuilds_through_the_test_period_and_resume(tmp_path, monkeypatch, capsys):
+    write_splits(tmp_path)
+    build.main(str(tmp_path), str(tmp_path / "b1"), "onnx", True, "T")
+    (b1,) = (tmp_path / "b1").iterdir()
+    monkeypatch.setattr(rebuilds, "START", 12_000)
+    monkeypatch.setattr(rebuilds, "DAY", 500)
+    out = tmp_path / "r"
+    rebuilds.main(str(tmp_path), str(out), 1, str(b1), "T", 2)
+    last = max(ts for _, _, ts in build.read_split(str(tmp_path), "test", "T"))
+    cutoffs = sorted(json.loads((d / "manifest.json").read_text())["build"]["cutoff"] for d in out.iterdir())
+    assert cutoffs == list(range(12_000, last + 1, 500)) and cutoffs[-1] + 500 > last
+    rebuilds.main(str(tmp_path), str(out), 1, str(b1), "T", 2)  # nothing left to build
+    assert len(list(out.iterdir())) == len(cutoffs)

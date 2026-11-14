@@ -359,45 +359,8 @@ func meanOf(v []float64) float64 {
 // (compareRealBundles).
 func TestRealDataQuality(t *testing.T) {
 	rd := loadRealData(t)
-	evs := make([]history.Event, len(rd.test))
-	for i, r := range rd.test {
-		evs[i] = history.Event{ID: history.EventID(r.User, r.Item, r.TS, dataset.Kind), User: r.User, Item: r.Item, TS: r.TS}
-	}
-	if err := rd.store.Append(context.Background(), evs); err != nil {
-		t.Fatal(err)
-	}
-	cfg := shard.DefaultConfig
-	cfg.Shards, cfg.Mode = 2, shard.Exact
-	exact, err := shard.Build(rd.bundle.Vectors, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Mode = shard.HNSW
-	hnsw, err := shard.Build(rd.bundle.Vectors, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	start := time.Now()
-	ref, noVector, err := referenceRanks(rd.bundle, rd.store, rd.test)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("reference: %v", time.Since(start).Round(time.Second))
-	rows := []qualityRow{{"reference", ref}}
-	for _, c := range qualityConditions(exact, hnsw) {
-		start := time.Now()
-		ranks, forced, err := runCondition(New(rd.bundle, rd.store, c.shards), c, rd.test)
-		if err != nil {
-			t.Errorf("%s: not valid: %v", c.name, err)
-			continue
-		}
-		t.Logf("%s: the hook failed a stage in %d of %d requests; %v", c.name, forced, len(rd.test), time.Since(start).Round(time.Second))
-		rows = append(rows, qualityRow{c.name, ranks})
-	}
-	if t.Failed() {
-		t.FailNow()
-	}
+	appendTest(t, rd)
+	rows, noVector := qualityRows(t, rd.bundle, rd.store, rd.test)
 	report := qualityReport(rd.bundle.ModelVersion, len(rd.test), noVector, rows, 1)
 	t.Logf("\n%s", report)
 	if out := os.Getenv("RECSERVE_QUALITY_OUT"); out != "" {
@@ -406,8 +369,60 @@ func TestRealDataQuality(t *testing.T) {
 		}
 	}
 	if dir := os.Getenv("RECSERVE_BUNDLE_B"); dir != "" {
-		compareRealBundles(t, rd, dir, ref, noVector)
+		compareRealBundles(t, rd, dir, rows[0].ranks, noVector)
 	}
+}
+
+// appendTest adds the test split to rd's store.
+func appendTest(t *testing.T, rd realData) {
+	t.Helper()
+	evs := make([]history.Event, len(rd.test))
+	for i, r := range rd.test {
+		evs[i] = history.Event{ID: history.EventID(r.User, r.Item, r.TS, dataset.Kind), User: r.User, Item: r.Item, TS: r.TS}
+	}
+	if err := rd.store.Append(context.Background(), evs); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// qualityRows returns the reference and the condition rows of
+// qualityConditions for b, one request per event, and the number of events
+// whose history gives no user vector. It fails t if a condition is not
+// valid.
+func qualityRows(t *testing.T, b *bundle.Bundle, h history.Store, events []dataset.Row) ([]qualityRow, int) {
+	t.Helper()
+	cfg := shard.DefaultConfig
+	cfg.Shards, cfg.Mode = 2, shard.Exact
+	exact, err := shard.Build(b.Vectors, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Mode = shard.HNSW
+	hnsw, err := shard.Build(b.Vectors, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	ref, noVector, err := referenceRanks(b, h, events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("reference: %v", time.Since(start).Round(time.Second))
+	rows := []qualityRow{{"reference", ref}}
+	for _, c := range qualityConditions(exact, hnsw) {
+		start := time.Now()
+		ranks, forced, err := runCondition(New(b, h, c.shards), c, events)
+		if err != nil {
+			t.Errorf("%s: not valid: %v", c.name, err)
+			continue
+		}
+		t.Logf("%s: the hook failed a stage in %d of %d requests; %v", c.name, forced, len(events), time.Since(start).Round(time.Second))
+		rows = append(rows, qualityRow{c.name, ranks})
+	}
+	if t.Failed() {
+		t.FailNow()
+	}
+	return rows, noVector
 }
 
 // TestRealDataValidReference checks the reference on the valid split
