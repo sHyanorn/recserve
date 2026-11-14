@@ -56,9 +56,30 @@ FEATURE_TOL = 1e-6  # largest accepted difference between the service's features
 RANKER = {"C": 1.0, "held_out_share": 0.2}  # inverse L2 strength, and the share of users held out
 
 
-def read_split(data, name):
-    with gzip.open(f"{data}/Video_Games.{name}.csv.gz", "rt", newline="") as f:
+def read_split(data, name, category="Video_Games"):
+    with gzip.open(f"{data}/{category}.{name}.csv.gz", "rt", newline="") as f:
         return [(r["user_id"], r["parent_asin"], int(r["timestamp"])) for r in csv.DictReader(f)]
+
+
+def als_vectors(train, item_ix, als):
+    """Item vectors, a row per internal ID of item_ix and 0, from
+    implicit-feedback ALS with the parameters als on the train rows. ALS sees
+    only train users and items, so the valid and test splits cannot change
+    the model; items without train events get zero vectors."""
+    users = sorted({u for u, _, _ in train})
+    user_ix = {u: n for n, u in enumerate(users)}
+    train_items = sorted({item_ix[i] for _, i, _ in train})
+    col = {iid: n for n, iid in enumerate(train_items)}
+    rows = np.array([user_ix[u] for u, _, _ in train])
+    cols = np.array([col[item_ix[i]] for _, i, _ in train])
+    ui = sp.csr_matrix((np.ones(len(train), dtype=np.float32), (rows, cols)), shape=(len(users), len(train_items)))
+    ui.sum_duplicates()
+    ui.data[:] = 1.0
+    model = implicit.cpu.als.AlternatingLeastSquares(**als, random_state=SEED, num_threads=1)
+    model.fit(ui, show_progress=False)
+    vecs = np.zeros((len(item_ix) + 1, als["factors"]), dtype=np.float32)
+    vecs[train_items] = model.item_factors
+    return vecs
 
 
 def sequences(rows, item_ix):
@@ -347,21 +368,7 @@ def main(data, out, encoder, ranker):
     item_ix = {item: n + 1 for n, item in enumerate(items)}  # 0 is padding
     n = len(items) + 1
 
-    # ALS sees only train users and items, so the valid and test splits
-    # cannot change the model; items without train events get zero vectors.
-    users = sorted({u for u, _, _ in train})
-    user_ix = {u: n for n, u in enumerate(users)}
-    train_items = sorted({item_ix[i] for _, i, _ in train})
-    col = {iid: n for n, iid in enumerate(train_items)}
-    rows = np.array([user_ix[u] for u, _, _ in train])
-    cols = np.array([col[item_ix[i]] for _, i, _ in train])
-    ui = sp.csr_matrix((np.ones(len(train), dtype=np.float32), (rows, cols)), shape=(len(users), len(train_items)))
-    ui.sum_duplicates()
-    ui.data[:] = 1.0
-    model = implicit.cpu.als.AlternatingLeastSquares(**ALS, random_state=SEED, num_threads=1)
-    model.fit(ui, show_progress=False)
-    vecs = np.zeros((n, DIM), dtype=np.float32)
-    vecs[train_items] = model.item_factors
+    vecs = als_vectors(train, item_ix, ALS)
 
     seqs = sequences(train, item_ix)
     pair = defaultdict(Counter)

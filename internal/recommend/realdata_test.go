@@ -1,6 +1,7 @@
 package recommend
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -116,22 +117,25 @@ type realData struct {
 	bundle      *bundle.Bundle
 	store       *history.Memory
 	train, test []dataset.Row // train holds the train and valid splits
-	first       int64         // the first test event's time
+	valid       []dataset.Row
+	first       int64 // the first test event's time
 }
 
 // loadRealData loads the bundle at RECSERVE_BUNDLE, checked against the
 // first test event, and a store holding the train and valid splits of
-// RECSERVE_DATA, which precede the test split. Without both variables the
-// test is skipped.
+// RECSERVE_DATA, which precede the test split: those of the category
+// RECSERVE_CATEGORY, Video_Games if unset. Without both of the first two
+// variables the test is skipped.
 func loadRealData(t *testing.T) realData {
 	t.Helper()
 	data, dir := os.Getenv("RECSERVE_DATA"), os.Getenv("RECSERVE_BUNDLE")
 	if data == "" || dir == "" {
 		t.Skip("RECSERVE_DATA and RECSERVE_BUNDLE not set")
 	}
+	category := cmp.Or(os.Getenv("RECSERVE_CATEGORY"), "Video_Games")
 	rd := realData{dir: dir, store: history.NewMemory()}
 	var err error
-	if rd.test, err = dataset.Read(filepath.Join(data, "Video_Games.test.csv.gz")); err != nil {
+	if rd.test, err = dataset.Read(filepath.Join(data, category+".test.csv.gz")); err != nil {
 		t.Fatal(err)
 	}
 	rd.first = dataset.FirstTS(rd.test)
@@ -145,11 +149,14 @@ func loadRealData(t *testing.T) realData {
 		}
 	})
 	for _, name := range []string{"train", "valid"} {
-		rows, err := dataset.Read(filepath.Join(data, "Video_Games."+name+".csv.gz"))
+		rows, err := dataset.Read(filepath.Join(data, category+"."+name+".csv.gz"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		rd.train = append(rd.train, rows...)
+		if name == "valid" {
+			rd.valid = rows
+		}
 	}
 	evs := make([]history.Event, 0, len(rd.train))
 	for _, r := range rd.train {

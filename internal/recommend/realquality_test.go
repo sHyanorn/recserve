@@ -1,6 +1,8 @@
 package recommend
 
 import (
+	"bufio"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"maps"
@@ -9,6 +11,7 @@ import (
 	"os"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -395,6 +398,74 @@ func TestRealDataQuality(t *testing.T) {
 	if dir := os.Getenv("RECSERVE_BUNDLE_B"); dir != "" {
 		compareRealBundles(t, rd, dir, ref, noVector)
 	}
+}
+
+// TestRealDataValidReference checks the reference on the valid split
+// against tools/bundle/als_grid.py's, which selects the bundle's ALS
+// settings by it: one request per valid event at its time, on the store of
+// loadRealData, which holds the train and valid splits. It runs when
+// RECSERVE_VALID_RANKS names the valid-ranks.txt.gz that als_grid.py wrote
+// for the settings of the bundle in RECSERVE_BUNDLE, and fails if any
+// event's rank differs.
+func TestRealDataValidReference(t *testing.T) {
+	path := os.Getenv("RECSERVE_VALID_RANKS")
+	if path == "" {
+		t.Skip("RECSERVE_VALID_RANKS not set")
+	}
+	rd := loadRealData(t)
+	want, err := readRanks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, noVector, err := referenceRanks(rd.bundle, rd.store, rd.valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%s holds %d ranks for %d valid events", path, len(want), len(got))
+	}
+	var differ, hits, first int
+	var r10 float64
+	for i := range got {
+		r10 += recallAtRank(got[i], 10) / float64(len(got))
+		if got[i] != want[i] {
+			if differ == 0 {
+				first = i
+			}
+			differ++
+			if recallAtRank(got[i], 10) != recallAtRank(want[i], 10) {
+				hits++
+			}
+		}
+	}
+	t.Logf("%d valid events, %d without a user vector; recall@10 %.4f", len(got), noVector, r10)
+	if differ > 0 {
+		t.Errorf("%d ranks differ from %s, %d of them a hit in one and not the other; first event %d: %d, want %d",
+			differ, path, hits, first, got[first], want[first])
+	}
+}
+
+// readRanks reads a gzip-compressed file of one integer per line.
+func readRanks(path string) ([]int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close() //nolint:errcheck // read only
+	z, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, err
+	}
+	var out []int
+	sc := bufio.NewScanner(z)
+	for sc.Scan() {
+		r, err := strconv.Atoi(sc.Text())
+		if err != nil {
+			return nil, fmt.Errorf("%s line %d: %w", path, len(out)+1, err)
+		}
+		out = append(out, r)
+	}
+	return out, sc.Err()
 }
 
 // The conditions on a random pipeline, ranked in Go, whose users u20 to
