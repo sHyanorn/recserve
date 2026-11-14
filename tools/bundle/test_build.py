@@ -1,11 +1,13 @@
 """build.py end to end on small splits: a bundle with the fold-in encoder and a trained ranker, then one
 rebuilt at a time in the test period with that ranker, both accepted by verify.py; the rebuild uses the
-events before its time and no other."""
+events before its time and no other. Rankers trained on the stream state, over six features and eight,
+and a rebuild with one: their golden inputs are the stream state's."""
 
 import gzip
 import json
 
 import build  # first: it limits BLAS to one thread before numpy loads
+import fresh
 import verify
 
 import numpy as np
@@ -63,3 +65,43 @@ def test_rejects_a_ranker_that_does_not_match_its_manifest(tmp_path):
     (b1 / "ranker.onnx").write_bytes((b1 / "ranker.onnx").read_bytes() + b"\0")
     with pytest.raises(SystemExit, match="no ranker"):
         build.main(str(tmp_path), str(tmp_path / "r"), "onnx", False, "T", cutoff_at=CUTOFF, ranker_from=str(b1))
+
+
+def test_stream_rankers_and_a_rebuild_with_one(tmp_path, capsys):
+    write_splits(tmp_path)
+    build.main(str(tmp_path), str(tmp_path / "b1"), "onnx", True, "T")
+    build.main(str(tmp_path), str(tmp_path / "s6"), "onnx", True, "T", stream_days=1)
+    build.main(str(tmp_path), str(tmp_path / "s8"), "onnx", True, "T", stream_days=1, recency=True)
+    b1, m1 = built(tmp_path / "b1")
+    s6, m6 = built(tmp_path / "s6")
+    s8, m8 = built(tmp_path / "s8")
+    assert "stream" not in m1
+    assert m6["stream"] == m8["stream"] == {"popular_window_ms": 86_400_000}
+    assert m6["ranker_features"] == build.RANKER_FEATURES
+    assert m8["ranker_features"] == build.RANKER_FEATURES + build.RECENCY_FEATURES
+    # B1 with another ranker: the same vectors and tables, and the same events used.
+    for name in ("items.npy", "cooc_ids.npy", "popular.npy", "user_encoder.onnx"):
+        assert (s8 / name).read_bytes() == (s6 / name).read_bytes() == (b1 / name).read_bytes()
+    assert m1["train_cutoff_ts"] == m6["train_cutoff_ts"] == m8["train_cutoff_ts"]
+    w1, w6, w8 = (m["build"]["ranker"]["weights"] for m in (m1, m6, m8))
+    assert len(w1) == len(w6) == 6 and len(w8) == 8 and w1 != w6
+
+    # Every golden case reads the stream state of the splits' events up to the cutoff, just after it.
+    rows = [r for split in ("train", "valid", "test") for r in build.read_split(str(tmp_path), split, "T")]
+    ids = (s8 / "items.ids").read_text().split()
+    ts = m8["train_cutoff_ts"] + 1
+    state = fresh.State([r for r in rows if r[2] < ts], {raw: n + 1 for n, raw in enumerate(ids)})
+    for line in (s8 / "golden.jsonl").read_text().splitlines():
+        c = json.loads(line)
+        assert c["ts"] == ts and c["popular"] == state.popular(ts, 86_400_000)
+        assert c["cooc_rows"] == [state.row(i, ts) for i in c["history"][::-1][: build.COOC_SEEDS]]
+        assert c["window_counts"] == [state.count(i, ts - 86_400_000, ts) for i in c["candidates"]]
+        assert c["first_ts"] == [state.first(i, ts) for i in c["candidates"]]
+    assert all("window_counts" in json.loads(line) for line in (s6 / "golden.jsonl").read_text().splitlines())
+
+    build.main(str(tmp_path), str(tmp_path / "r"), "onnx", False, "T", cutoff_at=CUTOFF, ranker_from=str(s8))
+    r, mr = built(tmp_path / "r")
+    assert mr["stream"] == m8["stream"] and mr["ranker_features"] == m8["ranker_features"]
+    assert (r / "ranker.onnx").read_bytes() == (s8 / "ranker.onnx").read_bytes()
+    assert {json.loads(line)["ts"] for line in (r / "golden.jsonl").read_text().splitlines()} == {mr["train_cutoff_ts"] + 1}
+    assert capsys.readouterr().out.count("ok:") == 4

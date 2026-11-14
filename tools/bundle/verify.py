@@ -8,9 +8,11 @@ every golden case from the files on disk with the same rules the service
 uses (user vector from the last max_seq_len history items, by mean or by
 user_encoder.onnx; exact dot product; history excluded; ties by internal
 ID) and exits non-zero on any mismatch. A ranker must declare the service's
-ranker_features and pass its load check (build.check_ranker), and then
+ranker_features, or with a stream window those followed by the recency
+features (D060), and pass its load check (build.check_ranker), and then
 every golden case must give the features of its candidates, which are
-recomputed from the case's history and user vector (build.features).
+recomputed from the case's history and user vector (build.features), and
+with a stream window from the stream inputs the case carries.
 """
 
 import json
@@ -20,8 +22,9 @@ import sys
 
 import numpy as np
 
-from build import (FEATURE_TOL, RANKER_FEATURES, check_ranker, encode, features, mean_vector, session, sha256,
-                   source_scores, top_k, version_of)
+from build import (COOC_SEEDS, FEATURE_TOL, RANKER_FEATURES, RECENCY_FEATURES, Sources, check_ranker, encode, features,
+                   mean_vector, session, sha256, source_scores, tables, top_k, version_of)
+from fresh import NONE
 
 TOL = 1e-4
 # Read only when the manifest lists them; one on disk that it does not list
@@ -34,8 +37,9 @@ COOC_WIDTH = 50
 # "" or false.
 MANIFEST_TYPES = {"format_version": int, "model_version": str, "dataset": str, "item_count": int, "dim": int,
                   "metric": str, "normalized": bool, "max_seq_len": int, "pad_id": int, "user_encoder": str,
-                  "ranker_features": list, "sha256": dict}
+                  "stream": dict, "ranker_features": list, "sha256": dict}
 GOLDEN_FIELDS = {"history", "history_raw", "user_emb", "top10", "candidates", "features"}
+STREAM_FIELDS = {"ts", "cooc_rows", "popular", "window_counts", "first_ts"}
 # The service reads golden.jsonl a line at a time with a buffer of this many
 # bytes, which must hold the line and its newline.
 MAX_LINE = 1 << 20
@@ -92,6 +96,30 @@ def read_manifest(d):
     if m.get("model_version") != version_of(m["sha256"]):
         sys.exit(f"model_version {m.get('model_version')!r}, but the checksums give {version_of(m['sha256'])!r}")
     return m
+
+
+def stream_sources(n, c, cands, recency):
+    """The sources of golden case n of a bundle with a stream window, from the
+    stream inputs it carries (D060): the co-occurrence row of each seed, the
+    latest history item first, the popular list and each candidate's window
+    count and first event time (None for none), which the recency features
+    read if the ranker takes them."""
+    h, ts, rows, popular = c["history"], c.get("ts"), c.get("cooc_rows"), c.get("popular")
+    if not (type(ts) is int and type(rows) is list and len(rows) == min(COOC_SEEDS, len(h)) and all(ints(r) for r in rows)
+            and ints(popular)):
+        sys.exit(f"golden {n}: a bundle with a stream window needs ts, a cooc_rows row for each seed and popular")
+    by_seed = dict(zip(h[::-1], rows))
+    wc, first = c.get("window_counts"), c.get("first_ts")
+    if not (ints(wc) and len(wc) == len(cands) and type(first) is list and len(first) == len(cands)
+            and all(t is None or type(t) is int for t in first)):
+        sys.exit(f"golden {n}: a bundle with a stream window needs window_counts and first_ts for each candidate")
+    if not recency:
+        return Sources(lambda i: by_seed[i], popular)
+    size = int(cands.max()) + 1
+    counts, first_ts = np.zeros(size, dtype=np.int64), np.full(size, NONE, dtype=np.int64)
+    counts[cands] = wc
+    first_ts[cands] = [NONE if t is None else t for t in first]
+    return Sources(lambda i: by_seed[i], popular, (ts, counts, first_ts))
 
 
 def main(d):
@@ -151,14 +179,19 @@ def main(d):
                 encode(sess, probe[i : i + L], L)
             except Exception as e:  # ONNX Runtime raises its own error types
                 sys.exit(f"user_encoder.onnx: items {probe[i : i + L]}: {e}")
+    stream = m.get("stream")
+    if stream is not None and not (type(stream.get("popular_window_ms")) is int and stream["popular_window_ms"] > 0):
+        sys.exit(f"stream {stream!r}: popular_window_ms must be a window above 0")
     ranker = "ranker.onnx" in m["sha256"]
+    names = m.get("ranker_features")
     if ranker:
-        if m.get("ranker_features") != RANKER_FEATURES:
-            sys.exit(f"ranker_features {m.get('ranker_features')}, the service computes {RANKER_FEATURES}")
+        recency = RANKER_FEATURES + RECENCY_FEATURES
+        if names != RANKER_FEATURES and not (stream and names == recency):
+            sys.exit(f"ranker_features {names}, the service computes {RANKER_FEATURES}, or {recency} with a stream window")
         with open(f"{d}/ranker.onnx", "rb") as f:
-            if msg := check_ranker(session(f.read()), len(RANKER_FEATURES)):
+            if msg := check_ranker(session(f.read()), len(names)):
                 sys.exit(f"ranker.onnx: {msg}")
-    elif m.get("ranker_features"):
+    elif names:
         sys.exit("ranker_features without ranker.onnx")
     # Split as the service's line scanner splits it: at "\n", dropping one
     # "\r" before it; after a final "\n" there is no line.
@@ -177,8 +210,8 @@ def main(d):
     if not cases:
         sys.exit("golden.jsonl has no cases")
     for n, c in enumerate(cases):
-        if type(c) is not dict or set(c) - GOLDEN_FIELDS:
-            sys.exit(f"golden {n}: not an object, or fields other than {sorted(GOLDEN_FIELDS)}")
+        if type(c) is not dict or set(c) - GOLDEN_FIELDS - STREAM_FIELDS:
+            sys.exit(f"golden {n}: not an object, or fields other than {sorted(GOLDEN_FIELDS | STREAM_FIELDS)}")
         h, emb, top10 = c.get("history"), c.get("user_emb"), c.get("top10")
         if not (ints(h) and h and numbers(emb) and len(emb) == m["dim"] and ints(top10) and len(top10) == 10):
             sys.exit(f"golden {n}: needs a history, {m['dim']} user_emb values and 10 top10 IDs")
@@ -201,17 +234,20 @@ def main(d):
             sys.exit(f"golden {n}: top-10 differs")
         cands, feats = c.get("candidates"), c.get("features")
         if not ranker:
-            if cands is not None or feats is not None:
+            if cands is not None or feats is not None or set(c) & STREAM_FIELDS:
                 sys.exit(f"golden {n}: candidates without a ranker")
             continue
-        nf = len(RANKER_FEATURES)
+        nf = len(names)
         if not (ints(cands) and cands and type(feats) is list and len(feats) == len(cands)
                 and all(numbers(row) and len(row) == nf for row in feats)):
             sys.exit(f"golden {n}: a bundle with a ranker needs candidates and {nf} features for each")
         if min(cands) < 1 or max(cands) > m["item_count"]:
             sys.exit(f"golden {n}: candidate IDs out of range")
-        got = features(vecs, *source_scores(cooc_ids, popular, h), h, np.array(emb, dtype=np.float32),
-                       np.array(cands, dtype=np.int64))
+        cands = np.array(cands, dtype=np.int64)
+        src = stream_sources(n, c, cands, len(names) > len(RANKER_FEATURES)) if stream else tables(cooc_ids, popular)
+        if not stream and set(c) & STREAM_FIELDS:
+            sys.exit(f"golden {n}: stream inputs without a stream window")
+        got = features(vecs, *source_scores(src, h), h, np.array(emb, dtype=np.float32), cands, src.recency)
         diff = float(np.max(np.abs(got.astype(np.float64) - np.array(feats, dtype=np.float32))))
         if not diff <= FEATURE_TOL:
             sys.exit(f"golden {n}: features differ by {diff}")

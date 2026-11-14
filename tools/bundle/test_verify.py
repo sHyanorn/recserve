@@ -1,14 +1,16 @@
 """verify.py on a hand-written bundle of twelve items, and on faults it rejects as the service's bundle.Load
 does: a checksum, the manifest's fields, train_cutoff_ts, items.ids, the .npy files, history_raw, the golden
-cases, an optional file the manifest does not list."""
+cases, an optional file the manifest does not list, and a stream window's golden inputs."""
 
 import json
 
 import numpy as np
 import pytest
 
+import testdata
 import verify
-from build import fold_in, fold_in_encoder, fold_in_matrix, mean_vector, sha256, top_k, version_of
+from build import (RANKER_FEATURES, RECENCY_FEATURES, fold_in, fold_in_encoder, fold_in_matrix, mean_vector, sha256,
+                   top_k, version_of)
 
 IDS = [f"i{k}" for k in range(1, 13)]
 # Item k's vector is (k, 1 - k % 2), so a user vector (x, y) with 0 <= y < x
@@ -285,3 +287,43 @@ def test_golden_line_limit(tmp_path, capsys, pad, ok):
         assert capsys.readouterr().out.startswith("ok: 1 golden cases")
     else:
         assert rejection(tmp_path) == "golden 0: 1048576 bytes, the service reads lines of at most 1048575"
+
+
+def write_stream_bundle(d, edit=lambda c: None, **fields):
+    """testdata.py's bundle with a stream window of 7 days and the linear ranker over the eight features, its
+    golden cases (stream_golden.jsonl) changed by edit, the manifest by fields."""
+    vecs = testdata.mean_vectors()
+    cases = [json.loads(line) for line in testdata.ranker_golden(stream=True).decode().splitlines()]
+    for c in cases:
+        edit(c)
+    write_bundle(d, golden=cases, ids=[f"item{k}" for k in range(1, 13)], vectors=vecs)
+    np.save(d / "popular.npy", np.array([3, 1], dtype=np.int64))
+    (d / "ranker.onnx").write_bytes(testdata.linear_ranker(testdata.STREAM_W, testdata.LINEAR_B).SerializeToString())
+    m = {"stream": {"popular_window_ms": testdata.STREAM_DAYS * 86_400_000},
+         "ranker_features": RANKER_FEATURES + RECENCY_FEATURES, "max_seq_len": 50} | fields
+    write_manifest(d, files=("golden.jsonl", "items.ids", "items.npy", "popular.npy", "ranker.onnx"), **m)
+
+
+def test_accepts_stream_ranker(tmp_path, capsys):
+    write_stream_bundle(tmp_path)
+    verify.main(str(tmp_path))
+    assert capsys.readouterr().out == "ok: 2 golden cases, 12 items, user encoder mean, ranker yes\n"
+
+
+def hours(c):
+    """item_age in hours: the first events moved so that the days to ts become its hours."""
+    c["first_ts"] = [t if t is None else c["ts"] - (c["ts"] - t) * 24 for t in c["first_ts"]]
+
+
+@pytest.mark.parametrize("edit,fields,message", [
+    (lambda c: c.pop("ts"), {}, "needs ts"),
+    (lambda c: c.update(cooc_rows=[]), {}, "needs ts, a cooc_rows row for each seed"),
+    (lambda c: c.update(popular=[3, 1]), {}, "features differ"),  # the bundle's own list
+    (hours, {}, "features differ"),
+    (lambda c: c.pop("first_ts"), {}, "needs window_counts and first_ts"),
+    (lambda c: None, {"stream": None}, "with a stream window"),
+    (lambda c: None, {"stream": {"popular_window_ms": 0}}, "popular_window_ms must be a window above 0"),
+])
+def test_rejects_stream(tmp_path, edit, fields, message):
+    write_stream_bundle(tmp_path, edit, **fields)
+    assert message in rejection(tmp_path)

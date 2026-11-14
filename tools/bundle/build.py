@@ -1,7 +1,7 @@
 """Build a baseline bundle (docs/SPEC.md §8) from an Amazon 2023 category's split.
 
 usage: build.py DATA OUT [--encoder mean|onnx] [--ranker | --ranker-from DIR] [--category C]
-                [--baseline] [--cutoff T]
+                [--baseline] [--cutoff T] [--stream DAYS [--recency]]
 
 DATA holds the files downloaded by scripts/data.sh for the category C,
 Video_Games by default. Writes OUT/<version>/ with item vectors from
@@ -17,8 +17,13 @@ vectors. With --ranker the bundle also carries ranker.onnx, a logistic
 regression over the six features of SPEC §8 trained on the valid split
 (D027), and each golden case carries its candidates and their features,
 which the service recomputes; with --ranker-from DIR it carries the ranker
-of the bundle in DIR instead. With --cutoff T every event before T, of any
-split, takes the train split's place: a bundle rebuilt at T.
+of the bundle in DIR instead, and its stream window if it names one. With
+--cutoff T every event before T, of any split, takes the train split's
+place: a bundle rebuilt at T. With --stream DAYS and --ranker the bundle
+names a stream window of DAYS days (D060): the ranker is trained on
+candidates and features from the stream state (fresh.State) at each
+request's time, and with --recency also on window_count and item_age; each
+golden case carries the stream inputs of its features.
 """
 
 import argparse
@@ -33,6 +38,7 @@ import tempfile
 # One BLAS thread, as implicit recommends; set before numpy loads.
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 from collections import Counter, defaultdict
+from typing import Callable, NamedTuple
 
 import implicit
 import numpy as np
@@ -43,6 +49,8 @@ import sklearn
 from onnx import TensorProto, helper, numpy_helper
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
+
+import fresh
 
 SEED = 1  # the only source of randomness: ALS initialization and golden sampling
 # The ALS settings of the baseline bundle, b7ff0634dd7b (B0).
@@ -175,6 +183,8 @@ def fold_in_encoder(vecs, m):
 
 # The ranker's input features, in column order (SPEC §8, Ranker features).
 RANKER_FEATURES = ["vector_score", "cooc_score", "popular_score", "item_norm", "last_item_cosine", "log_history_len"]
+# The features that may follow them with a stream window (D060).
+RECENCY_FEATURES = ["window_count", "item_age"]
 # Rows the service passes to the ranker; rows past the candidates are zero.
 RANKER_ROWS = 512
 
@@ -224,28 +234,53 @@ def check_ranker(sess, n_features):
     return None
 
 
-def source_scores(cooc_ids, popular, hist):
+class Sources(NamedTuple):
+    """What a request's candidates and features read: an item's co-occurring
+    items, best first (row), the popular list, best first, and, for the
+    recency features, (ts, every item's window count, every item's first
+    event time, fresh.NONE for none)."""
+
+    row: Callable[[int], list]
+    popular: list
+    recency: tuple | None = None
+
+
+def tables(cooc_ids, popular):
+    """The sources of cooc_ids.npy, padded with 0, and popular.npy."""
+    def row(i):
+        r = cooc_ids[i]
+        end = np.flatnonzero(r == 0)
+        return r[: end[0] if len(end) else len(r)].tolist()
+    return Sources(row, [int(i) for i in popular])
+
+
+def streamed(state, ts, w, recency=False):
+    """The sources of the stream state at ts with window w (D059, D060)."""
+    rec = (ts, state.counts(ts, w), state.first_ts) if recency else None
+    return Sources(lambda i: state.row(i, ts, COOC_TOP), state.popular(ts, w, POPULAR_CANDIDATES), rec)
+
+
+def source_scores(src, hist):
     """Each item's best co-occurrence and popularity scores for hist, oldest
     first (SPEC §8), as dicts by internal ID."""
     cooc = {}
     for s in range(min(COOC_SEEDS, len(hist))):
-        for r, i in enumerate(cooc_ids[hist[-1 - s]]):
-            if i == 0:
-                break
+        for r, i in enumerate(src.row(hist[-1 - s])):
             cooc[int(i)] = max(cooc.get(int(i), 0.0), 1 / ((s + 1) * (r + 1)))
     pop = {}
-    for r, i in enumerate(popular[:POPULAR_CANDIDATES]):
+    for r, i in enumerate(src.popular[:POPULAR_CANDIDATES]):
         pop.setdefault(int(i), 1 / (r + 1))
     return cooc, pop
 
 
-def features(vecs, cooc, pop, hist, uv, ids):
+def features(vecs, cooc, pop, hist, uv, ids, recency=None):
     """The ranker's input for the candidates ids (SPEC §8, in the order of
-    RANKER_FEATURES), computed in float64 and rounded to float32; uv is the
-    user vector or None."""
+    RANKER_FEATURES, then RECENCY_FEATURES given recency, a Sources'),
+    computed in float64 and rounded to float32; uv is the user vector or
+    None."""
     v = vecs[ids].astype(np.float64)
     norm = np.sqrt((v * v).sum(axis=1))
-    out = np.zeros((len(ids), len(RANKER_FEATURES)))
+    out = np.zeros((len(ids), len(RANKER_FEATURES) + (len(RECENCY_FEATURES) if recency else 0)))
     if uv is not None:
         out[:, 0] = v @ uv.astype(np.float64)
     out[:, 1] = [cooc.get(int(i), 0.0) for i in ids]
@@ -257,16 +292,22 @@ def features(vecs, cooc, pop, hist, uv, ids):
         ok = (norm > 0) & (last_norm > 0)
         out[ok, 4] = (v[ok] @ last) / (norm[ok] * last_norm)
     out[:, 5] = np.log1p(len(hist))
+    if recency:
+        ts, counts, first = recency
+        f = np.minimum(first[ids], ts)
+        out[:, 6] = np.log1p(counts[ids])
+        out[:, 7] = np.where(f < ts, np.log1p((ts - f) / fresh.DAY), 0)
     return out.astype(np.float32)
 
 
-def ranker_input(vecs, cooc_ids, popular, hist, uv):
+def ranker_input(vecs, src, hist, uv):
     """The service's ranker candidates for hist, best first, with their
-    retrieval scores and features: the union of the vector top VECTOR_TOP
-    (zero vectors left out, D028), the co-occurring and the popular items,
-    without the history's items; the RANKER_ROWS best by u · v, or without a
-    user vector by the best source score, ties to the lower ID."""
-    cooc, pop = source_scores(cooc_ids, popular, hist)
+    retrieval scores and features, given the sources src: the union of the
+    vector top VECTOR_TOP (zero vectors left out, D028), the co-occurring
+    and the popular items, without the history's items; the RANKER_ROWS
+    best by u · v, or without a user vector by the best source score, ties
+    to the lower ID."""
+    cooc, pop = source_scores(src, hist)
     seen = set(hist)
     ids = set(cooc) | set(pop)
     if uv is not None:
@@ -279,7 +320,7 @@ def ranker_input(vecs, cooc_ids, popular, hist, uv):
     else:
         score = np.array([max(cooc.get(i, 0.0), pop.get(i, 0.0)) for i in ids.tolist()])
     order = np.lexsort((ids, -score))[:RANKER_ROWS]
-    return ids[order], score[order], features(vecs, cooc, pop, hist, uv, ids[order])
+    return ids[order], score[order], features(vecs, cooc, pop, hist, uv, ids[order], src.recency)
 
 
 def recall_at_10(scores, ids, relevant):
@@ -287,23 +328,25 @@ def recall_at_10(scores, ids, relevant):
     return len(relevant & set(top.tolist())) / len(relevant)
 
 
-def train_ranker(vecs, cooc_ids, popular, seqs, valid, item_ix, user_vector):
+def train_ranker(vecs, sources, seqs, valid, item_ix, user_vector):
     """Fit the ranker on the valid split: a request at each valid user's
     first valid event, whose history is the user's train events, labels its
-    candidates 1 if the user has a valid event on them. The features read
-    only tables built from the train split, which ends before the valid
-    split starts. Users none of whose valid items are candidates teach a
-    ranker nothing and are left out. Returns the weights and bias of a
-    logistic regression on the raw features, and what it scored on the
-    users held out. user_vector(history) is the bundle's user vector."""
-    relevant = defaultdict(set)
-    for user, item, _ in valid:
+    candidates 1 if the user has a valid event on them. sources(ts) gives
+    the sources of a request at ts: tables built from the train split,
+    which ends before the valid split starts, or the stream state before
+    ts. Users none of whose valid items are candidates teach a ranker
+    nothing and are left out. Returns the weights and bias of a logistic
+    regression on the raw features, and what it scored on the users held
+    out. user_vector(history) is the bundle's user vector."""
+    relevant, first = defaultdict(set), {}
+    for user, item, ts in valid:
         relevant[user].add(item_ix[item])
+        first[user] = min(ts, first.get(user, ts))
     queries = []
     for user in sorted(u for u in relevant if u in seqs):
         hist = seqs[user]
         uv = user_vector(hist)
-        ids, retrieval, x = ranker_input(vecs, cooc_ids, popular, hist, uv if np.any(uv) else None)
+        ids, retrieval, x = ranker_input(vecs, sources(first[user]), hist, uv if np.any(uv) else None)
         y = np.isin(ids, list(relevant[user]))
         if y.any():
             queries.append((x, y, ids, retrieval, relevant[user]))
@@ -368,16 +411,18 @@ def version_of(sums):
     return hashlib.sha256("".join(f"{name}{sums[name]}" for name in sorted(sums)).encode()).hexdigest()[:12]
 
 
-def main(data, out, encoder, ranker, category="Video_Games", baseline=False, cutoff_at=None, ranker_from=None):
+def main(data, out, encoder, ranker, category="Video_Games", baseline=False, cutoff_at=None, ranker_from=None,
+         stream_days=None, recency=False):
     train = read_split(data, "train", category)
     test = read_split(data, "test", category)
     valid = read_split(data, "valid", category)
+    events = train + valid + test
     items = sorted({i for rows in (train, valid, test) for _, i, _ in rows})
     item_ix = {item: n + 1 for n, item in enumerate(items)}  # 0 is padding
     n = len(items) + 1
     if cutoff_at is not None:
         # Every event before cutoff_at, of any split, takes the train split's place.
-        train = [r for r in train + valid + test if r[2] < cutoff_at]
+        train = [r for r in events if r[2] < cutoff_at]
 
     als = BASELINE_ALS if baseline else ALS.get(category, BASELINE_ALS)
     vecs = als_vectors(train, item_ix, als)
@@ -415,15 +460,19 @@ def main(data, out, encoder, ranker, category="Video_Games", baseline=False, cut
             return mean_vector(vecs, h)
 
     rank = None
+    stream = {"popular_window_ms": stream_days * fresh.DAY} if stream_days else None
+    names = RANKER_FEATURES + (RECENCY_FEATURES if recency else [])
     if ranker_from:
-        # Another bundle's ranker, checked against its manifest; its labels' events count as used.
+        # Another bundle's ranker and stream window, checked against its manifest; its labels' events count as used.
         with open(f"{ranker_from}/manifest.json") as f:
             src = json.load(f)
-        if src.get("ranker_features") != RANKER_FEATURES or sha256(f"{ranker_from}/ranker.onnx") != src["sha256"].get("ranker.onnx"):
-            sys.exit(f"{ranker_from} has no ranker over {RANKER_FEATURES} that matches its manifest")
+        names, stream = src.get("ranker_features"), src.get("stream")
+        if (names not in (RANKER_FEATURES, RANKER_FEATURES + RECENCY_FEATURES) or (names != RANKER_FEATURES and not stream)
+                or sha256(f"{ranker_from}/ranker.onnx") != src["sha256"].get("ranker.onnx")):
+            sys.exit(f"{ranker_from} has no ranker over {RANKER_FEATURES}, or those and {RECENCY_FEATURES} with a stream window, that matches its manifest")
         with open(f"{ranker_from}/ranker.onnx", "rb") as f:
             rank = f.read()
-        if msg := check_ranker(session(rank), len(RANKER_FEATURES)):
+        if msg := check_ranker(session(rank), len(names)):
             sys.exit(f"ranker: {msg}")
         cutoff = max(cutoff, src["train_cutoff_ts"])
         ranker_stats = {"from": src["model_version"]}
@@ -431,11 +480,27 @@ def main(data, out, encoder, ranker, category="Video_Games", baseline=False, cut
         # The labels must come after every event the features are built from.
         if not cutoff < min(ts for _, _, ts in valid):
             sys.exit("the valid split must start after the train split")
-        w, b, ranker_stats = train_ranker(vecs, cooc_ids, popular, seqs, valid, item_ix, user_vector)
+        if stream:
+            state = fresh.State(train + valid, item_ix)
+
+            def sources(ts):
+                return streamed(state, ts, stream["popular_window_ms"], recency)
+        else:
+            def sources(ts):
+                return tables(cooc_ids, popular)
+        w, b, ranker_stats = train_ranker(vecs, sources, seqs, valid, item_ix, user_vector)
         rank = linear_ranker(w, b).SerializeToString()
-        if msg := check_ranker(session(rank), len(RANKER_FEATURES)):
+        if msg := check_ranker(session(rank), len(names)):
             sys.exit(f"ranker: {msg}")
         cutoff = max(ts for _, _, ts in valid)  # the labels' events were used in training too
+    if rank and stream:
+        # The golden cases read the stream state of the events the bundle used, just after the last of them.
+        golden_ts, w = cutoff + 1, stream["popular_window_ms"]
+        golden_state = fresh.State([r for r in events if r[2] <= cutoff], item_ix)
+        golden_src = streamed(golden_state, golden_ts, w, len(names) > len(RANKER_FEATURES))
+        golden_counts = golden_state.counts(golden_ts, w)
+    elif rank:
+        golden_src = tables(cooc_ids, popular)
 
     rng = np.random.default_rng(SEED)
     test_users = sorted({u for u, _, _ in test if u in seqs})
@@ -454,8 +519,12 @@ def main(data, out, encoder, ranker, category="Video_Games", baseline=False, cut
             uv = got
         case = {"history": hist, "user_emb": uv.tolist(), "top10": top_k(vecs, uv, set(hist), 10)}
         if rank:
-            ids, _, x = ranker_input(vecs, cooc_ids, popular, hist, uv if np.any(uv) else None)
+            ids, _, x = ranker_input(vecs, golden_src, hist, uv if np.any(uv) else None)
             case |= {"candidates": ids.tolist(), "features": x.tolist()}
+            if stream:
+                case |= {"ts": golden_ts, "cooc_rows": [golden_src.row(i) for i in hist[::-1][:COOC_SEEDS]],
+                         "popular": golden_src.popular, "window_counts": golden_counts[ids].tolist(),
+                         "first_ts": [int(t) if t < golden_ts else None for t in golden_state.first_ts[ids]]}
         golden.append(case)
 
     os.makedirs(out, exist_ok=True)
@@ -497,7 +566,8 @@ def main(data, out, encoder, ranker, category="Video_Games", baseline=False, cut
         "max_seq_len": MAX_SEQ_LEN,
         "pad_id": 0,
         "user_encoder": encoder,
-        **({"ranker_features": RANKER_FEATURES} if rank else {}),
+        **({"stream": stream} if rank and stream else {}),
+        **({"ranker_features": names} if rank else {}),
         "build": build,
         "sha256": sums,
     }
@@ -522,5 +592,11 @@ if __name__ == "__main__":
     r.add_argument("--ranker", action="store_true", help="train and add a logistic-regression ranker")
     r.add_argument("--ranker-from", metavar="DIR", help="add the ranker of the bundle in DIR")
     p.add_argument("--cutoff", type=int, metavar="T", help="build from every event before T (ms), of any split, in place of the train split")
+    p.add_argument("--stream", type=int, metavar="DAYS", help="with --ranker: a stream window of DAYS days, the ranker trained on the stream state")
+    p.add_argument("--recency", action="store_true", help="with --stream: the ranker also takes window_count and item_age")
     a = p.parse_args()
-    main(a.data, a.out, a.encoder, a.ranker, a.category, a.baseline, a.cutoff, a.ranker_from)
+    if a.stream is not None and (not a.ranker or a.stream <= 0):
+        p.error("--stream takes a number of days above 0, and --ranker")
+    if a.recency and not a.stream:
+        p.error("--recency needs --stream")
+    main(a.data, a.out, a.encoder, a.ranker, a.category, a.baseline, a.cutoff, a.ranker_from, a.stream, a.recency)

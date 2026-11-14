@@ -41,8 +41,8 @@ proto: ## Lint the proto files and regenerate their Go code (needs buf v1.75.0)
 data: ## Download an Amazon 2023 category's split into DATA: CATEGORY, Video_Games (with its metadata) by default
 	scripts/data.sh $(DATA) $(CATEGORY)
 
-bundle: ## Build the baseline bundle into DATA/bundle (needs uv); ENCODER=onnx adds user_encoder.onnx, RANKER=1 a trained ranker.onnx
-	cd tools/bundle && uv run --locked python build.py $(abspath $(DATA)) $(abspath $(DATA))/bundle --encoder $(ENCODER) $(if $(RANKER),--ranker)
+bundle: ## Build the baseline bundle into DATA/bundle (needs uv); ENCODER=onnx adds user_encoder.onnx, RANKER=1 a trained ranker.onnx, STREAM=DAYS with RANKER=1 a stream window and a ranker trained on the stream state (RECENCY=1: with the recency features)
+	cd tools/bundle && uv run --locked python build.py $(abspath $(DATA)) $(abspath $(DATA))/bundle --encoder $(ENCODER) $(if $(RANKER),--ranker) $(if $(STREAM),--stream $(STREAM)) $(if $(RECENCY),--recency)
 
 images: ## Build the gateway, annshard and ingest images as recserve/<name>:TAG; DOCKER_BUILD_FLAGS adds docker build flags
 	for t in gateway annshard ingest; do docker build $(DOCKER_BUILD_FLAGS) --target $$t -t recserve/$$t:$(TAG) . || exit 1; done

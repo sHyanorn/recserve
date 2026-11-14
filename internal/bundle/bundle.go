@@ -45,10 +45,31 @@ type Manifest struct {
 	MaxSeqLen     int    `json:"max_seq_len"`
 	PadID         int    `json:"pad_id"`
 	UserEncoder   string `json:"user_encoder"`
+	// Stream, if set, names the stream state's window: the popularity and
+	// co-occurrence sources come from the stream state, not from
+	// popular.npy and cooc_ids.npy (D060).
+	Stream *Stream `json:"stream,omitempty"`
 	// RankerFeatures names the ranker's input columns; it must equal
-	// RankerFeatures when the bundle has ranker.onnx, and be absent otherwise.
+	// RankerFeatures when the bundle has ranker.onnx, or with Stream, those
+	// followed by RecencyFeatures, and be absent without ranker.onnx.
 	RankerFeatures []string          `json:"ranker_features,omitempty"`
 	SHA256         map[string]string `json:"sha256"`
+}
+
+// Stream is the stream state a bundle's sources and ranker read (D060).
+type Stream struct {
+	PopularWindowMS int64 `json:"popular_window_ms"`
+}
+
+// Recency reports whether the bundle's ranker takes RecencyFeatures.
+func (m *Manifest) Recency() bool { return len(m.RankerFeatures) > len(RankerFeatures) }
+
+// featureCount is the number of the ranker's input columns.
+func (m *Manifest) featureCount() int {
+	if m.Recency() {
+		return len(RankerFeatures) + len(RecencyFeatures)
+	}
+	return len(RankerFeatures)
 }
 
 // CoocWidth is the number of co-occurring items stored per item.
@@ -57,6 +78,12 @@ const CoocWidth = 50
 // RankerFeatures are the ranker's input columns the service computes, in
 // order (docs/SPEC.md §8).
 var RankerFeatures = []string{"vector_score", "cooc_score", "popular_score", "item_norm", "last_item_cosine", "log_history_len"}
+
+// RecencyFeatures may follow RankerFeatures in the ranker's input of a
+// bundle with a stream window (D060): ln(1 + the item's events in the
+// window before the request time), and ln(1 + the days from the item's
+// first event to the request time), 0 for an item with none before it.
+var RecencyFeatures = []string{"window_count", "item_age"}
 
 // optionalFiles are the files a bundle may have; each is read only if the
 // manifest lists it.
@@ -132,6 +159,8 @@ func readManifest(dir string) (Manifest, error) {
 		return m, fmt.Errorf("unsupported metric %q, pad_id %d or user_encoder %q", m.Metric, m.PadID, m.UserEncoder)
 	case m.ItemCount <= 0 || m.Dim <= 0 || m.MaxSeqLen <= 0 || m.ModelVersion == "":
 		return m, errors.New("manifest: item_count, dim, max_seq_len and model_version are required")
+	case m.Stream != nil && m.Stream.PopularWindowMS <= 0:
+		return m, fmt.Errorf("stream popular_window_ms %d, want a window above 0", m.Stream.PopularWindowMS)
 	case m.ModelVersion != VersionOf(m.SHA256):
 		// A replica and the gateway given different files under one name
 		// would otherwise serve them as one version (D046).
@@ -361,14 +390,16 @@ func (b *Bundle) loadRanker(model []byte) error {
 		}
 		return nil
 	}
-	if !slices.Equal(b.RankerFeatures, RankerFeatures) {
-		return fmt.Errorf("ranker_features %q, the service computes %q", b.RankerFeatures, RankerFeatures)
+	recency := slices.Concat(RankerFeatures, RecencyFeatures)
+	six, eight := slices.Equal(b.RankerFeatures, RankerFeatures), b.Stream != nil && slices.Equal(b.RankerFeatures, recency)
+	if !six && !eight {
+		return fmt.Errorf("ranker_features %q, the service computes %q, or %q with a stream window", b.RankerFeatures, RankerFeatures, recency)
 	}
+	nf := b.featureCount()
 	var err error
-	if b.Ranker, err = onnx.NewRanker(model, len(RankerFeatures), RankerRows); err != nil {
+	if b.Ranker, err = onnx.NewRanker(model, nf, RankerRows); err != nil {
 		return fmt.Errorf("ranker.onnx: %w", err)
 	}
-	nf := len(RankerFeatures)
 	zero, err := b.Ranker.Rank(context.Background(), make([]float32, RankerRows*nf))
 	if err != nil {
 		return fmt.Errorf("ranker.onnx: %w", err)
@@ -425,6 +456,16 @@ type goldenCase struct {
 	// each, as the bundle's trainer computed them.
 	Candidates []int32     `json:"candidates,omitempty"`
 	Features   [][]float32 `json:"features,omitempty"`
+	// With a ranker and a stream window: the request time and the stream
+	// inputs of the features as the trainer's stream state gave them at
+	// that time (D060): the co-occurrence row of each seed, the latest
+	// history item first, the popular list, and each candidate's window
+	// count and first event time, null for none.
+	TS           *int64    `json:"ts,omitempty"`
+	CoocRows     [][]int32 `json:"cooc_rows,omitempty"`
+	Popular      []int32   `json:"popular,omitempty"`
+	WindowCounts []int     `json:"window_counts,omitempty"`
+	FirstTS      []*int64  `json:"first_ts,omitempty"`
 }
 
 // FeatureTolerance bounds the difference between a golden case's features
@@ -514,11 +555,13 @@ func (b *Bundle) checkRaw(c goldenCase) error {
 
 // checkFeatures requires a bundle with a ranker to compute the features its
 // trainer gave for a golden case's candidates, within FeatureTolerance,
-// from the case's history and user vector: a ranker trained on features
-// that the service computes otherwise would rank by others.
+// from the case's history and user vector, and with a stream window from
+// its stream inputs: a ranker trained on features that the service
+// computes otherwise would rank by others.
 func (b *Bundle) checkFeatures(c goldenCase) error {
+	streamInputs := c.TS != nil || c.CoocRows != nil || c.Popular != nil || c.WindowCounts != nil || c.FirstTS != nil
 	if b.Ranker == nil {
-		if c.Candidates != nil || c.Features != nil {
+		if c.Candidates != nil || c.Features != nil || streamInputs {
 			return errors.New("candidates without a ranker")
 		}
 		return nil
@@ -531,19 +574,122 @@ func (b *Bundle) checkFeatures(c goldenCase) error {
 			return fmt.Errorf("candidate ID %d out of range", id)
 		}
 	}
-	got := b.Features(c.Candidates, c.History, c.UserEmb, BestScores(b.CoocHits(c.History)), BestScores(b.PopularHits()))
-	nf := len(RankerFeatures)
+	cooc, popular := BestScores(b.CoocHits(c.History)), BestScores(b.PopularHits())
+	var rec *Recency
+	switch {
+	case b.Stream == nil && streamInputs:
+		return errors.New("stream inputs without a stream window")
+	case b.Stream != nil:
+		var err error
+		if cooc, popular, rec, err = b.streamInputs(c); err != nil {
+			return err
+		}
+	}
+	got := b.Features(c.Candidates, c.History, c.UserEmb, cooc, popular, rec)
+	nf := b.featureCount()
+	names := slices.Concat(RankerFeatures, RecencyFeatures)
 	for i, row := range c.Features {
 		if len(row) != nf {
 			return fmt.Errorf("candidate %d has %d features, want %d", c.Candidates[i], len(row), nf)
 		}
 		for j, want := range row {
 			if d := math.Abs(float64(got[i*nf+j]) - float64(want)); !(d <= FeatureTolerance) {
-				return fmt.Errorf("feature %s of candidate %d differs by %g", RankerFeatures[j], c.Candidates[i], d)
+				return fmt.Errorf("feature %s of candidate %d differs by %g", names[j], c.Candidates[i], d)
 			}
 		}
 	}
 	return nil
+}
+
+// streamInputs returns the sources' scores, and with RecencyFeatures what
+// they read, of a golden case of a bundle with a stream window, from the
+// stream inputs the case carries.
+func (b *Bundle) streamInputs(c goldenCase) (cooc, popular map[int32]float64, rec *Recency, err error) {
+	seeds := min(CoocSeeds, len(c.History))
+	if c.TS == nil || len(c.CoocRows) != seeds || c.Popular == nil {
+		return nil, nil, nil, fmt.Errorf("a bundle with a stream window needs ts, %d cooc_rows and popular", seeds)
+	}
+	rows := make(map[int32][]int32, seeds)
+	for s, row := range c.CoocRows {
+		rows[c.History[len(c.History)-1-s]] = row
+	}
+	cooc = BestScores(CoocHitsOf(c.History, func(id int32) []int32 { return rows[id] }))
+	popular = BestScores(PopularHitsOf(c.Popular))
+	if len(c.WindowCounts) != len(c.Candidates) || len(c.FirstTS) != len(c.Candidates) {
+		return nil, nil, nil, errors.New("a bundle with a stream window needs window_counts and first_ts for each candidate")
+	}
+	if !b.Recency() {
+		return cooc, popular, nil, nil
+	}
+	counts, firsts := make(map[int32]int, len(c.Candidates)), make(map[int32]*int64, len(c.Candidates))
+	for i, id := range c.Candidates {
+		counts[id], firsts[id] = c.WindowCounts[i], c.FirstTS[i]
+	}
+	rec = &Recency{TS: *c.TS, Count: func(id int32) int { return counts[id] }, First: func(id int32) (int64, bool) {
+		if t := firsts[id]; t != nil {
+			return *t, true
+		}
+		return 0, false
+	}}
+	return cooc, popular, rec, nil
+}
+
+// StreamState is what a stream state gives at a time ts (fresh.State, D059).
+type StreamState interface {
+	Row(item int32, ts int64, n int) []int32
+	Popular(ts, w int64, n int) []int32
+	Count(item int32, from, to int64) int
+	First(item int32, ts int64) (int64, bool)
+}
+
+// CheckStreamGolden requires the stream inputs of every golden case of a
+// bundle with a stream window and a ranker to equal those s gives at the
+// case's time (D060 point 3): s, given the events the trainer's stream
+// state was given, must keep them as the trainer's did.
+func (b *Bundle) CheckStreamGolden(s StreamState) error {
+	if b.Stream == nil || b.Ranker == nil {
+		return errors.New("golden stream inputs need a stream window and a ranker")
+	}
+	data, err := b.readListed(b.Dir, "golden.jsonl")
+	if err != nil {
+		return err
+	}
+	w := b.Stream.PopularWindowMS
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	sc.Buffer(nil, 1<<20)
+	for n := 0; sc.Scan(); n++ {
+		var c goldenCase
+		if err := json.Unmarshal(sc.Bytes(), &c); err != nil {
+			return fmt.Errorf("golden %d: %w", n, err)
+		}
+		ts := *c.TS // Load requires it
+		for k, row := range c.CoocRows {
+			seed := c.History[len(c.History)-1-k]
+			if got := s.Row(seed, ts, CoocWidth); !slices.Equal(got, row) {
+				return fmt.Errorf("golden %d: item %d's co-occurrence row %v, the trainer's %v", n, seed, got, row)
+			}
+		}
+		if got := s.Popular(ts, w, PopularTop); !slices.Equal(got, c.Popular) {
+			return fmt.Errorf("golden %d: popular list %v, the trainer's %v", n, got, c.Popular)
+		}
+		for i, id := range c.Candidates {
+			count := s.Count(id, ts-w, ts)
+			first, ok := s.First(id, ts)
+			want := c.FirstTS[i]
+			if count != c.WindowCounts[i] || ok != (want != nil) || ok && first != *want {
+				got, trainer := "none", "none"
+				if ok {
+					got = fmt.Sprint(first)
+				}
+				if want != nil {
+					trainer = fmt.Sprint(*want)
+				}
+				return fmt.Errorf("golden %d: item %d's window count %d and first event %s, the trainer's %d and %s",
+					n, id, count, got, c.WindowCounts[i], trainer)
+			}
+		}
+	}
+	return sc.Err()
 }
 
 // New assembles a bundle from parts already in memory, without files or

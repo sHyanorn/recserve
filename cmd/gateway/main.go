@@ -346,8 +346,9 @@ func openShards(replicas [][]string, cfg shard.Config, hedgeDelay, timeout time.
 // preparer returns the function that loads, verifies and indexes the
 // bundle in a directory, for the first bundle and for every swap: the
 // checksums, golden cases and train cutoff are checked against opt, and
-// index puts the vectors into shards. The pipelines share store and cache
-// c, and have budgets.
+// index puts the vectors into shards. A bundle that names a stream window
+// is rejected: the gateway keeps no stream state (D060). The pipelines
+// share store and cache c, and have budgets.
 func preparer(opt bundle.Options, store history.Store, index func(*bundle.Bundle) (recommend.Shards, error), budgets recommend.Budgets, c recommend.Cache) func(dir string) (*recommend.Pipeline, error) {
 	return func(dir string) (*recommend.Pipeline, error) {
 		b, err := bundle.Load(dir, opt)
@@ -356,6 +357,9 @@ func preparer(opt bundle.Options, store history.Store, index func(*bundle.Bundle
 		}
 		if err != nil {
 			return nil, err
+		}
+		if b.Stream != nil {
+			return nil, errors.Join(fmt.Errorf("bundle %s names a stream window, and the gateway keeps no stream state", b.ModelVersion), b.Close())
 		}
 		s, err := index(b)
 		if err != nil {

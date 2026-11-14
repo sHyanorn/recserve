@@ -155,6 +155,9 @@ func TestSwapThroughPreparer(t *testing.T) {
 			m["train_cutoff_ts"] = 150
 		}), http.StatusUnprocessableEntity, bundle.ErrCutoff.Error()},
 		{"no directory", filepath.Join(t.TempDir(), "none"), http.StatusUnprocessableEntity, "no such file"},
+		{"stream window", bundletest.Write(t, bundletest.Variant(t, 4), func(_ map[string][]byte, m map[string]any) {
+			m["stream"] = map[string]any{"popular_window_ms": 1000}
+		}), http.StatusUnprocessableEntity, "no stream state"},
 		{"same version", bundletest.Write(t), http.StatusConflict, recommend.ErrActive.Error()},
 		{"good", good, http.StatusOK, bundletest.VersionOf(t, good)},
 		{"other items", otherItems, http.StatusOK, bundletest.VersionOf(t, otherItems)},

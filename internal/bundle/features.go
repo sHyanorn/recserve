@@ -2,6 +2,7 @@ package bundle
 
 import (
 	"math"
+	"time"
 
 	"github.com/sHyanorn/recserve/internal/vec"
 )
@@ -61,13 +62,27 @@ func BestScores(hits []vec.Hit) map[int32]float64 {
 	return out
 }
 
+// Recency is what a request's RecencyFeatures read from the stream state at
+// its time TS (D060): an item's events in the window before TS, and the time
+// of its first event before TS, false if it has none.
+type Recency struct {
+	TS    int64
+	Count func(id int32) int
+	First func(id int32) (int64, bool)
+}
+
+// ageUnit is item_age's unit, a day in milliseconds; a test changes it to
+// show that golden cases catch another unit.
+var ageUnit = float64(24 * time.Hour / time.Millisecond)
+
 // Features returns the ranker's input for cands, one row per candidate,
-// the columns of RankerFeatures (docs/SPEC.md §8). hist is the history,
-// oldest first, uv the user vector or nil, and cooc and popular hold each
-// candidate's best score from those sources (BestScores), empty for a
-// source that was skipped. Each value is computed in float64 and rounded
-// to float32.
-func (b *Bundle) Features(cands, hist []int32, uv []float32, cooc, popular map[int32]float64) []float32 {
+// the columns of the bundle's ranker_features: RankerFeatures (docs/SPEC.md
+// §8), then RecencyFeatures if the bundle's ranker takes them, which rec
+// must then give. hist is the history, oldest first, uv the user vector or
+// nil, and cooc and popular hold each candidate's best score from those
+// sources (BestScores), empty for a source that was skipped. Each value is
+// computed in float64 and rounded to float32.
+func (b *Bundle) Features(cands, hist []int32, uv []float32, cooc, popular map[int32]float64, rec *Recency) []float32 {
 	var last []float32
 	var lastNorm float64
 	if len(hist) > 0 {
@@ -75,7 +90,7 @@ func (b *Bundle) Features(cands, hist []int32, uv []float32, cooc, popular map[i
 		lastNorm = math.Sqrt(vec.Dot(last, last))
 	}
 	histLen := math.Log1p(float64(len(hist)))
-	nf := len(RankerFeatures)
+	nf := b.featureCount()
 	out := make([]float32, len(cands)*nf)
 	for i, id := range cands {
 		row := b.Vectors.Row(id)
@@ -90,6 +105,13 @@ func (b *Bundle) Features(cands, hist []int32, uv []float32, cooc, popular map[i
 		f := out[i*nf : (i+1)*nf]
 		f[0], f[1], f[2] = float32(vs), float32(cooc[id]), float32(popular[id])
 		f[3], f[4], f[5] = float32(norm), float32(cos), float32(histLen)
+		if nf > len(RankerFeatures) {
+			var age float64
+			if first, ok := rec.First(id); ok {
+				age = math.Log1p(float64(rec.TS-first) / ageUnit)
+			}
+			f[6], f[7] = float32(math.Log1p(float64(rec.Count(id)))), float32(age)
+		}
 	}
 	return out
 }

@@ -31,6 +31,7 @@ import numpy as np
 PAIR_SPAN = 5
 KIND = "rating"  # dataset.Kind
 DAY = 86_400_000
+NONE = np.iinfo(np.int64).max  # State.first_ts of an item without events
 
 
 def event_id(user, item, ts, kind=KIND):
@@ -70,6 +71,9 @@ class State:
                         pairs[i].append((ts, q))
                         pairs[q].append((ts, i))
         self.times = {i: np.sort(np.array(t, dtype=np.int64)) for i, t in times.items()}
+        self.first_ts = np.full(self.n, NONE, dtype=np.int64)  # each item's first event time
+        for i, t in self.times.items():
+            self.first_ts[i] = t[0]
         events.sort()
         self.ev_ts = np.array([e[0] for e in events], dtype=np.int64)
         self.ev_item = np.array([e[1] for e in events], dtype=np.int64)

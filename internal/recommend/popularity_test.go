@@ -60,6 +60,19 @@ func popularityRank(s *fresh.State, items int, item int32, ts, w int64, seen map
 	return rank + below
 }
 
+// streamState returns the stream state of rows, in b's internal IDs, each
+// event paired with the user's latest events before it as h reads them; h
+// must hold the rows.
+func streamState(b *bundle.Bundle, h history.Store, rows []dataset.Row) (*fresh.State, error) {
+	evs, err := fresh.Events(context.Background(), h, b.Lookup, rows)
+	if err != nil {
+		return nil, err
+	}
+	s := fresh.New(b.ItemCount)
+	s.Add(evs...)
+	return s, nil
+}
+
 // popularityRanks returns, per event, the popularity reference's rank of
 // its item at the event's time with window w, the history before it in h
 // left out, GOMAXPROCS events at a time; 0 for an item b does not know.
@@ -144,12 +157,10 @@ func TestRealDataPopularityReference(t *testing.T) {
 		t.Skip("RECSERVE_POPULARITY_DIR not set")
 	}
 	rd := loadRealData(t)
-	evs, err := fresh.Events(context.Background(), rd.store, rd.bundle.Lookup, rd.train)
+	s, err := streamState(rd.bundle, rd.store, rd.train)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := fresh.New(rd.bundle.ItemCount)
-	s.Add(evs...)
 	for _, d := range popularityWindows {
 		name := filepath.Join(dir, fmt.Sprintf("popularity_%dd.npy", d))
 		raw, err := os.ReadFile(name)

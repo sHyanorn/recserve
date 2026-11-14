@@ -163,7 +163,7 @@ func want(t *testing.T, p *Pipeline, f *fault, req Request) Response {
 	if rk := q.ranker(); rk != nil && len(scored) > 0 {
 		if f.fails(stageRanker, -1) {
 			d.add(f.reason, nil)
-		} else if scored, _, err = q.rank(ctx, rk, scored, results, hist, uv); err != nil {
+		} else if scored, _, err = q.rank(ctx, rk, scored, results, 0, hist, uv); err != nil {
 			t.Fatal(err)
 		}
 	}

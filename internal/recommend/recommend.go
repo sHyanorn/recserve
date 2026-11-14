@@ -255,11 +255,13 @@ type Pipeline struct {
 	History history.Store
 	Budgets Budgets
 	// Fresh, if not nil, is the event stream's state (D059) in the bundle's
-	// internal IDs: at a request's time, its popular items over FreshWindow
+	// internal IDs: at a request's time, its popular items over the window
 	// before that time and the items co-occurring with the history replace
-	// the bundle's popularity list and co-occurrence table.
+	// the bundle's popularity list and co-occurrence table. A bundle with a
+	// stream window (D060) requires it and names the window; FreshWindow,
+	// in milliseconds, is the window for a bundle that names none.
 	Fresh       *fresh.State
-	FreshWindow int64 // milliseconds
+	FreshWindow int64
 	// Cache, if not nil, holds responses that were not degraded. It may be
 	// shared by pipelines over different bundles, in this process or, on
 	// Valkey, in others: keys include the bundle version. Responses from it
@@ -336,6 +338,9 @@ func (p *Pipeline) Recommend(ctx context.Context, req Request) (Response, error)
 	}
 	if len(req.Recent) > MaxRecent {
 		return Response{}, fmt.Errorf("recent holds more than %d items", MaxRecent)
+	}
+	if p.Bundle.Stream != nil && p.Fresh == nil {
+		return Response{}, fmt.Errorf("bundle %s reads the stream state, which the pipeline does not have", p.Bundle.ModelVersion)
 	}
 	var d degradation
 	// The history read and the cache read share one budget.
@@ -478,7 +483,7 @@ func (p *Pipeline) compute(ctx context.Context, req Request, hist []int32, d *de
 		var ranked []vec.Hit
 		var dropped int
 		if err == nil {
-			ranked, dropped, err = p.rank(kctx, rk, scored, results, hist, uv)
+			ranked, dropped, err = p.rank(kctx, rk, scored, results, req.TS, hist, uv)
 		}
 		span.End()
 		cancel()
@@ -527,7 +532,7 @@ func (p *Pipeline) cacheKey(req Request, hist []int32) cache.Key {
 		b = binary.LittleEndian.AppendUint32(b, uint32(id))
 	}
 	if p.Fresh != nil { // the stream's state is read at the request time
-		b = binary.AppendVarint(binary.AppendVarint(b, req.TS), p.FreshWindow)
+		b = binary.AppendVarint(binary.AppendVarint(b, req.TS), p.window())
 	}
 	return sha256.Sum256(b)
 }
@@ -692,10 +697,10 @@ func (p *Pipeline) retrievalScores(results [][]vec.Hit, uv []float32, seen map[i
 	return scored
 }
 
-// rank scores the candidates with rk: the bundle.RankerRows best by
-// retrieval score, whose scores become rk's; the rest are dropped, and
-// their number returned.
-func (p *Pipeline) rank(ctx context.Context, rk Ranker, scored []vec.Hit, results [][]vec.Hit, hist []int32, uv []float32) ([]vec.Hit, int, error) {
+// rank scores the candidates of a request at ts with rk: the
+// bundle.RankerRows best by retrieval score, whose scores become rk's; the
+// rest are dropped, and their number returned.
+func (p *Pipeline) rank(ctx context.Context, rk Ranker, scored []vec.Hit, results [][]vec.Hit, ts int64, hist []int32, uv []float32) ([]vec.Hit, int, error) {
 	cands := slices.Clone(scored)
 	slices.SortFunc(cands, func(a, b vec.Hit) int { // vec.Better first
 		return cmp.Or(cmp.Compare(b.Score, a.Score), cmp.Compare(a.ID, b.ID))
@@ -706,7 +711,13 @@ func (p *Pipeline) rank(ctx context.Context, rk Ranker, scored []vec.Hit, result
 	for i, c := range cands {
 		ids[i] = c.ID
 	}
-	features := p.Bundle.Features(ids, hist, uv, bundle.BestScores(results[srcCooc]), bundle.BestScores(results[srcPopular]))
+	var rec *bundle.Recency
+	if p.Bundle.Recency() {
+		w := p.window()
+		rec = &bundle.Recency{TS: ts, Count: func(id int32) int { return p.Fresh.Count(id, ts-w, ts) },
+			First: func(id int32) (int64, bool) { return p.Fresh.First(id, ts) }}
+	}
+	features := p.Bundle.Features(ids, hist, uv, bundle.BestScores(results[srcCooc]), bundle.BestScores(results[srcPopular]), rec)
 	scores, err := rk.Rank(ctx, features)
 	if err != nil {
 		return nil, 0, err
@@ -741,7 +752,16 @@ func (p *Pipeline) popular(ctx context.Context, ts int64) ([]vec.Hit, error) {
 	if p.Fresh == nil {
 		return p.Bundle.PopularHits(), nil
 	}
-	return bundle.PopularHitsOf(p.Fresh.Popular(ts, p.FreshWindow, bundle.PopularTop)), nil
+	return bundle.PopularHitsOf(p.Fresh.Popular(ts, p.window(), bundle.PopularTop)), nil
+}
+
+// window returns the stream state's window: the bundle's, if it names one,
+// otherwise FreshWindow.
+func (p *Pipeline) window() int64 {
+	if s := p.Bundle.Stream; s != nil {
+		return s.PopularWindowMS
+	}
+	return p.FreshWindow
 }
 
 // merge returns the union of the sources' hits, each ID once with its best

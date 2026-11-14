@@ -3,8 +3,10 @@ package recommend
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/sHyanorn/recserve/internal/bundle"
@@ -142,5 +144,58 @@ func TestFreshCacheKey(t *testing.T) {
 	p.FreshWindow = 8
 	if k == p.cacheKey(at(5), hist) {
 		t.Error("with the state, two windows give one key")
+	}
+}
+
+// A bundle with a stream window reads the state over its own window, not
+// FreshWindow, and its ranker over the recency features gets each
+// candidate's window count and age in days at the request's time. Without
+// the state, the pipeline refuses the bundle.
+func TestFreshStreamBundle(t *testing.T) {
+	const n, day = 4, 86_400_000
+	m := bundle.Manifest{ModelVersion: "s", ItemCount: n, Dim: 1, MaxSeqLen: 5, Stream: &bundle.Stream{PopularWindowMS: 2 * day},
+		RankerFeatures: slices.Concat(bundle.RankerFeatures, bundle.RecencyFeatures)}
+	b := bundle.New(m, []string{"", "i1", "i2", "i3", "i4"}, matrix(t, 1, []float32{0, 1, 1, 1, 1}), nil, []int32{1})
+	s := fresh.New(n)
+	s.Add(fresh.Event{Item: 2, TS: day}, fresh.Event{Item: 3, TS: 5 * day}, fresh.Event{Item: 3, TS: 9 * day}, fresh.Event{Item: 4, TS: 10 * day})
+	var got []float32
+	p := New(b, history.NewMemory(), nil)
+	p.Fresh, p.FreshWindow = s, 100*day
+	p.rankWith = rankFunc(func(_ context.Context, x []float32) ([]float32, error) {
+		got = slices.Clone(x)
+		return make([]float32, len(x)/len(m.RankerFeatures)), nil
+	})
+	resp, err := p.Recommend(context.Background(), Request{User: "u", K: 5, TS: 10 * day})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Over two days before day 10, item 3 alone, once; its first event is on day 5.
+	if len(resp.Items) != 1 || resp.Items[0].ID != "i3" || len(got) != 8 {
+		t.Fatalf("items %v, ranker input %v; want item 3 alone", resp.Items, got)
+	}
+	if want := []float32{float32(math.Log1p(1)), float32(math.Log1p(5))}; !slices.Equal(got[6:], want) {
+		t.Errorf("window_count and item_age %v, want %v", got[6:], want)
+	}
+	p.Fresh = nil
+	if _, err := p.Recommend(context.Background(), Request{User: "u", K: 5, TS: 10 * day}); err == nil || !strings.Contains(err.Error(), "stream state") {
+		t.Errorf("without the state: %v", err)
+	}
+}
+
+// TestRealDataStreamGolden checks the stream inputs of the golden cases of
+// the bundle at RECSERVE_BUNDLE, if it names a stream window, against the
+// stream state of the train and valid splits (D060 point 3), which hold
+// every event before the cases' time of a bundle trained on valid.
+func TestRealDataStreamGolden(t *testing.T) {
+	rd := loadRealData(t)
+	if rd.bundle.Stream == nil {
+		t.Skip("the bundle names no stream window")
+	}
+	s, err := streamState(rd.bundle, rd.store, rd.train)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rd.bundle.CheckStreamGolden(s); err != nil {
+		t.Fatal(err)
 	}
 }

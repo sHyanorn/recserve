@@ -12,8 +12,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sHyanorn/recserve/internal/bundle/bundletest"
+	"github.com/sHyanorn/recserve/internal/dataset"
+	"github.com/sHyanorn/recserve/internal/fresh"
+	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/npy"
 	"github.com/sHyanorn/recserve/internal/onnx"
 	"github.com/sHyanorn/recserve/internal/onnx/onnxtest"
@@ -394,6 +398,147 @@ func TestLoadRejectsRanker(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			checkRejected(t, writeBundle(t, tc.edits...), Options{}, tc.want)
 		})
+	}
+}
+
+// withStreamRanker adds a stream window of 7 days and the test ranker over
+// the eight features, with golden cases that carry their stream inputs
+// (stream_golden.jsonl): the stream state they come from differs from the
+// bundle's co-occurrence table and popularity list.
+func withStreamRanker(t testing.TB) editFunc {
+	data, golden := onnxtest.Model(t, "stream_ranker.onnx"), onnxtest.Model(t, "stream_golden.jsonl")
+	return func(f map[string][]byte, m map[string]any) {
+		f["ranker.onnx"], f["golden.jsonl"] = data, golden
+		m["ranker_features"] = slices.Concat(RankerFeatures, RecencyFeatures)
+		m["stream"] = map[string]any{"popular_window_ms": 7 * day}
+	}
+}
+
+// sixFeatures makes stream_golden.jsonl's cases those of a ranker over the
+// six features, without the recency columns.
+func sixFeatures(t testing.TB) editFunc {
+	data := onnxtest.Model(t, "linear_ranker.onnx")
+	cases := editCases(t, func(c map[string]any) {
+		rows := c["features"].([]any)
+		for i, row := range rows {
+			rows[i] = row.([]any)[:6]
+		}
+	})
+	return func(f map[string][]byte, m map[string]any) {
+		cases(f, m)
+		f["ranker.onnx"], m["ranker_features"] = data, RankerFeatures
+	}
+}
+
+// A bundle with a stream window loads with a ranker over the eight
+// features or the six, its golden features computed from the stream inputs
+// of each case.
+func TestLoadStreamRanker(t *testing.T) {
+	initORT(t)
+	for name, edits := range map[string][]editFunc{
+		"eight": {withStreamRanker(t)},
+		"six":   {withStreamRanker(t), sixFeatures(t)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b, err := Load(writeBundle(t, edits...), Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer b.Close() //nolint:errcheck // a test bundle
+			if b.Stream == nil || b.Stream.PopularWindowMS != 7*day || b.Ranker.Features != len(b.RankerFeatures) {
+				t.Errorf("stream %+v, ranker of %d features for %q", b.Stream, b.Ranker.Features, b.RankerFeatures)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsStream(t *testing.T) {
+	initORT(t)
+	stream := func(v any) editFunc {
+		return func(_ map[string][]byte, m map[string]any) { m["stream"] = v }
+	}
+	cases := map[string]struct {
+		edits []editFunc
+		want  string
+	}{
+		"recency without a window": {[]editFunc{withStreamRanker(t), stream(nil)}, "ranker_features"},
+		"no window":                {[]editFunc{withStreamRanker(t), stream(map[string]any{"popular_window_ms": 0})}, "popular_window_ms 0"},
+		"no ts": {[]editFunc{withStreamRanker(t), editCases(t, func(c map[string]any) { delete(c, "ts") })},
+			"needs ts, 1 cooc_rows and popular"},
+		"window count off": {[]editFunc{withStreamRanker(t), editCases(t, func(c map[string]any) {
+			c["window_counts"].([]any)[0] = 2
+		})}, "feature window_count of candidate 2 differs"},
+		"no first_ts": {[]editFunc{withStreamRanker(t), sixFeatures(t), editCases(t, func(c map[string]any) {
+			delete(c, "first_ts")
+		})}, "needs window_counts and first_ts for each candidate"},
+		"stream inputs without a window": {[]editFunc{withRanker(t, "linear_ranker.onnx"), editCases(t, func(c map[string]any) {
+			c["ts"] = 1
+		})}, "stream inputs without a stream window"},
+		// The bundle's own tables in place of the stream inputs.
+		"stream inputs replaced": {[]editFunc{withStreamRanker(t), editCases(t, func(c map[string]any) {
+			c["popular"] = []any{3, 1}
+		})}, "feature popular_score of candidate"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			checkRejected(t, writeBundle(t, tc.edits...), Options{}, tc.want)
+		})
+	}
+}
+
+// item_age in hours, not days, fails the golden cases: an item with an
+// event before the cases' time has an age that the unit changes.
+func TestLoadRejectsItemAgeInHours(t *testing.T) {
+	initORT(t)
+	defer func(u float64) { ageUnit = u }(ageUnit)
+	ageUnit = float64(time.Hour / time.Millisecond)
+	checkRejected(t, writeBundle(t, withStreamRanker(t)), Options{}, "feature item_age of candidate 2 differs")
+}
+
+// streamEvents are testdata.py's STREAM_EVENTS: user, item, ts.
+var streamEvents = []dataset.Row{
+	{User: "a", Item: "item1", TS: day}, {User: "a", Item: "item3", TS: 2 * day}, {User: "a", Item: "item2", TS: 3 * day},
+	{User: "b", Item: "item3", TS: 3 * day}, {User: "e", Item: "item1", TS: 4 * day}, {User: "e", Item: "item7", TS: 4*day + 1},
+	{User: "b", Item: "item1", TS: 5 * day}, {User: "c", Item: "item4", TS: 6 * day}, {User: "c", Item: "item3", TS: 9*day + 7},
+	{User: "d", Item: "item6", TS: 10 * day},
+}
+
+const day = 86_400_000
+
+// The stream state in Go, given the events the golden cases' stream state
+// was given in Python, gives the same inputs; without one of the events,
+// it does not.
+func TestCheckStreamGolden(t *testing.T) {
+	initORT(t)
+	b, err := Load(writeBundle(t, withStreamRanker(t)), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close() //nolint:errcheck // a test bundle
+	state := func(rows []dataset.Row) *fresh.State {
+		h := history.NewMemory()
+		var evs []history.Event
+		for _, r := range rows {
+			evs = append(evs, history.Event{ID: history.EventID(r.User, r.Item, r.TS, dataset.Kind), User: r.User, Item: r.Item, TS: r.TS})
+		}
+		if err := h.Append(context.Background(), evs); err != nil {
+			t.Fatal(err)
+		}
+		fe, err := fresh.Events(context.Background(), h, b.Lookup, rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := fresh.New(b.ItemCount)
+		s.Add(fe...)
+		return s
+	}
+	if err := b.CheckStreamGolden(state(streamEvents)); err != nil {
+		t.Fatal(err)
+	}
+	for i := range streamEvents[:len(streamEvents)-1] { // the last is at the cases' time
+		if err := b.CheckStreamGolden(state(slices.Delete(slices.Clone(streamEvents), i, i+1))); err == nil {
+			t.Errorf("without event %d: no error", i)
+		}
 	}
 }
 
