@@ -23,6 +23,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/bundle"
 	"github.com/sHyanorn/recserve/internal/cache"
 	"github.com/sHyanorn/recserve/internal/experiment"
+	"github.com/sHyanorn/recserve/internal/fresh"
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/shard"
 	"github.com/sHyanorn/recserve/internal/vec"
@@ -253,6 +254,12 @@ type Pipeline struct {
 	Shards  Shards // the bundle's item vectors, for vector retrieval
 	History history.Store
 	Budgets Budgets
+	// Fresh, if not nil, is the event stream's state (D059) in the bundle's
+	// internal IDs: at a request's time, its popular items over FreshWindow
+	// before that time and the items co-occurring with the history replace
+	// the bundle's popularity list and co-occurrence table.
+	Fresh       *fresh.State
+	FreshWindow int64 // milliseconds
 	// Cache, if not nil, holds responses that were not degraded. It may be
 	// shared by pipelines over different bundles, in this process or, on
 	// Valkey, in others: keys include the bundle version. Responses from it
@@ -266,6 +273,7 @@ type Pipeline struct {
 	flight *singleflight.Group
 
 	rankWith          Ranker // test only: replaces the bundle's ranker
+	bundleCooc        bool   // test only: with Fresh, co-occurrence still from the bundle's table (condition S1)
 	skipSeenFilter    bool   // test only: the broken variant of property 2
 	keyWithoutVersion bool   // test only: the broken variant of property 5
 	shardShare        bool   // test only: the broken variant of property 6, ceil(VectorTop/n) items per shard
@@ -456,7 +464,7 @@ func (p *Pipeline) compute(ctx context.Context, req Request, hist []int32, d *de
 		return Response{}, err
 	}
 	rctx, span := tracer.Start(ctx, "retrieval") // the shard searches' calls are its children
-	results, cov, err := p.retrieve(rctx, hist, uv, seen, d)
+	results, cov, err := p.retrieve(rctx, req.TS, hist, uv, seen, d)
 	span.End()
 	if err != nil {
 		return Response{}, err
@@ -494,8 +502,9 @@ func (p *Pipeline) compute(ctx context.Context, req Request, hist []int32, d *de
 
 // cacheKey returns the digest of what a response depends on, given the
 // history: the bundle version, the shard settings, the arm, the user, k,
-// the exclusions as a set and the history items in order. The request time
-// only selects the history, and the recent items are used only when the
+// the exclusions as a set and the history items in order, and with the
+// stream's state the request time and the window. Otherwise the request
+// time only selects the history. The recent items are used only when the
 // history cannot be read, which is never cached.
 func (p *Pipeline) cacheKey(req Request, hist []int32) cache.Key {
 	str := func(b []byte, s string) []byte { return append(binary.AppendUvarint(b, uint64(len(s))), s...) }
@@ -516,6 +525,9 @@ func (p *Pipeline) cacheKey(req Request, hist []int32) cache.Key {
 	b = binary.AppendUvarint(b, uint64(len(hist)))
 	for _, id := range hist {
 		b = binary.LittleEndian.AppendUint32(b, uint32(id))
+	}
+	if p.Fresh != nil { // the stream's state is read at the request time
+		b = binary.AppendVarint(binary.AppendVarint(b, req.TS), p.FreshWindow)
 	}
 	return sha256.Sum256(b)
 }
@@ -576,7 +588,7 @@ func (p *Pipeline) userVector(ctx context.Context, hist []int32, d *degradation)
 // budget and returns their hits, in the order of srcVector, srcCooc and
 // srcPopular, nil for a source that failed, and the coverage of vector
 // retrieval, nil without a user vector.
-func (p *Pipeline) retrieve(ctx context.Context, hist []int32, uv []float32, seen map[int32]bool, d *degradation) ([][]vec.Hit, *Coverage, error) {
+func (p *Pipeline) retrieve(ctx context.Context, ts int64, hist []int32, uv []float32, seen map[int32]bool, d *degradation) ([][]vec.Hit, *Coverage, error) {
 	rctx, cancel := within(ctx, p.Budgets.Retrieval)
 	defer cancel()
 	results := make([][]vec.Hit, 3)
@@ -587,8 +599,8 @@ func (p *Pipeline) retrieve(ctx context.Context, hist []int32, uv []float32, see
 	if uv != nil {
 		wg.Go(func() { shardHits, shardErrs = p.searchShards(rctx, uv, seen) })
 	}
-	wg.Go(func() { results[srcCooc], errs[srcCooc] = p.cooc(rctx, hist) })
-	wg.Go(func() { results[srcPopular], errs[srcPopular] = p.popular(rctx) })
+	wg.Go(func() { results[srcCooc], errs[srcCooc] = p.cooc(rctx, ts, hist) })
+	wg.Go(func() { results[srcPopular], errs[srcPopular] = p.popular(rctx, ts) })
 	wg.Wait()
 	if err := ended(ctx, "retrieval"); err != nil {
 		return nil, nil, err
@@ -708,20 +720,28 @@ func (p *Pipeline) rank(ctx context.Context, rk Ranker, scored []vec.Hit, result
 	return cands, dropped, nil
 }
 
-// cooc returns the co-occurrence candidates (bundle.CoocHits).
-func (p *Pipeline) cooc(ctx context.Context, hist []int32) ([]vec.Hit, error) {
+// cooc returns the co-occurrence candidates of hist at time ts
+// (bundle.CoocHitsOf), from the stream's state if there is one.
+func (p *Pipeline) cooc(ctx context.Context, ts int64, hist []int32) ([]vec.Hit, error) {
 	if err := p.stalled(ctx, stageCooc, -1); err != nil {
 		return nil, err
 	}
-	return p.Bundle.CoocHits(hist), nil
+	if p.Fresh == nil || p.bundleCooc {
+		return p.Bundle.CoocHits(hist), nil
+	}
+	return bundle.CoocHitsOf(hist, func(id int32) []int32 { return p.Fresh.Row(id, ts, bundle.CoocWidth) }), nil
 }
 
-// popular returns the most popular items (bundle.PopularHits).
-func (p *Pipeline) popular(ctx context.Context) ([]vec.Hit, error) {
+// popular returns the most popular items at time ts (bundle.PopularHitsOf),
+// from the stream's state if there is one.
+func (p *Pipeline) popular(ctx context.Context, ts int64) ([]vec.Hit, error) {
 	if err := p.stalled(ctx, stagePopular, -1); err != nil {
 		return nil, err
 	}
-	return p.Bundle.PopularHits(), nil
+	if p.Fresh == nil {
+		return p.Bundle.PopularHits(), nil
+	}
+	return bundle.PopularHitsOf(p.Fresh.Popular(ts, p.FreshWindow, bundle.PopularTop)), nil
 }
 
 // merge returns the union of the sources' hits, each ID once with its best

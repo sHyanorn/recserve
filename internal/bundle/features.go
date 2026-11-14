@@ -13,23 +13,36 @@ const (
 	PopularTop = 100 // most popular items retrieved
 )
 
-// CoocHits returns the co-occurrence candidates of hist, oldest first: the
-// item at position r of the row of the seed s entries from the latest
-// scores 1 / ((s + 1)(r + 1)). An item may appear more than once.
+// CoocHits returns the co-occurrence candidates of hist, oldest first, from
+// the bundle's table (CoocHitsOf).
 func (b *Bundle) CoocHits(hist []int32) []vec.Hit {
+	return CoocHitsOf(hist, b.CoocRow)
+}
+
+// CoocHitsOf returns the co-occurrence candidates of hist, oldest first,
+// given each item's co-occurring items, best first: the item at position r
+// of the row of the seed s entries from the latest scores
+// 1 / ((s + 1)(r + 1)). An item may appear more than once.
+func CoocHitsOf(hist []int32, row func(id int32) []int32) []vec.Hit {
 	var out []vec.Hit
 	for s := 0; s < CoocSeeds && s < len(hist); s++ {
-		for r, id := range b.CoocRow(hist[len(hist)-1-s]) {
+		for r, id := range row(hist[len(hist)-1-s]) {
 			out = append(out, vec.Hit{ID: id, Score: 1 / float64((s+1)*(r+1))})
 		}
 	}
 	return out
 }
 
-// PopularHits returns the PopularTop most popular items, the one at rank r
-// scoring 1 / (r + 1).
+// PopularHits returns the PopularTop most popular items of the bundle's
+// list (PopularHitsOf).
 func (b *Bundle) PopularHits() []vec.Hit {
-	pop := b.Popular[:min(PopularTop, len(b.Popular))]
+	return PopularHitsOf(b.Popular)
+}
+
+// PopularHitsOf returns the first PopularTop items of popular, best first,
+// the one at rank r scoring 1 / (r + 1).
+func PopularHitsOf(popular []int32) []vec.Hit {
+	pop := popular[:min(PopularTop, len(popular))]
 	out := make([]vec.Hit, len(pop))
 	for r, id := range pop {
 		out[r] = vec.Hit{ID: id, Score: 1 / float64(r+1)}

@@ -260,7 +260,7 @@ func TestRankerTruncates(t *testing.T) {
 		t.Fatal(err)
 	}
 	var d degradation
-	results, _, err := p.retrieve(ctx, hist, uv, seen, &d)
+	results, _, err := p.retrieve(ctx, 0, hist, uv, seen, &d)
 	if err != nil || len(d.reasons) > 0 {
 		t.Fatal(err, d.list())
 	}

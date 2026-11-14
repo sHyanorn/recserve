@@ -412,7 +412,7 @@ func TestCoocScore(t *testing.T) {
 		cooc[1*bundle.CoocWidth+r] = int32(5 + r) // item 15 at position 10 of item 1's row
 	}
 	p := &Pipeline{Bundle: bundle.New(bundle.Manifest{ItemCount: n, Dim: 1}, ids, m, cooc, nil)}
-	hits, err := p.cooc(context.Background(), []int32{1, 2, 3}) // item 1 is seed 2
+	hits, err := p.cooc(context.Background(), 0, []int32{1, 2, 3}) // item 1 is seed 2
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -38,7 +38,7 @@ func checkProperty6(seed uint64, cases int, broken bool, build func(m vec.Matrix
 			seen[int32(1+r.IntN(p.Bundle.ItemCount))] = true
 		}
 		var d degradation
-		results, cov, err := p.retrieve(ctx, nil, uv, seen, &d)
+		results, cov, err := p.retrieve(ctx, 0, nil, uv, seen, &d)
 		if err != nil {
 			return err
 		}

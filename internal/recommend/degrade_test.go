@@ -151,12 +151,12 @@ func want(t *testing.T, p *Pipeline, f *fault, req Request) Response {
 	var err error
 	if f.fails(stageCooc, -1) {
 		d.add(f.reason, nil)
-	} else if results[srcCooc], err = q.cooc(ctx, hist); err != nil {
+	} else if results[srcCooc], err = q.cooc(ctx, 0, hist); err != nil {
 		t.Fatal(err)
 	}
 	if f.fails(stagePopular, -1) {
 		d.add(f.reason, nil)
-	} else if results[srcPopular], err = q.popular(ctx); err != nil {
+	} else if results[srcPopular], err = q.popular(ctx, 0); err != nil {
 		t.Fatal(err)
 	}
 	scored := q.retrievalScores(results, uv, seen)

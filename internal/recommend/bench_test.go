@@ -33,7 +33,7 @@ func newRankCase(b *testing.B, p *Pipeline, hist []int32) rankCase {
 		b.Fatal(err)
 	}
 	var d degradation
-	results, _, err := p.retrieve(context.Background(), hist, uv, seen, &d)
+	results, _, err := p.retrieve(context.Background(), 0, hist, uv, seen, &d)
 	if err != nil {
 		b.Fatal(err)
 	}
