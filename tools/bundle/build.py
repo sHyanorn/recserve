@@ -1,11 +1,11 @@
-"""Build a baseline bundle (docs/SPEC.md §8) from the Video_Games split.
+"""Build a baseline bundle (docs/SPEC.md §8) from an Amazon 2023 category's split.
 
-usage: build.py DATA OUT [--encoder mean|onnx] [--ranker]
+usage: build.py DATA OUT [--encoder mean|onnx] [--ranker] [--category C]
 
-DATA holds the files downloaded by scripts/data.sh. Writes OUT/<version>/
-with item vectors from implicit-feedback ALS trained on the train split, a
-co-occurrence table, a popularity list, golden cases and manifest.json, and
-prints the version. With --encoder onnx the bundle carries user_encoder.onnx,
+DATA holds the files downloaded by scripts/data.sh for the category C,
+Video_Games by default. Writes OUT/<version>/ with item vectors from
+implicit-feedback ALS trained on the train split, a co-occurrence table, a
+popularity list, golden cases and manifest.json, and prints the version. With --encoder onnx the bundle carries user_encoder.onnx,
 which gives the last MAX_SEQ_LEN history items the user vector ALS would fit
 for them (fold_in, D058), and the golden user vectors come from running it
 with ONNX Runtime. With --encoder mean (the default) it has no encoder, and
@@ -47,7 +47,6 @@ POPULAR_DAYS = 30
 POPULAR_TOP = 500
 MAX_SEQ_LEN = 50
 GOLDEN_CASES = 20
-DATASET = "amazon2023-video_games-5core-timestamp"
 OPSET, IR_VERSION = 17, 8  # IR version 8 is the one that goes with opset 17
 PARITY = 1e-5  # largest accepted difference between the ONNX encoder and the float64 fold-in
 # Retrieval as the service runs it (recommend.VectorTop, bundle.CoocSeeds, bundle.PopularTop).
@@ -360,10 +359,10 @@ def version_of(sums):
     return hashlib.sha256("".join(f"{name}{sums[name]}" for name in sorted(sums)).encode()).hexdigest()[:12]
 
 
-def main(data, out, encoder, ranker):
-    train = read_split(data, "train")
-    test = read_split(data, "test")
-    valid = read_split(data, "valid")
+def main(data, out, encoder, ranker, category="Video_Games"):
+    train = read_split(data, "train", category)
+    test = read_split(data, "test", category)
+    valid = read_split(data, "valid", category)
     items = sorted({i for rows in (train, valid, test) for _, i, _ in rows})
     item_ix = {item: n + 1 for n, item in enumerate(items)}  # 0 is padding
     n = len(items) + 1
@@ -462,7 +461,7 @@ def main(data, out, encoder, ranker):
     manifest = {
         "format_version": 1,
         "model_version": version,
-        "dataset": DATASET,
+        "dataset": f"amazon2023-{category.lower()}-5core-timestamp",
         "train_cutoff_ts": cutoff,
         "item_count": len(items),
         "dim": DIM,
@@ -490,6 +489,7 @@ if __name__ == "__main__":
     p.add_argument("data")
     p.add_argument("out")
     p.add_argument("--encoder", choices=["mean", "onnx"], default="mean")
+    p.add_argument("--category", default="Video_Games")
     p.add_argument("--ranker", action="store_true", help="train and add a logistic-regression ranker")
     a = p.parse_args()
-    main(a.data, a.out, a.encoder, a.ranker)
+    main(a.data, a.out, a.encoder, a.ranker, a.category)
