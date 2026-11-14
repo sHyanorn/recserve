@@ -3,6 +3,7 @@ package recommend
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"os"
@@ -248,6 +249,38 @@ func pairedBootstrap(a, b []float64, resamples int, seed uint64) (mean, lo, hi f
 	return mean, bench.Percentile(means, 0.025), bench.Percentile(means, 0.975)
 }
 
+// userBootstrap is pairedBootstrap with users resampled in place of events,
+// since a user's events share their history (docs/registration/m8-freshness.md,
+// section 8): users[i] is event i's user; the users, sorted by ID, are drawn
+// with replacement, as many as there are, by a PCG seeded with seed, and a
+// resample's mean is the sum of its users' differences over all their
+// events divided by its number of events.
+func userBootstrap(a, b []float64, users []string, resamples int, seed uint64) (mean, lo, hi float64) {
+	sums := map[string]float64{}
+	counts := map[string]int{}
+	for i := range a {
+		d := a[i] - b[i]
+		mean += d
+		sums[users[i]] += d
+		counts[users[i]]++
+	}
+	mean /= float64(len(a))
+	ids := slices.Sorted(maps.Keys(sums))
+	r := rand.New(rand.NewPCG(seed, 0))
+	means := make([]float64, resamples)
+	for j := range means {
+		var s float64
+		var n int
+		for range ids {
+			u := ids[r.IntN(len(ids))]
+			s, n = s+sums[u], n+counts[u]
+		}
+		means[j] = s / float64(n)
+	}
+	slices.Sort(means)
+	return mean, bench.Percentile(means, 0.025), bench.Percentile(means, 0.975)
+}
+
 // qualityRow is a condition's rank of each event's item.
 type qualityRow struct {
 	name  string
@@ -446,6 +479,42 @@ func TestQualityReferenceTop(t *testing.T) {
 // per-event standard deviation is sqrt(0.3475): the interval holds it,
 // excludes 0, has about the normal interval's width, and depends on the
 // seed alone.
+// With one event per user, in the order of their IDs, resampling users is
+// resampling events; with every event given to four users' four copies,
+// the interval widens by about two, the square root of the copies.
+func TestUserBootstrap(t *testing.T) {
+	const n = 4000
+	a, b, users := make([]float64, n), make([]float64, n), make([]string, n)
+	for i := range n {
+		if i%4 == 0 {
+			a[i] = 1
+		}
+		if i%5 == 0 {
+			b[i] = 1
+		}
+		users[i] = fmt.Sprintf("u%05d", i)
+	}
+	d, lo, hi := pairedBootstrap(a, b, bootstrapSamples, bootstrapSeed)
+	if d2, lo2, hi2 := userBootstrap(a, b, users, bootstrapSamples, bootstrapSeed); d2 != d || lo2 != lo || hi2 != hi {
+		t.Errorf("one event per user: %v [%v, %v], resampling events %v [%v, %v]", d2, lo2, hi2, d, lo, hi)
+	}
+	var a4, b4 []float64
+	var users4 []string
+	for i := range n {
+		for range 4 {
+			a4, b4, users4 = append(a4, a[i]), append(b4, b[i]), append(users4, users[i])
+		}
+	}
+	_, elo, ehi := pairedBootstrap(a4, b4, bootstrapSamples, bootstrapSeed)
+	d4, ulo, uhi := userBootstrap(a4, b4, users4, bootstrapSamples, bootstrapSeed)
+	if math.Abs(d4-0.05) > 1e-12 {
+		t.Errorf("mean difference %v, want 0.05", d4)
+	}
+	if ratio := (uhi - ulo) / (ehi - elo); math.Abs(ratio-2) > 0.3 {
+		t.Errorf("users' interval %v wide, events' %v: ratio %v, want about 2", uhi-ulo, ehi-elo, ratio)
+	}
+}
+
 func TestPairedBootstrap(t *testing.T) {
 	const n = 4000
 	a, b := make([]float64, n), make([]float64, n)
