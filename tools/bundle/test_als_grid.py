@@ -72,16 +72,17 @@ def test_exact_vectors_are_implicit_s_user_step():
     model = implicit.cpu.als.AlternatingLeastSquares(factors=4, regularization=0.1, alpha=10.0, iterations=5, random_state=1, num_threads=1)
     model.fit(ui, show_progress=False)
     vecs = np.vstack([np.zeros((1, 4), dtype=np.float32), model.item_factors])
-    hists = [[3, 7, 7, 20], [1], [5, 6, 8, 9, 30]]  # item IDs from 1; 7 twice counts once
+    hists = [[3, 7, 7, 20], [1], [5, 6, 8, 9, 30]]  # item IDs from 1; 7 twice has confidence 20
     last = sp.csr_matrix([[h.count(i) for i in range(31)] for h in hists], dtype=np.float64)
     req = SimpleNamespace(last=last)
     got = exact_vectors(req, vecs, 10.0, 0.1)
     for k, h in enumerate(hists):
-        row = sp.csr_matrix((np.ones(len(set(h)), dtype=np.float32), ([0] * len(set(h)), sorted(i - 1 for i in set(h)))), shape=(1, 30))
+        row = sp.csr_matrix(last[k, 1:], dtype=np.float32)  # implicit's items from 0
         np.testing.assert_allclose(got[k], model.recalculate_user(0, row), rtol=1e-4, atol=1e-6)
-    # With alpha 1 and no item twice, the fold-in is the exact solution (D058).
-    req = SimpleNamespace(last=last[[1, 2]])
-    np.testing.assert_allclose(exact_vectors(req, vecs, 1.0, 0.1), fold_in_vectors(req, vecs, 0.1), rtol=1e-5, atol=1e-7)
+    # With alpha 1 and no item twice, the fold-in is the exact solution (D058); with an item twice it is not.
+    one = exact_vectors(req, vecs, 1.0, 0.1)
+    np.testing.assert_allclose(one[1:], fold_in_vectors(SimpleNamespace(last=last[1:]), vecs, 0.1), rtol=1e-5, atol=1e-7)
+    assert np.abs(one[0] - fold_in_vectors(SimpleNamespace(last=last[:1]), vecs, 0.1)[0]).max() > 1e-3
 
 
 def test_selection_rule():

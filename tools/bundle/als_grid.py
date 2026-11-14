@@ -89,18 +89,20 @@ def fold_in_vectors(req, vecs, reg):
 
 
 def exact_vectors(req, vecs, alpha, reg):
-    """The user vector ALS's own user step fits for each request: the
-    solution of (YᵀY + reg I + (alpha - 1) Σ y yᵀ) u = alpha Σ y, the sums
-    over the distinct items of the last MAX_SEQ_LEN, each once as in the
-    model's binary matrix; in float32."""
+    """The exact solution of ALS's user step for each request's last
+    MAX_SEQ_LEN items: (YᵀY + reg I + Σ (c_j - 1) y_j y_jᵀ) u = Σ c_j y_j,
+    over those items j, with confidence c_j = alpha times the item's events
+    among them, as implicit solves it for a row of those counts; in
+    float32."""
     y = vecs.astype(np.float64)
     gram = y.T @ y + reg * np.eye(y.shape[1])
     out = np.zeros((req.last.shape[0], y.shape[1]), dtype=np.float32)
     for k in range(req.last.shape[0]):
-        h = y[req.last.indices[req.last.indptr[k] : req.last.indptr[k + 1]]]
-        b = alpha * h.sum(axis=0)
+        lo, hi = req.last.indptr[k], req.last.indptr[k + 1]
+        h, c = y[req.last.indices[lo:hi]], alpha * req.last.data[lo:hi]
+        b = c @ h
         if np.any(b):
-            out[k] = scipy.linalg.cho_solve(scipy.linalg.cho_factor(gram + (alpha - 1) * h.T @ h), b)
+            out[k] = scipy.linalg.cho_solve(scipy.linalg.cho_factor(gram + (h.T * (c - 1)) @ h), b)
     return out
 
 
