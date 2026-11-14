@@ -20,7 +20,7 @@ bin/gateway -bundle data/bundle/<version> -test-split data/Video_Games.test.csv.
 bin/loadgen -split data/Video_Games.test.csv.gz -rate 200 -duration 30s
 ```
 
-`make bundle DATA=data ENCODER=onnx` builds the same bundle with an ONNX user encoder, and `RANKER=1` adds a logistic-regression ranker trained on the valid split; the gateway then needs `-ort-lib` pointing to ONNX Runtime 1.31.x (`libonnxruntime.so`). To swap the served bundle while the gateway runs (the new bundle may hold other items):
+`make bundle DATA=data ENCODER=onnx` adds an ONNX user encoder, which gives a history the user vector ALS would fit for it (D058), and `RANKER=1` adds a logistic-regression ranker trained on the valid split; the gateway then needs `-ort-lib` pointing to ONNX Runtime 1.31.x (`libonnxruntime.so`). To swap the served bundle while the gateway runs (the new bundle may hold other items):
 
 ```bash
 curl -X POST localhost:8081/v1/admin/swap -d '{"bundle":"data/bundle/<version>"}'

@@ -92,7 +92,7 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [ ] seqrec-lab's bundle against the baseline (BENCHMARKS, M7): in place are the comparison (`RECSERVE_BUNDLE_B` in TestRealDataQuality, `make bench-bundles`), verify.py's tests in CI and the history counts (`tools/bundle/histories.py`); it runs once the export exists (D056 point 3)
   1. seqrec-lab has committed its Video_Games test results (D056 point 3); the run is the one D056 point 2 picks; `B` is its exported bundle directory, named by its `model_version`
   2. `cd tools/bundle && uv sync --frozen && uv run --frozen python verify.py $B && cd ../..`: prints `ok:`, user encoder onnx, ranker no
-  3. If `data/` is missing: `make data`, then `make bundle ENCODER=onnx RANKER=1`, which prints b7ff0634dd7b
+  3. If `data/` is missing: `make data`; then `git worktree add ../b0 8a2e1bc && make -C ../b0 bundle ENCODER=onnx RANKER=1 DATA=$PWD/data`, which builds with the code before the fold-in encoder (D058) and prints b7ff0634dd7b
   4. `export RECSERVE_ORT_LIB=$PWD/tools/bundle/.venv/lib/python3.13/site-packages/onnxruntime/capi/libonnxruntime.so.1.31.1 RECSERVE_REQUIRE_ORT=1`
   5. `make bench-bundles VERSION=b7ff0634dd7b BUNDLE_B=$B`: writes bench-results/m7/bundles-<model_version>.md, also runs the baseline's conditions without writing quality.md, and fails if B's healthy pipeline reports a degradation
   6. BENCHMARKS, M7 results: B's `model_version`, the primary result and its reading, the three secondary readings, the requests without a user vector under each bundle, and the training periods of both bundles as the protocol states them; the histories are in bench-results/m7/histories.txt
