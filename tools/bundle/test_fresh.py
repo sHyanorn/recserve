@@ -34,6 +34,13 @@ def test_pairs_with_the_latest_events_before_and_not_at_the_time():
     assert s.row(1, 3) == []  # the pair of i1 and i2 is made at 3
 
 
+def test_a_row_given_twice_is_one_event():
+    rows = [("u", "i1", 1), ("u", "i2", 2), ("u", "i3", 3), ("u", "i4", 4), ("u", "i2", 5), ("u", "i3", 6), ("u", "i4", 7)]
+    once, twice = State(rows, IX), State(rows + rows[4:], IX)
+    assert twice.count(4, 0, 8) == once.count(4, 0, 8) == 2
+    assert [twice.row(i, 8) for i in IX.values()] == [once.row(i, 8) for i in IX.values()]
+
+
 def test_ties_to_the_lower_id_and_popularity_rank():
     s = State([("a", "i3", 1), ("b", "i2", 2), ("c", "i4", 3), ("d", "i4", 4)], IX)
     assert s.popular(10, 10) == [4, 2, 3]

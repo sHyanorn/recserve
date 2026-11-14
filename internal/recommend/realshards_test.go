@@ -23,6 +23,7 @@ type realQuery struct {
 // the event's time, with their user vectors and seen items.
 func realQueries(t *testing.T, rd realData) []realQuery {
 	t.Helper()
+	skipUnlessVideoGames(t)
 	ctx := context.Background()
 	var out []realQuery
 	for i := 0; i < len(rd.test) && len(out) < 2000; i += 20 {

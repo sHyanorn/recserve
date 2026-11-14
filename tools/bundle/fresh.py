@@ -47,16 +47,17 @@ def event_id(user, item, ts, kind=KIND):
 class State:
     """The state of rows (user, raw item, ts) in the internal IDs of item_ix.
     Rows, and previous items, that item_ix does not know are left out, as
-    fresh.Events leaves them out."""
+    fresh.Events leaves them out; a row given twice is one event, as the
+    history store keeps it."""
 
     def __init__(self, rows, item_ix):
         self.n = len(item_ix) + 1
-        by_user = defaultdict(list)
+        by_user = defaultdict(set)
         for u, raw, ts in rows:
-            by_user[u].append((ts, event_id(u, raw, ts), raw))
+            by_user[u].add((ts, event_id(u, raw, ts), raw))
         times, pairs, events = defaultdict(list), defaultdict(list), []
         for evs in by_user.values():
-            evs.sort()
+            evs = sorted(evs)
             ts_of = [e[0] for e in evs]
             for ts, _, raw in evs:
                 i = item_ix.get(raw)

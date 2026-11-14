@@ -1,6 +1,7 @@
 package recommend
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"math/rand/v2"
@@ -62,9 +63,19 @@ func popularityRank(s *fresh.State, items int, item int32, ts, w int64, seen map
 
 // streamState returns the stream state of rows, in b's internal IDs, each
 // event paired with the user's latest events before it as h reads them; h
-// must hold the rows.
+// must hold the rows. A row given twice is one event, as h keeps it.
 func streamState(b *bundle.Bundle, h history.Store, rows []dataset.Row) (*fresh.State, error) {
-	evs, err := fresh.Events(context.Background(), h, b.Lookup, rows)
+	seen := make(map[uint64]bool, len(rows))
+	var unique []dataset.Row
+	for _, r := range rows {
+		if id := history.EventID(r.User, r.Item, r.TS, dataset.Kind); !seen[id] {
+			seen[id] = true
+			unique = append(unique, r)
+		}
+	}
+	// In time order, State.Add appends each event to its lists.
+	slices.SortStableFunc(unique, func(a, b dataset.Row) int { return cmp.Compare(a.TS, b.TS) })
+	evs, err := fresh.Events(context.Background(), h, b.Lookup, unique)
 	if err != nil {
 		return nil, err
 	}
@@ -190,5 +201,28 @@ func TestRealDataPopularityReference(t *testing.T) {
 		if differ > 0 {
 			t.Errorf("%dd: %d ranks differ", d, differ)
 		}
+	}
+}
+
+// streamState keeps a row given twice once, as the history store does,
+// whatever the rows' order.
+func TestStreamStateDedupes(t *testing.T) {
+	b := bundle.New(bundle.Manifest{ModelVersion: "t", ItemCount: 3, Dim: 1, MaxSeqLen: 5}, []string{"", "a", "b", "c"}, matrix(t, 1, []float32{0, 1, 1, 1}), nil, nil)
+	rows := []dataset.Row{{User: "u", Item: "a", TS: 3}, {User: "u", Item: "b", TS: 1}, {User: "u", Item: "c", TS: 2}, {User: "u", Item: "a", TS: 3}}
+	h := history.NewMemory()
+	for _, r := range rows {
+		if err := h.Append(context.Background(), []history.Event{{ID: history.EventID(r.User, r.Item, r.TS, dataset.Kind), User: r.User, Item: r.Item, TS: r.TS}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := streamState(b, h, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Count(1, 0, 10); got != 1 {
+		t.Errorf("a's events: %d, want 1", got)
+	}
+	if got := s.Row(2, 10, 5); !slices.Equal(got, []int32{1, 3}) {
+		t.Errorf("b's row %v, want [1 3], a once and c once", got)
 	}
 }

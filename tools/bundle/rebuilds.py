@@ -42,7 +42,10 @@ def built(out, ranker_from):
 
 def rebuild(args):
     data, out, category, t, ranker_from = args
-    build.main(data, out, "onnx", False, category, cutoff_at=t, ranker_from=ranker_from)
+    try:
+        build.main(data, out, "onnx", False, category, cutoff_at=t, ranker_from=ranker_from)
+    except SystemExit as e:  # a worker that exits would leave the pool waiting for its task
+        raise RuntimeError(f"rebuild at {t}: {e}") from None
 
 
 def main(data, out, days, ranker_from, category, jobs):

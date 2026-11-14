@@ -24,6 +24,7 @@ import (
 // It also checks that the bundle is rejected when its cutoff reaches the test period.
 // A bundle with an ONNX user encoder needs RECSERVE_ORT_LIB as well.
 func TestRealDataSmoke(t *testing.T) {
+	skipUnlessVideoGames(t)
 	rd := loadRealData(t)
 	b, store, first := rd.bundle, rd.store, rd.first
 	trained := map[string]map[string]bool{}
@@ -110,6 +111,16 @@ func TestRealDataSmoke(t *testing.T) {
 		t.Fatalf("bundle with train_cutoff_ts = first test event: err = %v, want ErrCutoff", err)
 	}
 	t.Logf("rejected: %v", err)
+}
+
+// skipUnlessVideoGames skips a test that sends test events as requests on
+// another category: Musical_Instruments' test events are requests in its
+// registered test read only (docs/registration/m8-freshness.md, section 2).
+func skipUnlessVideoGames(t *testing.T) {
+	t.Helper()
+	if c := cmp.Or(os.Getenv("RECSERVE_CATEGORY"), "Video_Games"); c != "Video_Games" {
+		t.Skipf("%s's test events are requests in its registered test read only", c)
+	}
 }
 
 type realData struct {

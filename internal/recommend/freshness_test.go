@@ -176,43 +176,95 @@ type manifestBuild struct {
 	Ranker struct {
 		From string `json:"from"`
 	} `json:"ranker"`
+	UserEncoder struct {
+		Graph          string  `json:"graph"`
+		Regularization float64 `json:"regularization"`
+	} `json:"user_encoder"`
 }
 
 // checkRebuilds requires bundles rebuilt every period to be rebuilt at
-// T_k = testStart + k period for every k >= 0 with T_k not after last, the
-// latest test event, each once, with the ALS settings of base and the
-// ranker of the bundle from, and with from's stream window (section 4).
-func checkRebuilds(bundles []*bundle.Bundle, period, last int64, base, from *bundle.Bundle) error {
+// T_k = testStart + k period for k = 0, 1, ..., each once, with the items,
+// ALS settings and user encoder of base, the ranker of the bundle from and
+// from's stream window (section 4), and returns the latest T_k.
+func checkRebuilds(bundles []*bundle.Bundle, period int64, base, from *bundle.Bundle) (int64, error) {
 	want, err := buildOf(base)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var times []int64
 	for _, b := range bundles {
 		at, err := rebuildTime(b)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		got, err := buildOf(b)
 		if err != nil {
-			return err
+			return 0, err
 		}
-		if !maps.Equal(got.ALS, want.ALS) || got.Ranker.From != from.ModelVersion || (b.Stream == nil) != (from.Stream == nil) ||
-			b.Stream != nil && *b.Stream != *from.Stream {
-			return fmt.Errorf("bundle %s: ALS %v, ranker from %q, stream %v; want %v, %q, %v",
-				b.ModelVersion, got.ALS, got.Ranker.From, b.Stream, want.ALS, from.ModelVersion, from.Stream)
+		if !maps.Equal(got.ALS, want.ALS) || got.UserEncoder != want.UserEncoder || b.UserEncoder != base.UserEncoder ||
+			b.SHA256["items.ids"] != base.SHA256["items.ids"] || got.Ranker.From != from.ModelVersion ||
+			(b.Stream == nil) != (from.Stream == nil) || b.Stream != nil && *b.Stream != *from.Stream {
+			return 0, fmt.Errorf("bundle %s: ALS %v, encoder %s %+v, ranker from %q, stream %v; want %v, %s %+v, %q, %v, and %s's items",
+				b.ModelVersion, got.ALS, b.UserEncoder, got.UserEncoder, got.Ranker.From, b.Stream,
+				want.ALS, base.UserEncoder, want.UserEncoder, from.ModelVersion, from.Stream, base.ModelVersion)
 		}
 		times = append(times, at)
 	}
 	slices.Sort(times)
-	var grid []int64
-	for t := int64(testStart); t <= last; t += period {
-		grid = append(grid, t)
+	for k, at := range times {
+		if at != testStart+int64(k)*period {
+			return 0, fmt.Errorf("rebuilt at %v, want %d + k %d for k from 0", times, int64(testStart), period)
+		}
 	}
-	if !slices.Equal(times, grid) {
-		return fmt.Errorf("rebuilt at %v, want %v", times, grid)
+	if len(times) == 0 {
+		return 0, errors.New("no rebuilt bundle")
+	}
+	return times[len(times)-1], nil
+}
+
+// rebuiltThrough requires the latest rebuild, at latest, to be the last
+// T_k not after the latest test event, last.
+func rebuiltThrough(latest, period, last int64) error {
+	if latest > last || last >= latest+period {
+		return fmt.Errorf("the latest rebuild is at %d, the latest test event at %d", latest, last)
 	}
 	return nil
+}
+
+// checkStreamBundles requires B1s6 and B1s8 to be B1, its items, vectors
+// and user encoder, with rankers over the six features and the eight, and
+// the window chosen on valid (section 4, 6.2).
+func checkStreamBundles(b1, s6, s8 *bundle.Bundle, window int64) error {
+	for _, c := range []struct {
+		b       *bundle.Bundle
+		recency bool
+	}{{s6, false}, {s8, true}} {
+		if c.b.Stream == nil || c.b.Stream.PopularWindowMS != window || c.b.Recency() != c.recency || len(c.b.RankerFeatures) == 0 {
+			return fmt.Errorf("bundle %s: stream %v, ranker_features %q; want a window of %d ms", c.b.ModelVersion, c.b.Stream, c.b.RankerFeatures, window)
+		}
+		for _, name := range []string{"items.ids", "items.npy", "user_encoder.onnx"} {
+			if c.b.SHA256[name] != b1.SHA256[name] {
+				return fmt.Errorf("bundle %s's %s is not B1's", c.b.ModelVersion, name)
+			}
+		}
+	}
+	return nil
+}
+
+// committedWindow reads the window chosen on valid from windows.txt, as
+// make bench-windows wrote it for category (section 6.2).
+func committedWindow(category string) (int64, error) {
+	raw, err := os.ReadFile(filepath.Join("../../bench-results/m8", category, "windows.txt"))
+	if err != nil {
+		return 0, err
+	}
+	for line := range strings.Lines(string(raw)) {
+		if days, ok := strings.CutPrefix(strings.TrimSpace(line), "selected: "); ok {
+			d, err := strconv.ParseInt(strings.TrimSuffix(days, "d"), 10, 64)
+			return d * day, err
+		}
+	}
+	return 0, errors.New("windows.txt selects no window")
 }
 
 // windowCounter is the read of the stream state that checkWindowCounts checks.
@@ -390,25 +442,51 @@ func TestRealDataFreshness(t *testing.T) {
 		return v
 	}
 	out, ranksDir := env("RECSERVE_FRESHNESS_OUT"), env("RECSERVE_RANKS_DIR")
-	plan := [][]string{{"B1", manifestVersion(t, env("RECSERVE_BUNDLE"))}}
-	var b0Dir, s6Dir, s8Dir string
-	rebuiltDirs := map[string][]string{}
+	for _, split := range []string{"train", "valid", "test"} {
+		if _, err := os.Stat(filepath.Join(env("RECSERVE_DATA"), category+"."+split+".csv.gz")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Every check that needs no test event runs before the read is logged.
+	initORTIfSet(t)
+	b1 := loadBundle(t, env("RECSERVE_BUNDLE"), bundle.Options{})
+	plan := [][]string{{"B1", b1.ModelVersion}}
+	var b0, s6, s8 *bundle.Bundle
+	type rebuildSet struct {
+		name    string
+		days    int64
+		from    *bundle.Bundle
+		bundles []*bundle.Bundle
+		latest  int64
+	}
+	var sets []*rebuildSet
 	if read1 {
-		b0Dir = env("RECSERVE_BUNDLE_B0")
-		plan = append(plan, []string{"B0", manifestVersion(t, b0Dir)})
+		b0 = loadBundle(t, env("RECSERVE_BUNDLE_B0"), bundle.Options{})
+		plan = append(plan, []string{"B0", b0.ModelVersion})
 	}
 	if read2 {
-		s6Dir, s8Dir = env("RECSERVE_BUNDLE_S6"), env("RECSERVE_BUNDLE_S8")
-		plan = append(plan, []string{"B1s6", manifestVersion(t, s6Dir)}, []string{"B1s8", manifestVersion(t, s8Dir)})
-		for _, name := range []string{"7", "30", "30S8"} {
-			dirs, err := filepath.Glob(filepath.Join(env("RECSERVE_REBUILT_"+name), "*", "manifest.json"))
-			if err != nil || len(dirs) == 0 {
-				t.Fatalf("RECSERVE_REBUILT_%s holds no bundle: %v", name, err)
+		s6, s8 = loadBundle(t, env("RECSERVE_BUNDLE_S6"), bundle.Options{}), loadBundle(t, env("RECSERVE_BUNDLE_S8"), bundle.Options{})
+		window, err := committedWindow(category)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := checkStreamBundles(b1, s6, s8, window); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, []string{"B1s6", s6.ModelVersion}, []string{"B1s8", s8.ModelVersion})
+		sets = []*rebuildSet{{name: "7", days: 7, from: b1}, {name: "30", days: 30, from: b1}, {name: "30S8", days: 30, from: s8}}
+		for _, set := range sets {
+			dirs, err := filepath.Glob(filepath.Join(env("RECSERVE_REBUILT_"+set.name), "*", "manifest.json"))
+			if err != nil {
+				t.Fatal(err)
 			}
-			row := []string{"R" + name}
+			row := []string{"R" + set.name}
 			for _, m := range dirs {
-				rebuiltDirs[name] = append(rebuiltDirs[name], filepath.Dir(m))
-				row = append(row, manifestVersion(t, filepath.Dir(m)))
+				b := loadBundle(t, filepath.Dir(m), bundle.Options{})
+				set.bundles, row = append(set.bundles, b), append(row, b.ModelVersion)
+			}
+			if set.latest, err = checkRebuilds(set.bundles, set.days*day, b1, set.from); err != nil {
+				t.Fatalf("R%s: %v", set.name, err)
 			}
 			plan = append(plan, row)
 		}
@@ -421,6 +499,11 @@ func TestRealDataFreshness(t *testing.T) {
 	appendTest(t, rd)
 	if rd.first < testStart {
 		t.Fatalf("a test event at %d, before %d", rd.first, int64(testStart))
+	}
+	for _, b := range []*bundle.Bundle{b0, s6, s8} {
+		if b != nil && b.TrainCutoffTS >= rd.first {
+			t.Fatalf("bundle %s: %v: train_cutoff_ts %d, first test event %d", b.ModelVersion, bundle.ErrCutoff, b.TrainCutoffTS, rd.first)
+		}
 	}
 	if err := os.Mkdir(ranksDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -438,7 +521,6 @@ func TestRealDataFreshness(t *testing.T) {
 	var saved []qualityRow
 	if read1 {
 		rows, noVector := qualityRows(t, rd.bundle, rd.store, rd.test)
-		b0 := loadBundle(t, b0Dir, bundle.Options{FirstTestTS: rd.first})
 		ref0, noVector0, err := referenceRanks(b0, rd.store, rd.test)
 		if err != nil {
 			t.Fatal(err)
@@ -457,30 +539,18 @@ func TestRealDataFreshness(t *testing.T) {
 	}
 	if read2 {
 		all := slices.Concat(rd.train, rd.test)
-		s6 := loadBundle(t, s6Dir, bundle.Options{FirstTestTS: rd.first})
-		s8 := loadBundle(t, s8Dir, bundle.Options{FirstTestTS: rd.first})
-		if s8.Stream == nil || s6.Stream == nil || *s6.Stream != *s8.Stream || !s8.Recency() || s6.Recency() {
-			t.Fatalf("B1s6 %q, stream %v; B1s8 %q, stream %v", s6.RankerFeatures, s6.Stream, s8.RankerFeatures, s8.Stream)
+		last := slices.MaxFunc(rd.test, func(a, b dataset.Row) int { return cmp.Compare(a.TS, b.TS) }).TS
+		for _, set := range sets {
+			if err := rebuiltThrough(set.latest, set.days*day, last); err != nil {
+				t.Fatalf("R%s: %v", set.name, err)
+			}
 		}
 		state, err := streamState(rd.bundle, rd.store, all)
 		if err != nil {
 			t.Fatal(err)
 		}
-		f := freshness{b1: rd.bundle, s6: s6, s8: s8, store: rd.store, state: state, window: s8.Stream.PopularWindowMS}
-		last := slices.MaxFunc(rd.test, func(a, b dataset.Row) int { return cmp.Compare(a.TS, b.TS) }).TS
-		for _, set := range []struct {
-			name string
-			into *[]*bundle.Bundle
-			days int64
-			from *bundle.Bundle
-		}{{"7", &f.r7, 7, rd.bundle}, {"30", &f.r30, 30, rd.bundle}, {"30S8", &f.r30s8, 30, s8}} {
-			for _, dir := range rebuiltDirs[set.name] {
-				*set.into = append(*set.into, loadBundle(t, dir, bundle.Options{}))
-			}
-			if err := checkRebuilds(*set.into, set.days*day, last, rd.bundle, set.from); err != nil {
-				t.Fatalf("R%s: %v", set.name, err)
-			}
-		}
+		f := freshness{b1: rd.bundle, s6: s6, s8: s8, r7: sets[0].bundles, r30: sets[1].bundles, r30s8: sets[2].bundles,
+			store: rd.store, state: state, window: s8.Stream.PopularWindowMS}
 		for _, b := range append([]*bundle.Bundle{s6, s8}, f.r30s8...) {
 			if err := b.CheckStreamGolden(state); err != nil {
 				t.Fatalf("bundle %s: %v", b.ModelVersion, err)
@@ -583,13 +653,14 @@ func rebuiltAt(t *testing.T, b *bundle.Bundle, version string, at int64, als map
 	return r
 }
 
-// Bundles rebuilt every 10 days to the latest test event, 20 days after
-// the test split starts, pass; a missing or extra rebuild, one past the
-// latest event, other ALS settings, another ranker or another stream
-// window do not.
+// Bundles rebuilt every 10 days from the test split's start pass, the
+// latest of them the last before the latest test event; a missing or
+// extra rebuild, other items, ALS settings or encoder, another ranker or
+// another stream window do not.
 func TestCheckRebuilds(t *testing.T) {
 	als := map[string]float64{"factors": 64, "alpha": 1}
-	b := bundle.New(bundle.Manifest{ModelVersion: "b1", ItemCount: 1, Dim: 1, MaxSeqLen: 5}, []string{"", "i1"}, matrix(t, 1, []float32{0, 1}), nil, nil)
+	b := bundle.New(bundle.Manifest{ModelVersion: "b1", ItemCount: 1, Dim: 1, MaxSeqLen: 5, UserEncoder: "onnx",
+		SHA256: map[string]string{"items.ids": "i"}}, []string{"", "i1"}, matrix(t, 1, []float32{0, 1}), nil, nil)
 	b1 := rebuiltAt(t, b, "b1", testStart, als, "")
 	s8 := rebuiltAt(t, b, "s8", testStart, als, "")
 	s8.Stream = &bundle.Stream{PopularWindowMS: 14 * day}
@@ -602,31 +673,77 @@ func TestCheckRebuilds(t *testing.T) {
 		}
 		return out
 	}
-	const last = testStart + 20*day
-	if err := checkRebuilds(set(b1, 20, 0, 10), 10*day, last, b1, b1); err != nil {
-		t.Fatal(err)
+	for _, from := range []*bundle.Bundle{b1, s8} {
+		latest, err := checkRebuilds(set(from, 20, 0, 10), 10*day, b1, from)
+		if err != nil || latest != testStart+20*day {
+			t.Fatalf("from %s: latest %d, %v", from.ModelVersion, latest, err)
+		}
 	}
-	if err := checkRebuilds(set(s8, 0, 10, 20), 10*day, last, b1, s8); err != nil {
-		t.Fatal(err)
+	other := func(edit func(*bundle.Bundle)) []*bundle.Bundle {
+		out := set(b1, 0, 10, 20)
+		edit(out[1])
+		return out
 	}
-	other := set(b1, 0, 10, 20)
-	other[1] = rebuiltAt(t, b, "x", testStart+10*day, map[string]float64{"factors": 128, "alpha": 1}, "b1")
-	noStream := set(s8, 0, 10, 20)
-	noStream[2].Stream = nil
 	for name, c := range map[string]struct {
 		bundles []*bundle.Bundle
 		from    *bundle.Bundle
 	}{
 		"missing":     {set(b1, 0, 20), b1},
 		"twice":       {set(b1, 0, 10, 10, 20), b1},
-		"past last":   {set(b1, 0, 10, 20, 30), b1},
+		"not from 0":  {set(b1, 10, 20), b1},
 		"off grid":    {set(b1, 0, 10, 19), b1},
-		"other ALS":   {other, b1},
+		"none":        {nil, b1},
 		"ranker":      {set(s8, 0, 10, 20), b1},
-		"no stream":   {noStream, s8},
 		"from B1, S8": {set(b1, 0, 10, 20), s8},
+		"no stream": {func() []*bundle.Bundle {
+			out := set(s8, 0, 10, 20)
+			out[2].Stream = nil
+			return out
+		}(), s8},
+		"other items":  {other(func(r *bundle.Bundle) { r.SHA256 = map[string]string{"items.ids": "j"} }), b1},
+		"mean encoder": {other(func(r *bundle.Bundle) { r.UserEncoder = "mean" }), b1},
+		"other ALS": {other(func(r *bundle.Bundle) {
+			*r = *rebuiltAt(t, b, "x", testStart+10*day, map[string]float64{"factors": 128, "alpha": 1}, "b1")
+		}), b1},
 	} {
-		if err := checkRebuilds(c.bundles, 10*day, last, b1, c.from); err == nil {
+		if _, err := checkRebuilds(c.bundles, 10*day, b1, c.from); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+	for _, c := range []struct {
+		last int64
+		ok   bool
+	}{{20, true}, {29, true}, {30, false}, {19, false}} {
+		if err := rebuiltThrough(testStart+20*day, 10*day, testStart+c.last*day); (err == nil) != c.ok {
+			t.Errorf("latest test event %d days in: %v", c.last, err)
+		}
+	}
+}
+
+// B1s6 and B1s8 pass with B1's items, vectors and encoder, the window
+// chosen and six and eight features; another file of B1's, another window
+// or the rankers' features swapped do not.
+func TestCheckStreamBundles(t *testing.T) {
+	sums := map[string]string{"items.ids": "i", "items.npy": "v", "user_encoder.onnx": "e"}
+	stream := func(version string, features []string, window int64, edit func(map[string]string)) *bundle.Bundle {
+		s := maps.Clone(sums)
+		edit(s)
+		return bundle.New(bundle.Manifest{ModelVersion: version, Stream: &bundle.Stream{PopularWindowMS: window}, RankerFeatures: features, SHA256: s},
+			[]string{""}, matrix(t, 1, []float32{0}), nil, nil)
+	}
+	b1 := bundle.New(bundle.Manifest{ModelVersion: "b1", SHA256: sums}, []string{""}, matrix(t, 1, []float32{0}), nil, nil)
+	six, eight := bundle.RankerFeatures, slices.Concat(bundle.RankerFeatures, bundle.RecencyFeatures)
+	same := func(map[string]string) {}
+	if err := checkStreamBundles(b1, stream("s6", six, 14*day, same), stream("s8", eight, 14*day, same), 14*day); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string][2]*bundle.Bundle{
+		"other vectors": {stream("s6", six, 14*day, same), stream("s8", eight, 14*day, func(s map[string]string) { s["items.npy"] = "w" })},
+		"other encoder": {stream("s6", six, 14*day, func(s map[string]string) { s["user_encoder.onnx"] = "m" }), stream("s8", eight, 14*day, same)},
+		"other window":  {stream("s6", six, 14*day, same), stream("s8", eight, 7*day, same)},
+		"swapped":       {stream("s8", eight, 14*day, same), stream("s6", six, 14*day, same)},
+	} {
+		if err := checkStreamBundles(b1, c[0], c[1], 14*day); err == nil {
 			t.Errorf("%s: no error", name)
 		}
 	}
