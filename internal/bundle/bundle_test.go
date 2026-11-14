@@ -113,6 +113,25 @@ func TestLoadONNX(t *testing.T) {
 	}
 }
 
+// foldInGolden gives the test bundle golden cases whose user vectors are
+// those of fold_in.onnx, computed apart from it (onnxtest.FoldIn).
+func foldInGolden(t *testing.T) editFunc {
+	var lines string
+	for _, h := range [][]int32{{1}, {2, 5}, {4, 4, 9}} {
+		uv := onnxtest.FoldIn(h)
+		lines += bundletest.GoldenLineOf(t, testVectors(), h, []float32{float32(uv[0]), float32(uv[1])})
+	}
+	return func(f map[string][]byte, _ map[string]any) { f["golden.jsonl"] = []byte(lines) }
+}
+
+// A bundle whose encoder is fold_in.onnx loads with golden cases from the
+// fold-in; with the mean's graph in its place, the same cases fail.
+func TestLoadFoldIn(t *testing.T) {
+	initORT(t)
+	load(t, writeBundle(t, withEncoder(t, "fold_in.onnx"), foldInGolden(t)), Options{})
+	checkRejected(t, writeBundle(t, withEncoder(t, "mean.onnx"), foldInGolden(t)), Options{}, "user vector differs")
+}
+
 // With max_seq_len 3 the golden case of history 1, 1, 1, 2, 2 holds the
 // mean of 1, 2, 2, so it passes only if the history is cut before the
 // encoder runs.

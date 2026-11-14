@@ -125,8 +125,17 @@ func GoldenLine(t testing.TB, vectors []float32, maxSeqLen int, history []int32)
 	if err != nil {
 		t.Fatal(err)
 	}
-	last := history[max(0, len(history)-maxSeqLen):]
-	uv := m.Mean(last)
+	return GoldenLineOf(t, vectors, history, m.Mean(history[max(0, len(history)-maxSeqLen):]))
+}
+
+// GoldenLineOf is a golden case for history whose user vector is uv, with
+// its top 10 over the given 2-dimensional item vectors.
+func GoldenLineOf(t testing.TB, vectors []float32, history []int32, uv []float32) string {
+	t.Helper()
+	m, err := vec.NewMatrix(2, vectors)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !slices.ContainsFunc(uv, func(x float32) bool { return x != 0 }) {
 		uv = nil
 	}

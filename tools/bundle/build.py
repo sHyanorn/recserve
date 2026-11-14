@@ -5,11 +5,11 @@ usage: build.py DATA OUT [--encoder mean|onnx] [--ranker]
 DATA holds the files downloaded by scripts/data.sh. Writes OUT/<version>/
 with item vectors from implicit-feedback ALS trained on the train split, a
 co-occurrence table, a popularity list, golden cases and manifest.json, and
-prints the version. A user's vector is the mean of the vectors of their last
-MAX_SEQ_LEN history items. With --encoder mean (the default) the service
-computes it; with --encoder onnx the bundle carries user_encoder.onnx, a
-graph that computes the same mean, and the golden user vectors come from
-running it with ONNX Runtime. With --ranker the bundle also carries
+prints the version. With --encoder onnx the bundle carries user_encoder.onnx,
+which gives the last MAX_SEQ_LEN history items the user vector ALS would fit
+for them (fold_in, D058), and the golden user vectors come from running it
+with ONNX Runtime. With --encoder mean (the default) it has no encoder, and
+the service takes the mean of those items' vectors. With --ranker the bundle also carries
 ranker.onnx, a logistic regression over the six features of SPEC §8 trained
 on the valid split (D027), and each golden case carries its candidates and
 their features, which the service recomputes.
@@ -49,7 +49,7 @@ MAX_SEQ_LEN = 50
 GOLDEN_CASES = 20
 DATASET = "amazon2023-video_games-5core-timestamp"
 OPSET, IR_VERSION = 17, 8  # IR version 8 is the one that goes with opset 17
-PARITY = 1e-5  # largest accepted difference between the ONNX encoder and the float64 mean
+PARITY = 1e-5  # largest accepted difference between the ONNX encoder and the float64 fold-in
 # Retrieval as the service runs it (recommend.VectorTop, bundle.CoocSeeds, bundle.PopularTop).
 VECTOR_TOP, COOC_SEEDS, POPULAR_CANDIDATES = 200, 10, 100
 FEATURE_TOL = 1e-6  # largest accepted difference between the service's features and the golden's
@@ -72,6 +72,21 @@ def sequences(rows, item_ix):
 def mean_vector(vecs, history, max_len=MAX_SEQ_LEN):
     h = history[-max_len:]
     return vecs[h].astype(np.float64).mean(axis=0).astype(np.float32)
+
+
+def fold_in_matrix(vecs, reg):
+    """M = (YᵀY + reg I)⁻¹ in float64, Y being vecs: with ALS's regularization
+    reg, M times the sum of a user's item vectors is the user vector ALS's
+    own user step fits for them, with alpha 1 and no item twice (D058)."""
+    y = vecs.astype(np.float64)
+    m = np.linalg.inv(y.T @ y + reg * np.eye(y.shape[1]))
+    return (m + m.T) / 2
+
+
+def fold_in(m, vecs, history, max_len=MAX_SEQ_LEN):
+    """The fold-in user vector of the last max_len items of history."""
+    h = history[-max_len:]
+    return (m @ vecs[h].astype(np.float64).sum(axis=0)).astype(np.float32)
 
 
 def model(graph):
@@ -103,6 +118,27 @@ def mean_encoder(vecs):
     ]
     return model(helper.make_graph(
         nodes, "mean_encoder",
+        [helper.make_tensor_value_info("item_seq", TensorProto.INT64, ["B", "L"])],
+        [helper.make_tensor_value_info("user_emb", TensorProto.FLOAT, ["B", vecs.shape[1]])],
+        init))
+
+
+def fold_in_encoder(vecs, m):
+    """The user encoder of SPEC §8 as a graph: the rows of vecs named in
+    item_seq int64 [B, L] summed over L (padding, ID 0, is a zero row) and
+    multiplied by m, fold_in_matrix's; output user_emb float32 [B, D]."""
+    nodes = [
+        helper.make_node("Gather", ["items", "item_seq"], ["emb"], axis=0),
+        helper.make_node("ReduceSum", ["emb", "axis1"], ["sum"], keepdims=0),
+        helper.make_node("MatMul", ["sum", "m"], ["user_emb"]),
+    ]
+    init = [
+        numpy_helper.from_array(vecs, "items"),
+        numpy_helper.from_array(np.array([1], dtype=np.int64), "axis1"),
+        numpy_helper.from_array(m.astype(np.float32), "m"),
+    ]
+    return model(helper.make_graph(
+        nodes, "fold_in_encoder",
         [helper.make_tensor_value_info("item_seq", TensorProto.INT64, ["B", "L"])],
         [helper.make_tensor_value_info("user_emb", TensorProto.FLOAT, ["B", vecs.shape[1]])],
         init))
@@ -222,7 +258,7 @@ def recall_at_10(scores, ids, relevant):
     return len(relevant & set(top.tolist())) / len(relevant)
 
 
-def train_ranker(vecs, cooc_ids, popular, seqs, valid, item_ix):
+def train_ranker(vecs, cooc_ids, popular, seqs, valid, item_ix, user_vector):
     """Fit the ranker on the valid split: a request at each valid user's
     first valid event, whose history is the user's train events, labels its
     candidates 1 if the user has a valid event on them. The features read
@@ -230,14 +266,14 @@ def train_ranker(vecs, cooc_ids, popular, seqs, valid, item_ix):
     split starts. Users none of whose valid items are candidates teach a
     ranker nothing and are left out. Returns the weights and bias of a
     logistic regression on the raw features, and what it scored on the
-    users held out."""
+    users held out. user_vector(history) is the bundle's user vector."""
     relevant = defaultdict(set)
     for user, item, _ in valid:
         relevant[user].add(item_ix[item])
     queries = []
     for user in sorted(u for u in relevant if u in seqs):
         hist = seqs[user]
-        uv = mean_vector(vecs, hist)
+        uv = user_vector(hist)
         ids, retrieval, x = ranker_input(vecs, cooc_ids, popular, hist, uv if np.any(uv) else None)
         y = np.isin(ids, list(relevant[user]))
         if y.any():
@@ -346,15 +382,25 @@ def main(data, out, encoder, ranker):
     recent = Counter(item_ix[i] for _, i, ts in train if ts > cutoff - POPULAR_DAYS * 86_400_000)
     popular = np.array([i for i, _ in sorted(recent.items(), key=lambda kv: (-kv[1], kv[0]))[:POPULAR_TOP]], dtype=np.int64)
 
-    enc = mean_encoder(vecs).SerializeToString() if encoder == "onnx" else None
-    sess = session(enc) if enc else None
+    if encoder == "onnx":
+        m = fold_in_matrix(vecs, ALS["regularization"])
+        enc = fold_in_encoder(vecs, m).SerializeToString()
+        sess = session(enc)
+
+        def user_vector(h):
+            return fold_in(m, vecs, h)
+    else:
+        enc, sess = None, None
+
+        def user_vector(h):
+            return mean_vector(vecs, h)
 
     rank = None
     if ranker:
         # The labels must come after every event the features are built from.
         if not cutoff < min(ts for _, _, ts in valid):
             sys.exit("the valid split must start after the train split")
-        w, b, ranker_stats = train_ranker(vecs, cooc_ids, popular, seqs, valid, item_ix)
+        w, b, ranker_stats = train_ranker(vecs, cooc_ids, popular, seqs, valid, item_ix, user_vector)
         rank = linear_ranker(w, b).SerializeToString()
         if msg := check_ranker(session(rank), len(RANKER_FEATURES)):
             sys.exit(f"ranker: {msg}")
@@ -368,12 +414,12 @@ def main(data, out, encoder, ranker):
     rest = sorted(set(test_users) - set(longest))
     for u in longest + list(rng.choice(rest, size=GOLDEN_CASES - len(longest), replace=False)):
         hist = seqs[str(u)]
-        uv = mean_vector(vecs, hist)
+        uv = user_vector(hist)
         if sess:
             got = encode(sess, hist)
             diff = float(np.abs(got - uv).max())
             if not np.isfinite(got).all() or not diff <= PARITY:
-                sys.exit(f"user encoder differs from the mean by {diff} for user {u}")
+                sys.exit(f"user encoder differs from the fold-in by {diff} for user {u}")
             uv = got
         case = {"history": hist, "user_emb": uv.tolist(), "top10": top_k(vecs, uv, set(hist), 10)}
         if rank:
@@ -403,7 +449,7 @@ def main(data, out, encoder, ranker):
     version = version_of(sums)
     build = {"seed": SEED, "als": ALS, "implicit": implicit.__version__, "cooc_window": COOC_WINDOW, "popular_days": POPULAR_DAYS}
     if enc:
-        build["user_encoder"] = {"graph": "mean", "opset": OPSET, "onnx": onnx.__version__, "onnxruntime": ort.__version__}
+        build["user_encoder"] = {"graph": "als_fold_in", "regularization": ALS["regularization"], "opset": OPSET, "onnx": onnx.__version__, "onnxruntime": ort.__version__}
     if rank:
         build["ranker"] = {"model": "logistic_regression", "scikit_learn": sklearn.__version__, **RANKER, **ranker_stats}
     manifest = {

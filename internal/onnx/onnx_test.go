@@ -54,8 +54,15 @@ func TestNotInitialized(t *testing.T) {
 
 func meanEncoder(t *testing.T, seqLen int) *Encoder {
 	t.Helper()
+	return testEncoder(t, "mean.onnx", seqLen)
+}
+
+// testEncoder returns an encoder of the named test model over onnxtest's
+// items, closed when the test ends.
+func testEncoder(t *testing.T, model string, seqLen int) *Encoder {
+	t.Helper()
 	initORT(t)
-	e, err := NewEncoder(onnxtest.Model(t, "mean.onnx"), seqLen, onnxtest.MeanDim)
+	e, err := NewEncoder(onnxtest.Model(t, model), seqLen, onnxtest.MeanDim)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,6 +121,26 @@ func TestEncoderMatchesMean(t *testing.T) {
 	}
 	if _, err := e.Encode(ctx, make([]int32, seqLen+1)); err == nil {
 		t.Fatal("a sequence longer than the encoder's was accepted")
+	}
+}
+
+// fold_in.onnx gives a sequence M times the sum of its items' vectors,
+// an item that appears twice counting twice, within float32's rounding.
+func TestFoldInEncoder(t *testing.T) {
+	const seqLen = 8
+	e := testEncoder(t, "fold_in.onnx", seqLen)
+	r := rand.New(rand.NewPCG(1, 3))
+	for range 500 {
+		seq := randomSeq(r, seqLen)
+		got, err := e.Encode(context.Background(), seq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for j, want := range onnxtest.FoldIn(seq) {
+			if math.Abs(float64(got[j])-want) > 1e-5 {
+				t.Fatalf("%v gives %v, want %v", seq, got, onnxtest.FoldIn(seq))
+			}
+		}
 	}
 }
 

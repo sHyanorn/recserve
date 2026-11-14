@@ -4,7 +4,9 @@ usage: testdata.py DIR   (DIR is internal/onnx/onnxtest/testdata)
 
 mean.onnx is build.py's mean encoder over 12 items of 2 dimensions, item i
 being (cos i, sin i) / i (onnxtest.MeanVectors); zero.onnx is the same graph
-over zero vectors, so its output is always zero. slow.onnx applies Sin 300
+over zero vectors, so its output is always zero. fold_in.onnx is build.py's
+fold-in encoder over the same items with regularization FOLD_IN_REG
+(onnxtest.FoldIn). slow.onnx applies Sin 300
 times to a float32 vector x of any length, giving y; a run on a long vector
 lasts long enough to be terminated.
 
@@ -30,9 +32,11 @@ import sys
 import numpy as np
 from onnx import TensorProto, helper, numpy_helper
 
-from build import RANKER_FEATURES, linear_ranker, mean_encoder, mean_vector, model, ranker_input, top_k
+from build import (RANKER_FEATURES, fold_in_encoder, fold_in_matrix, linear_ranker, mean_encoder, mean_vector, model,
+                   ranker_input, top_k)
 
 MEAN_ITEMS = 12
+FOLD_IN_REG = 0.5
 SIN_NODES = 300
 LINEAR_W = [1, 2, -1, 0.5, 0.25, -0.5]
 LINEAR_B = 0.125
@@ -122,6 +126,7 @@ def main(d):
     models = {
         "mean.onnx": mean_encoder(mean_vectors()),
         "zero.onnx": mean_encoder(np.zeros((MEAN_ITEMS + 1, 2), dtype=np.float32)),
+        "fold_in.onnx": fold_in_encoder(mean_vectors(), fold_in_matrix(mean_vectors(), FOLD_IN_REG)),
         "slow.onnx": slow(),
         "linear_ranker.onnx": linear_ranker(LINEAR_W, LINEAR_B),
         "cross_row_ranker.onnx": cross_row_ranker(),

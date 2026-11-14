@@ -72,6 +72,27 @@ func MeanVectors() []float32 {
 	return v
 }
 
+// FoldInReg is the regularization of fold_in.onnx.
+const FoldInReg = 0.5
+
+// FoldIn returns the user vector fold_in.onnx gives seq, in float64: M
+// times the sum of the vectors of seq's items, M being (YᵀY + FoldInReg I)⁻¹
+// and Y the rows of MeanVectors.
+func FoldIn(seq []int32) []float64 {
+	y := MeanVectors()
+	var a, b, d, s0, s1 float64 // YᵀY + FoldInReg I is [[a, b], [b, d]]
+	for i := range MeanItems + 1 {
+		x0, x1 := float64(y[2*i]), float64(y[2*i+1])
+		a, b, d = a+x0*x0, b+x0*x1, d+x1*x1
+	}
+	a, d = a+FoldInReg, d+FoldInReg
+	for _, id := range seq {
+		s0, s1 = s0+float64(y[2*id]), s1+float64(y[2*id+1])
+	}
+	det := a*d - b*b
+	return []float64{(d*s0 - b*s1) / det, (a*s1 - b*s0) / det}
+}
+
 // LinearW and LinearB are the weights and bias of linear_ranker.onnx: the
 // score of a row of features x is x · LinearW + LinearB.
 var LinearW = []float32{1, 2, -1, 0.5, 0.25, -0.5}

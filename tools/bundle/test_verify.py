@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 import verify
-from build import mean_vector, sha256, top_k, version_of
+from build import fold_in, fold_in_encoder, fold_in_matrix, mean_vector, sha256, top_k, version_of
 
 IDS = [f"i{k}" for k in range(1, 13)]
 # Item k's vector is (k, 1 - k % 2), so a user vector (x, y) with 0 <= y < x
@@ -51,6 +51,29 @@ def test_accepts(tmp_path, capsys):
     write_bundle(tmp_path)
     verify.main(str(tmp_path))
     assert capsys.readouterr().out == "ok: 2 golden cases, 12 items, user encoder mean, ranker no\n"
+
+
+def write_fold_in(d, m):
+    """The test bundle with build.py's fold-in encoder over matrix m and golden cases from the fold-in with
+    regularization 0.5, an item twice in one history."""
+    golden = []
+    for h in ([1], [2, 3], [4, 4, 9]):
+        uv = fold_in(fold_in_matrix(VECTORS, 0.5), VECTORS, h, 3)
+        golden.append({"history": h, "user_emb": uv.tolist(), "top10": top_k(VECTORS, uv, set(h), 10)})
+    write_bundle(d, golden=golden)
+    (d / "user_encoder.onnx").write_bytes(fold_in_encoder(VECTORS, m).SerializeToString())
+    write_manifest(d, files=("golden.jsonl", "items.ids", "items.npy", "user_encoder.onnx"), user_encoder="onnx")
+
+
+def test_accepts_fold_in(tmp_path, capsys):
+    write_fold_in(tmp_path, fold_in_matrix(VECTORS, 0.5))
+    verify.main(str(tmp_path))
+    assert capsys.readouterr().out == "ok: 3 golden cases, 12 items, user encoder onnx, ranker no\n"
+
+
+def test_rejects_other_fold_in_matrix(tmp_path):
+    write_fold_in(tmp_path, 2 * fold_in_matrix(VECTORS, 0.5))
+    assert "user vector differs" in rejection(tmp_path)
 
 
 def test_null_history_raw_is_absent(tmp_path, capsys):
