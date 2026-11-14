@@ -47,12 +47,12 @@ func conditionsHash(rows [][]string) string {
 
 // freshness is what section 7's conditions run on: the bundles B1, B1s6
 // and B1s8, those rebuilt every 7 and every 30 days, and those rebuilt
-// every 30 days with B1s8's ranker, ascending by rebuild time; the store
-// and the stream state of every event of the run, and the window chosen on
-// valid.
+// every 30 days with B1s8's ranker, ascending by rebuild time and opened
+// one at a time; the store and the stream state of every event of the
+// run, and the window chosen on valid.
 type freshness struct {
 	b1, s6, s8     *bundle.Bundle
-	r7, r30, r30s8 []*bundle.Bundle
+	r7, r30, r30s8 []rebuiltRef
 	store          history.Store
 	state          *fresh.State
 	window         int64
@@ -77,7 +77,8 @@ func (f freshness) pipeline(b *bundle.Bundle, stream bool) (*Pipeline, error) {
 }
 
 // periodic returns the pipelines over bundles, each answering the requests
-// from its rebuild time to the next one's.
+// from its rebuild time to the next one's, all built at once: the
+// reference that runPeriodic's ranks are tested against.
 func (f freshness) periodic(bundles []*bundle.Bundle, stream bool) (periodic, error) {
 	var pr periodic
 	for _, b := range bundles {
@@ -95,55 +96,113 @@ func (f freshness) periodic(bundles []*bundle.Bundle, stream bool) (periodic, er
 	return pr, nil
 }
 
-// freshnessCondition is a condition of section 7: the pipeline that
-// answers a request at each time.
-type freshnessCondition struct {
-	name     string
-	pipeline func(ts int64) (*Pipeline, error)
+// runPeriodic runs condition name on events, each answered by the bundle
+// of refs rebuilt latest at or before its time. It opens one bundle at a
+// time, for the events it answers, and closes it after them; each request
+// is checked as periodic checks it.
+func (f freshness) runPeriodic(name string, refs []rebuiltRef, stream bool, events []dataset.Row) ([]int, error) {
+	groups := make([][]int, len(refs))
+	for i, e := range events {
+		k := latestAtOrBefore(len(refs), func(j int) int64 { return refs[j].at }, e.TS)
+		if k < 0 {
+			return nil, fmt.Errorf("event %d: no bundle rebuilt at or before %d", i, e.TS)
+		}
+		groups[k] = append(groups[k], i)
+	}
+	ranks := make([]int, len(events))
+	for k, idx := range groups {
+		if len(idx) > 0 {
+			if err := f.runRebuilt(name, refs[k], stream, events, idx, ranks); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return ranks, nil
 }
 
-// conditions returns section 7's conditions, in its order.
-func (f freshness) conditions() ([]freshnessCondition, error) {
+// runRebuilt opens ref, answers the events at idx with it, writing their
+// ranks at idx in ranks, and closes it.
+func (f freshness) runRebuilt(name string, ref rebuiltRef, stream bool, events []dataset.Row, idx, ranks []int) (err error) {
+	b, closeB, err := ref.open()
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, closeB()) }()
+	at, err := rebuildTime(b)
+	if err != nil {
+		return err
+	}
+	if at != ref.at {
+		return fmt.Errorf("bundle %s: rebuilt at %d, opened for %d", b.ModelVersion, at, ref.at)
+	}
+	p, err := f.pipeline(b, stream)
+	if err != nil {
+		return err
+	}
+	group := make([]dataset.Row, len(idx))
+	for j, i := range idx {
+		group[j] = events[i]
+	}
+	got, _, err := runConditionOn(periodic{bundles: []rebuilt{{at, p}}}.pipeline, qualityCondition{name: name}, group)
+	if err != nil {
+		return fmt.Errorf("bundle %s: not valid: %w", b.ModelVersion, err)
+	}
+	for j, i := range idx {
+		ranks[i] = got[j]
+	}
+	return nil
+}
+
+// freshnessCondition is a condition of section 7 and its run, one request
+// per event.
+type freshnessCondition struct {
+	name string
+	run  func(events []dataset.Row) ([]int, error)
+}
+
+// conditions returns section 7's conditions, in its order. A condition
+// builds its pipelines when it runs.
+func (f freshness) conditions() []freshnessCondition {
 	var out []freshnessCondition
 	for _, c := range []struct {
 		name   string
 		b      *bundle.Bundle
 		stream bool
 	}{{"F0", f.b1, false}, {"S1", f.b1, true}, {"S2", f.b1, true}, {"S3a", f.s6, true}, {"S3", f.s8, true}} {
-		p, err := f.pipeline(c.b, c.stream)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", c.name, err)
-		}
-		p.bundleCooc = c.name == "S1" // popularity from the state, co-occurrence from B1
-		out = append(out, freshnessCondition{c.name, func(int64) (*Pipeline, error) { return p, nil }})
+		out = append(out, freshnessCondition{c.name, func(events []dataset.Row) ([]int, error) {
+			p, err := f.pipeline(c.b, c.stream)
+			if err != nil {
+				return nil, err
+			}
+			p.bundleCooc = c.name == "S1" // popularity from the state, co-occurrence from B1
+			ranks, _, err := runConditionOn(func(int64) (*Pipeline, error) { return p, nil }, qualityCondition{name: c.name}, events)
+			if err != nil {
+				return nil, fmt.Errorf("not valid: %w", err)
+			}
+			return ranks, nil
+		}})
 	}
 	for _, c := range []struct {
-		name    string
-		bundles []*bundle.Bundle
-		stream  bool
+		name   string
+		refs   []rebuiltRef
+		stream bool
 	}{{"R7", f.r7, false}, {"R30", f.r30, false}, {"S3+R30", f.r30s8, true}} {
-		pr, err := f.periodic(c.bundles, c.stream)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", c.name, err)
-		}
-		out = append(out, freshnessCondition{c.name, pr.pipeline})
+		out = append(out, freshnessCondition{c.name, func(events []dataset.Row) ([]int, error) {
+			return f.runPeriodic(c.name, c.refs, c.stream, events)
+		}})
 	}
-	return out, nil
+	return out
 }
 
 // rows runs the conditions, one request per event, then the two
 // references: B1's vector reference and the popularity reference.
 func (f freshness) rows(events []dataset.Row, logf func(string, ...any)) ([]qualityRow, error) {
-	conds, err := f.conditions()
-	if err != nil {
-		return nil, err
-	}
 	var rows []qualityRow
-	for _, c := range conds {
+	for _, c := range f.conditions() {
 		start := time.Now()
-		ranks, _, err := runConditionOn(c.pipeline, qualityCondition{name: c.name}, events)
+		ranks, err := c.run(events)
 		if err != nil {
-			return nil, fmt.Errorf("%s: not valid: %w", c.name, err)
+			return nil, fmt.Errorf("%s: %w", c.name, err)
 		}
 		logf("%s: %v", c.name, time.Since(start).Round(time.Second))
 		rows = append(rows, qualityRow{c.name, ranks})
@@ -182,35 +241,49 @@ type manifestBuild struct {
 	} `json:"user_encoder"`
 }
 
-// checkRebuilds requires bundles rebuilt every period to be rebuilt at
-// T_k = testStart + k period for k = 0, 1, ..., each once, with the items,
-// ALS settings and user encoder of base, the ranker of the bundle from and
-// from's stream window (section 4), and returns the latest T_k.
-func checkRebuilds(bundles []*bundle.Bundle, period int64, base, from *bundle.Bundle) (int64, error) {
+// checkRebuilt requires b to have the items, ALS settings and user
+// encoder of base, the ranker of the bundle from and from's stream window
+// (section 4), and returns its rebuild time.
+func checkRebuilt(b, base, from *bundle.Bundle) (int64, error) {
 	want, err := buildOf(base)
 	if err != nil {
 		return 0, err
 	}
-	var times []int64
-	for _, b := range bundles {
-		at, err := rebuildTime(b)
-		if err != nil {
-			return 0, err
-		}
-		got, err := buildOf(b)
-		if err != nil {
-			return 0, err
-		}
-		if !maps.Equal(got.ALS, want.ALS) || got.UserEncoder != want.UserEncoder || b.UserEncoder != base.UserEncoder ||
-			b.SHA256["items.ids"] != base.SHA256["items.ids"] || got.Ranker.From != from.ModelVersion ||
-			(b.Stream == nil) != (from.Stream == nil) || b.Stream != nil && *b.Stream != *from.Stream {
-			return 0, fmt.Errorf("bundle %s: ALS %v, encoder %s %+v, ranker from %q, stream %v; want %v, %s %+v, %q, %v, and %s's items",
-				b.ModelVersion, got.ALS, b.UserEncoder, got.UserEncoder, got.Ranker.From, b.Stream,
-				want.ALS, base.UserEncoder, want.UserEncoder, from.ModelVersion, from.Stream, base.ModelVersion)
-		}
-		times = append(times, at)
+	at, err := rebuildTime(b)
+	if err != nil {
+		return 0, err
 	}
-	slices.Sort(times)
+	got, err := buildOf(b)
+	if err != nil {
+		return 0, err
+	}
+	if !maps.Equal(got.ALS, want.ALS) || got.UserEncoder != want.UserEncoder || b.UserEncoder != base.UserEncoder ||
+		b.SHA256["items.ids"] != base.SHA256["items.ids"] || got.Ranker.From != from.ModelVersion ||
+		(b.Stream == nil) != (from.Stream == nil) || b.Stream != nil && *b.Stream != *from.Stream {
+		return 0, fmt.Errorf("bundle %s: ALS %v, encoder %s %+v, ranker from %q, stream %v; want %v, %s %+v, %q, %v, and %s's items",
+			b.ModelVersion, got.ALS, b.UserEncoder, got.UserEncoder, got.Ranker.From, b.Stream,
+			want.ALS, base.UserEncoder, want.UserEncoder, from.ModelVersion, from.Stream, base.ModelVersion)
+	}
+	return at, nil
+}
+
+// checkRebuiltDir checks the bundle in dir as checkRebuilt does and closes
+// it, so that a read holds one rebuilt bundle at a time, and returns its
+// version and rebuild time.
+func checkRebuiltDir(dir string, base, from *bundle.Bundle) (string, int64, error) {
+	b, closeB, err := openDir(dir)()
+	if err != nil {
+		return "", 0, err
+	}
+	at, err := checkRebuilt(b, base, from)
+	return b.ModelVersion, at, errors.Join(err, closeB())
+}
+
+// rebuildTimes requires the rebuild times of bundles rebuilt every period
+// to be T_k = testStart + k period for k = 0, 1, ..., each once, and
+// returns the latest.
+func rebuildTimes(times []int64, period int64) (int64, error) {
+	times = slices.Sorted(slices.Values(times))
 	for k, at := range times {
 		if at != testStart+int64(k)*period {
 			return 0, fmt.Errorf("rebuilt at %v, want %d + k %d for k from 0", times, int64(testStart), period)
@@ -453,11 +526,11 @@ func TestRealDataFreshness(t *testing.T) {
 	plan := [][]string{{"B1", b1.ModelVersion}}
 	var b0, s6, s8 *bundle.Bundle
 	type rebuildSet struct {
-		name    string
-		days    int64
-		from    *bundle.Bundle
-		bundles []*bundle.Bundle
-		latest  int64
+		name   string
+		days   int64
+		from   *bundle.Bundle
+		refs   []rebuiltRef
+		latest int64
 	}
 	var sets []*rebuildSet
 	if read1 {
@@ -480,18 +553,23 @@ func TestRealDataFreshness(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			row := []string{"R" + set.name}
+			row, times := []string{"R" + set.name}, []int64{}
 			for _, m := range dirs {
-				b := loadBundle(t, filepath.Dir(m), bundle.Options{})
-				set.bundles, row = append(set.bundles, b), append(row, b.ModelVersion)
+				version, at, err := checkRebuiltDir(filepath.Dir(m), b1, set.from)
+				if err != nil {
+					t.Fatalf("R%s: %v", set.name, err)
+				}
+				row, times = append(row, version), append(times, at)
+				set.refs = append(set.refs, rebuiltRef{at, openDir(filepath.Dir(m))})
 			}
-			if set.latest, err = checkRebuilds(set.bundles, set.days*day, b1, set.from); err != nil {
+			if set.latest, err = rebuildTimes(times, set.days*day); err != nil {
 				t.Fatalf("R%s: %v", set.name, err)
 			}
+			slices.SortFunc(set.refs, func(a, b rebuiltRef) int { return cmp.Compare(a.at, b.at) })
 			plan = append(plan, row)
 		}
 	}
-	if err := openTestRead(registrationPath, testReadsLog, category, n, conditionsHash(plan), gitHead, out, ranksDir); err != nil {
+	if err := openTestRead(registrationPath, amendmentsPath, testReadsLog, category, n, conditionsHash(plan), gitHead, out, ranksDir); err != nil {
 		t.Fatal(err)
 	}
 
@@ -549,10 +627,19 @@ func TestRealDataFreshness(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f := freshness{b1: rd.bundle, s6: s6, s8: s8, r7: sets[0].bundles, r30: sets[1].bundles, r30s8: sets[2].bundles,
+		f := freshness{b1: rd.bundle, s6: s6, s8: s8, r7: sets[0].refs, r30: sets[1].refs, r30s8: sets[2].refs,
 			store: rd.store, state: state, window: s8.Stream.PopularWindowMS}
-		for _, b := range append([]*bundle.Bundle{s6, s8}, f.r30s8...) {
+		for _, b := range []*bundle.Bundle{s6, s8} {
 			if err := b.CheckStreamGolden(state); err != nil {
+				t.Fatalf("bundle %s: %v", b.ModelVersion, err)
+			}
+		}
+		for _, ref := range f.r30s8 {
+			b, closeB, err := ref.open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := errors.Join(b.CheckStreamGolden(state), closeB()); err != nil {
 				t.Fatalf("bundle %s: %v", b.ModelVersion, err)
 			}
 		}
@@ -673,8 +760,19 @@ func TestCheckRebuilds(t *testing.T) {
 		}
 		return out
 	}
+	check := func(bundles []*bundle.Bundle, from *bundle.Bundle) (int64, error) {
+		var times []int64
+		for _, r := range bundles {
+			at, err := checkRebuilt(r, b1, from)
+			if err != nil {
+				return 0, err
+			}
+			times = append(times, at)
+		}
+		return rebuildTimes(times, 10*day)
+	}
 	for _, from := range []*bundle.Bundle{b1, s8} {
-		latest, err := checkRebuilds(set(from, 20, 0, 10), 10*day, b1, from)
+		latest, err := check(set(from, 20, 0, 10), from)
 		if err != nil || latest != testStart+20*day {
 			t.Fatalf("from %s: latest %d, %v", from.ModelVersion, latest, err)
 		}
@@ -706,7 +804,7 @@ func TestCheckRebuilds(t *testing.T) {
 			*r = *rebuiltAt(t, b, "x", testStart+10*day, map[string]float64{"factors": 128, "alpha": 1}, "b1")
 		}), b1},
 	} {
-		if _, err := checkRebuilds(c.bundles, 10*day, b1, c.from); err == nil {
+		if _, err := check(c.bundles, c.from); err == nil {
 			t.Errorf("%s: no error", name)
 		}
 	}
@@ -782,10 +880,11 @@ type shifted struct {
 
 func (c shifted) Count(item int32, from, to int64) int { return c.s.Count(item, from+c.lo, to+c.hi) }
 
-// Section 7's conditions on random bundles and events: each is valid, and
-// each differs from the one it is compared with, which a condition run on
-// another's bundles, sources or ranker would not.
-func TestFreshnessConditions(t *testing.T) {
+// freshnessFixture returns section 7's inputs on random bundles and 600
+// random events: the conditions' freshness, whose rebuilt bundles open
+// from memory, the events, and the rebuilt bundles of R7, R30 and S3+R30.
+func freshnessFixture(t *testing.T) (freshness, []dataset.Row, [3][]*bundle.Bundle) {
+	t.Helper()
 	r := rand.New(rand.NewPCG(31, 31))
 	const n, w = 30, 40
 	bundleOf := func(version string, edit func(*bundle.Manifest)) *bundle.Bundle {
@@ -832,10 +931,11 @@ func TestFreshnessConditions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	r7 := rebuilds("r7-", func(*bundle.Manifest) {}, 0, 70, 140)
+	r30 := rebuilds("r30-", func(*bundle.Manifest) {}, 0, 100)
+	r30s8 := rebuilds("r30s8-", stream(slices.Concat(bundle.RankerFeatures, bundle.RecencyFeatures)), 0, 100)
 	f := freshness{b1: b1, s6: s6, s8: s8, store: store, state: state, window: w,
-		r7:    rebuilds("r7-", func(*bundle.Manifest) {}, 0, 70, 140),
-		r30:   rebuilds("r30-", func(*bundle.Manifest) {}, 0, 100),
-		r30s8: rebuilds("r30s8-", stream(slices.Concat(bundle.RankerFeatures, bundle.RecencyFeatures)), 0, 100),
+		r7: memoryRefs(t, r7), r30: memoryRefs(t, r30), r30s8: memoryRefs(t, r30s8),
 		// B1s6's ranker weighs the sources otherwise than B1's, and B1s8's
 		// as B1s6's, with the recency features.
 		rank: func(b *bundle.Bundle) Ranker {
@@ -856,6 +956,28 @@ func TestFreshnessConditions(t *testing.T) {
 				return out, nil
 			})
 		}}
+	return f, rows, [3][]*bundle.Bundle{r7, r30, r30s8}
+}
+
+// memoryRefs refers to bundles in memory, which close as nothing.
+func memoryRefs(t *testing.T, bundles []*bundle.Bundle) []rebuiltRef {
+	t.Helper()
+	var refs []rebuiltRef
+	for _, b := range bundles {
+		at, err := rebuildTime(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		refs = append(refs, rebuiltRef{at, func() (*bundle.Bundle, func() error, error) { return b, func() error { return nil }, nil }})
+	}
+	return refs
+}
+
+// Section 7's conditions on random bundles and events: each is valid, and
+// each differs from the one it is compared with, which a condition run on
+// another's bundles, sources or ranker would not.
+func TestFreshnessConditions(t *testing.T) {
+	f, rows, _ := freshnessFixture(t)
 	got, err := f.rows(rows, t.Logf)
 	if err != nil {
 		t.Fatal(err)
@@ -878,6 +1000,66 @@ func TestFreshnessConditions(t *testing.T) {
 		return users
 	}(), true); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The rebuilt conditions open one bundle at a time, each once, for the
+// events it answers, and give the ranks of the same conditions run on
+// pipelines over every bundle at once, which the bundle before would
+// change; a bundle opened for another's events fails the run.
+func TestRunPeriodic(t *testing.T) {
+	f, events, sets := freshnessFixture(t)
+	for i, c := range []struct {
+		name   string
+		refs   []rebuiltRef
+		stream bool
+	}{{"R7", f.r7, false}, {"R30", f.r30, false}, {"S3+R30", f.r30s8, true}} {
+		pr, err := f.periodic(sets[i], c.stream)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, _, err := runConditionOn(pr.pipeline, qualityCondition{name: c.name}, events)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := pr
+		before.choose = func(ts int64) int {
+			return max(0, latestAtOrBefore(len(pr.bundles), func(k int) int64 { return pr.bundles[k].at }, ts)-1)
+		}
+		if other, _, err := runConditionOn(before.pipeline, qualityCondition{name: c.name}, events); err != nil || slices.Equal(other, want) {
+			t.Fatalf("%s: the bundle before gives the same ranks, %v", c.name, err)
+		}
+
+		open, most := 0, 0
+		opened := make([]int, len(c.refs))
+		refs := slices.Clone(c.refs)
+		for k := range refs {
+			inner := c.refs[k].open
+			refs[k].open = func() (*bundle.Bundle, func() error, error) {
+				b, closeB, err := inner()
+				opened[k]++
+				open++
+				most = max(most, open)
+				return b, func() error { open--; return closeB() }, err
+			}
+		}
+		got, err := f.runPeriodic(c.name, refs, c.stream, events)
+		if err != nil || !slices.Equal(got, want) {
+			t.Errorf("%s: %v; the ranks of every bundle at once: %t", c.name, err, slices.Equal(got, want))
+		}
+		if most != 1 || open != 0 || slices.ContainsFunc(opened, func(n int) bool { return n != 1 }) {
+			t.Errorf("%s: %d open at most, %d left open, opened %v; want one at a time, each once", c.name, most, open, opened)
+		}
+
+		for _, shift := range []int{-1, 1} {
+			wrong := slices.Clone(c.refs)
+			for k := range wrong {
+				wrong[k].open = c.refs[min(max(k+shift, 0), len(c.refs)-1)].open
+			}
+			if _, err := f.runPeriodic(c.name, wrong, c.stream, events); err == nil || !strings.Contains(err.Error(), "opened for") {
+				t.Errorf("%s: each period's bundle %+d opened: %v", c.name, shift, err)
+			}
+		}
 	}
 }
 

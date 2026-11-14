@@ -6,7 +6,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
-	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -45,6 +45,30 @@ func rebuildTime(b *bundle.Bundle) (int64, error) {
 	return *m.Build.Cutoff, nil
 }
 
+// latestAtOrBefore returns the index of the last of n rebuild times,
+// ascending, given by at, that is at or before ts; -1 if none is.
+func latestAtOrBefore(n int, at func(int) int64, ts int64) int {
+	return sort.Search(n, func(i int) bool { return at(i) > ts }) - 1
+}
+
+// rebuiltRef is a rebuilt bundle by its rebuild time, opened only for the
+// requests it answers; open returns the bundle and how to close it.
+type rebuiltRef struct {
+	at   int64
+	open func() (*bundle.Bundle, func() error, error)
+}
+
+// openDir opens the bundle in dir, for a rebuiltRef.
+func openDir(dir string) func() (*bundle.Bundle, func() error, error) {
+	return func() (*bundle.Bundle, func() error, error) {
+		b, err := bundle.Load(dir, bundle.Options{})
+		if err != nil {
+			return nil, nil, err
+		}
+		return b, b.Close, nil
+	}
+}
+
 // periodic answers each request with the bundle rebuilt latest at or
 // before its time.
 type periodic struct {
@@ -57,13 +81,7 @@ type periodic struct {
 // bundle chosen was rebuilt at or before ts and used only events before
 // ts, as read from the bundle itself.
 func (pr periodic) pipeline(ts int64) (*Pipeline, error) {
-	k, _ := slices.BinarySearchFunc(pr.bundles, ts, func(b rebuilt, ts int64) int {
-		if b.at <= ts {
-			return -1
-		}
-		return 1
-	})
-	k-- // the last rebuilt at or before ts
+	k := latestAtOrBefore(len(pr.bundles), func(i int) int64 { return pr.bundles[i].at }, ts)
 	if pr.choose != nil {
 		k = pr.choose(ts)
 	}

@@ -19,29 +19,40 @@ import (
 // checked and logged before it opens a test file.
 
 const (
-	// registrationSHA256 is the registration's SHA-256, which a test read
-	// checks before it opens a test file.
+	// registrationSHA256 and amendmentsSHA256 are the SHA-256 of the
+	// registration and of its amendments, which a test read checks before
+	// it opens a test file.
 	registrationSHA256 = "aceb32b6c93c8deb48c795dcbf115374c05056cee9a55f883e6e8884c4b59bd4"
+	amendmentsSHA256   = "67792883c473b579b12b277e0e5d6254f1f1df1d4dc7cf3a054efcd0e3a0c421"
 	registrationPath   = "../../docs/registration/m8-freshness.md"
+	amendmentsPath     = "../../docs/registration/m8-freshness-amendments.md"
 	testReadsLog       = "../../bench-results/m8/test-reads.log"
 )
 
 // testReadsAllowed is each category's number of test reads (section 9).
 var testReadsAllowed = map[string]int{"Video_Games": 2, "Musical_Instruments": 1}
 
+// failedReads are the log's lines of reads that stopped before they wrote
+// or printed any metric, each named by an amendment: they do not count
+// (section 9).
+var failedReads = map[string]bool{}
+
 // openTestRead is section 9's check before read n of category opens the
-// test file: the registration at reg has registrationSHA256, the log holds
-// n - 1 reads of the category and n is within its number, and no output
-// path exists. It then appends the read's line to the log: the UTC time,
-// the commit, the category and the conditions' hash. commit returns the
-// commit the read runs on, or an error if the worktree differs from it.
-func openTestRead(reg, log, category string, n int, conditions string, commit func() (string, error), outs ...string) error {
-	data, err := os.ReadFile(reg)
-	if err != nil {
-		return err
-	}
-	if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != registrationSHA256 {
-		return fmt.Errorf("%s has SHA-256 %x; the registration's is %s", reg, sum, registrationSHA256)
+// test file: the registration at reg and its amendments at amend have
+// registrationSHA256 and amendmentsSHA256, the log holds n - 1 reads of
+// the category and n is within its number, and no output path exists. It
+// then appends the read's line to the log: the UTC time, the commit, the
+// category and the conditions' hash. commit returns the commit the read
+// runs on, or an error if the worktree differs from it.
+func openTestRead(reg, amend, log, category string, n int, conditions string, commit func() (string, error), outs ...string) error {
+	for _, f := range []struct{ path, want string }{{reg, registrationSHA256}, {amend, amendmentsSHA256}} {
+		data, err := os.ReadFile(f.path)
+		if err != nil {
+			return err
+		}
+		if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != f.want {
+			return fmt.Errorf("%s has SHA-256 %x; the committed one is %s", f.path, sum, f.want)
+		}
 	}
 	if n < 1 || n > testReadsAllowed[category] {
 		return fmt.Errorf("read %d of %s: the registration allows %d", n, category, testReadsAllowed[category])
@@ -72,7 +83,8 @@ func openTestRead(reg, log, category string, n int, conditions string, commit fu
 	return errors.Join(err, f.Close())
 }
 
-// loggedReads returns the number of reads of category in the log.
+// loggedReads returns the number of reads of category in the log, but
+// failedReads.
 func loggedReads(log, category string) (int, error) {
 	logged, err := os.ReadFile(log)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -80,7 +92,7 @@ func loggedReads(log, category string) (int, error) {
 	}
 	var done int
 	for line := range strings.Lines(string(logged)) {
-		if f := strings.Fields(line); len(f) == 4 && f[2] == category {
+		if f := strings.Fields(line); len(f) == 4 && f[2] == category && !failedReads[strings.TrimSuffix(line, "\n")] {
 			done++
 		}
 	}
@@ -111,10 +123,10 @@ func TestOpenTestRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	head := func() (string, error) { return "c0ffee", nil }
-	if err := openTestRead(registrationPath, log, "Video_Games", 2, "h", head, out); err == nil || !strings.Contains(err.Error(), "holds 0 reads") {
+	if err := openTestRead(registrationPath, amendmentsPath, log, "Video_Games", 2, "h", head, out); err == nil || !strings.Contains(err.Error(), "holds 0 reads") {
 		t.Errorf("read 2 before read 1: %v", err)
 	}
-	if err := openTestRead(registrationPath, log, "Video_Games", 1, "h1", head, out); err != nil {
+	if err := openTestRead(registrationPath, amendmentsPath, log, "Video_Games", 1, "h1", head, out); err != nil {
 		t.Fatal(err)
 	}
 	logged, err := os.ReadFile(log)
@@ -129,21 +141,22 @@ func TestOpenTestRead(t *testing.T) {
 	}
 	dirty := func() (string, error) { return "", errors.New("tracked files differ from the commit") }
 	for _, c := range []struct {
-		name, reg, category string
-		n                   int
-		commit              func() (string, error)
-		outs                []string
-		want                string
+		name, reg, amend, category string
+		n                          int
+		commit                     func() (string, error)
+		outs                       []string
+		want                       string
 	}{
-		{"another registration", other, "Video_Games", 2, head, nil, "SHA-256"},
-		{"read 1 again", registrationPath, "Video_Games", 1, head, nil, "holds 1 reads of Video_Games; read 1 follows 0"},
-		{"read 3", registrationPath, "Video_Games", 3, head, nil, "allows 2"},
-		{"Musical_Instruments' read 2", registrationPath, "Musical_Instruments", 2, head, nil, "allows 1"},
-		{"another category", registrationPath, "Software", 1, head, nil, "allows 0"},
-		{"output exists", registrationPath, "Video_Games", 2, head, []string{out, log}, "exists"},
-		{"worktree differs", registrationPath, "Video_Games", 2, dirty, nil, "differ"},
+		{"another registration", other, amendmentsPath, "Video_Games", 2, head, nil, "SHA-256"},
+		{"other amendments", registrationPath, other, "Video_Games", 2, head, nil, "SHA-256"},
+		{"read 1 again", registrationPath, amendmentsPath, "Video_Games", 1, head, nil, "holds 1 reads of Video_Games; read 1 follows 0"},
+		{"read 3", registrationPath, amendmentsPath, "Video_Games", 3, head, nil, "allows 2"},
+		{"Musical_Instruments' read 2", registrationPath, amendmentsPath, "Musical_Instruments", 2, head, nil, "allows 1"},
+		{"another category", registrationPath, amendmentsPath, "Software", 1, head, nil, "allows 0"},
+		{"output exists", registrationPath, amendmentsPath, "Video_Games", 2, head, []string{out, log}, "exists"},
+		{"worktree differs", registrationPath, amendmentsPath, "Video_Games", 2, dirty, nil, "differ"},
 	} {
-		err := openTestRead(c.reg, log, c.category, c.n, "h", c.commit, c.outs...)
+		err := openTestRead(c.reg, c.amend, log, c.category, c.n, "h", c.commit, c.outs...)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want %q", c.name, err, c.want)
 		}
@@ -155,9 +168,35 @@ func TestOpenTestRead(t *testing.T) {
 		category string
 		n        int
 	}{{"Video_Games", 2}, {"Musical_Instruments", 1}} {
-		if err := openTestRead(registrationPath, log, c.category, c.n, "h", head, out); err != nil {
+		if err := openTestRead(registrationPath, amendmentsPath, log, c.category, c.n, "h", head, out); err != nil {
 			t.Errorf("%s read %d: %v", c.category, c.n, err)
 		}
+	}
+}
+
+// A read that stopped before any metric, named in failedReads, does not
+// count: read 2 runs once more after it, and is refused after that rerun
+// as after any read 2; unnamed, the stopped read counts.
+func TestOpenTestReadAfterAFailedRead(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "test-reads.log")
+	read1 := "2026-11-14T22:01:40Z c0ffee Video_Games h1"
+	failed := "2026-11-14T22:51:31Z c0ffee Video_Games h2"
+	if err := os.WriteFile(log, []byte(read1+"\n"+failed+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	head := func() (string, error) { return "c0ffee", nil }
+	if err := openTestRead(registrationPath, amendmentsPath, log, "Video_Games", 2, "h2", head); err == nil || !strings.Contains(err.Error(), "holds 2 reads") {
+		t.Fatalf("read 2 after a stopped read 2 not named: %v", err)
+	}
+	saved := failedReads
+	t.Cleanup(func() { failedReads = saved })
+	failedReads = map[string]bool{failed: true}
+	if err := openTestRead(registrationPath, amendmentsPath, log, "Video_Games", 2, "h2", head); err != nil {
+		t.Fatalf("read 2 after the named stopped read: %v", err)
+	}
+	if err := openTestRead(registrationPath, amendmentsPath, log, "Video_Games", 2, "h2", head); err == nil || !strings.Contains(err.Error(), "holds 2 reads") {
+		t.Errorf("read 2 after its rerun: %v", err)
 	}
 }
 

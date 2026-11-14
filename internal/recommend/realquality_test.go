@@ -385,7 +385,7 @@ func TestRealDataQuality(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := openTestRead(registrationPath, testReadsLog, category, done+1, conditionsHash(plan), gitHead, outs...); err != nil {
+		if err := openTestRead(registrationPath, amendmentsPath, testReadsLog, category, done+1, conditionsHash(plan), gitHead, outs...); err != nil {
 			t.Fatal(err)
 		}
 	}
