@@ -19,6 +19,7 @@ import (
 type config struct {
 	addr     string
 	rate     float64 // requests per second
+	per      float64 // requests sent per request the rate is given in: 2 in the stream scenario, else 1
 	warmup   time.Duration
 	duration time.Duration
 	conns    int
@@ -253,8 +254,9 @@ send:
 }
 
 func summarizeRun(cfg config, workers []*worker) report {
+	per := max(cfg.per, 1)
 	r := report{
-		TargetRate: cfg.rate, Warmup: cfg.warmup.Seconds(), Duration: cfg.duration.Seconds(),
+		TargetRate: cfg.rate / per, Warmup: cfg.warmup.Seconds(), Duration: cfg.duration.Seconds(),
 		Conns: cfg.conns, Go: runtime.Version(), CPUs: runtime.NumCPU(), Outcomes: map[string]int{}, Versions: map[string]int{},
 	}
 	var sent int
@@ -275,8 +277,8 @@ func summarizeRun(cfg config, workers []*worker) report {
 		service = append(service, w.service...)
 		lag = append(lag, w.lag...)
 	}
-	r.Achieved = float64(sent) / cfg.duration.Seconds()
-	if r.Achieved < 0.99*cfg.rate {
+	r.Achieved = float64(sent) / per / cfg.duration.Seconds()
+	if r.Achieved < 0.99*r.TargetRate {
 		r.Problems = append(r.Problems, fmt.Sprintf("achieved %.0f/s, below 99%% of the target", r.Achieved))
 	}
 	if n := r.Outcomes["busy"] + r.Outcomes["error"]; n > 0 {
@@ -317,12 +319,16 @@ func wokeLate(late []int64, d time.Duration) []int64 {
 // datasetWorkload replays dataset rows in order, cycling: one recommendation
 // request per row at the row's time, and an event write instead for a
 // writeShare of the requests, spread evenly. With repeats, a request may
-// instead copy an earlier one (newDatasetWorkload).
+// instead copy an earlier one (newDatasetWorkload). In the stream scenario
+// each row gives two requests, its recommendation and then its write, and
+// each time round the rows' times move on by the time from the first row to
+// the last plus 1 ms, so that every write is a new event.
 type datasetWorkload struct {
 	rows       []row
 	k          int
 	writeShare float64
 	order      []int // row of each request; nil: request i takes row i mod len(rows)
+	stream     bool
 }
 
 // repeatWindow is how far back a repeated request may reach.
@@ -355,10 +361,14 @@ type row struct {
 
 func (d *datasetWorkload) request(i int, b []byte) (string, []byte) {
 	r := d.rows[i%len(d.rows)]
-	if d.order != nil {
+	switch {
+	case d.stream:
+		r = d.rows[i/2%len(d.rows)]
+		r.ts += int64(i/2/len(d.rows)) * (d.rows[len(d.rows)-1].ts - d.rows[0].ts + 1)
+	case d.order != nil:
 		r = d.rows[d.order[i]]
 	}
-	if int(float64(i+1)*d.writeShare) > int(float64(i)*d.writeShare) {
+	if d.stream && i%2 == 1 || !d.stream && int(float64(i+1)*d.writeShare) > int(float64(i)*d.writeShare) {
 		b = append(b, `{"events":[{"user_id":`...)
 		b = appendJSONString(b, r.user)
 		b = append(b, `,"item_id":`...)

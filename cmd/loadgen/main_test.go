@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -164,5 +165,52 @@ func TestWokeLate(t *testing.T) {
 	got := wokeLate(nil, 3500*time.Microsecond)
 	if len(got) != 3 || got[0] != 3_500_000 || got[2] != 1_500_000 {
 		t.Fatalf("got %v", got)
+	}
+}
+
+// In the stream scenario each event gives its recommendation, then its
+// write, cycling over the events with their times moved on by their span
+// plus 1 ms.
+func TestWorkloadStream(t *testing.T) {
+	w := &datasetWorkload{rows: []row{{"u", "i", 1}, {"v", "j", 2}}, k: 3, stream: true}
+	want := []string{
+		`/v1/recommend {"user_id":"u","k":3,"ts":1}`,
+		`/v1/events {"events":[{"user_id":"u","item_id":"i","ts":1,"kind":"rating"}]}`,
+		`/v1/recommend {"user_id":"v","k":3,"ts":2}`,
+		`/v1/events {"events":[{"user_id":"v","item_id":"j","ts":2,"kind":"rating"}]}`,
+		`/v1/recommend {"user_id":"u","k":3,"ts":3}`,
+		`/v1/events {"events":[{"user_id":"u","item_id":"i","ts":3,"kind":"rating"}]}`,
+		`/v1/recommend {"user_id":"v","k":3,"ts":4}`,
+	}
+	for i, x := range want {
+		if path, body := w.request(i, nil); path+" "+string(body) != x {
+			t.Fatalf("request %d: %s %s, want %s", i, path, body, x)
+		}
+	}
+}
+
+// In the stream scenario the rates count recommendations: twice as many
+// requests are sent, half of them writes.
+func TestMeasureStream(t *testing.T) {
+	cfg := testConfig(fakeGateway(t, nil, http.StatusOK))
+	cfg.rate, cfg.per = 500, 2
+	cfg.work = &datasetWorkload{rows: []row{{"u", "i", 1}, {"v", "j", 2}}, k: 5, stream: true}
+	r, err := measure(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Valid || r.TargetRate != 250 || r.Achieved < 245 || r.Achieved > 251 {
+		t.Fatalf("valid %v %v, target %v, achieved %v; want 250 recommendations/s", r.Valid, r.Problems, r.TargetRate, r.Achieved)
+	}
+	if ok, ev := r.Outcomes["recommend_ok"], r.Outcomes["events_ok"]; ok < 245 || ok > 250 || ev < 245 || ev > 250 {
+		t.Fatalf("outcomes %v", r.Outcomes)
+	}
+}
+
+func TestStreamTakesNoWritesOrRepeats(t *testing.T) {
+	for _, extra := range []string{"-write-share=0.1", "-repeat=0.3"} {
+		if err := run(context.Background(), []string{"-split", "x.csv.gz", "-stream", extra}, io.Discard); err == nil || !strings.Contains(err.Error(), "-stream") {
+			t.Errorf("-stream %s: %v", extra, err)
+		}
 	}
 }

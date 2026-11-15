@@ -51,16 +51,22 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	writeShare := fs.Float64("write-share", 0, "share of requests that write the event instead of asking for recommendations")
 	repeat := fs.Float64("repeat", 0, "share of requests that copy one of the 1,000 before them, as a client asking again")
 	seed := fs.Uint64("seed", 1, "seed of the repeats")
+	stream := fs.Bool("stream", false, "for each event its recommendation request, then a request that writes it; -rate counts the recommendations")
 	fs.StringVar(&cfg.samples, "samples", "", "gzipped CSV file for one sample per measured request")
 	out := fs.String("out", "", "file to write the JSON report to")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	cfg.per = 1
+	if *stream {
+		cfg.rate, cfg.per = 2*cfg.rate, 2
+	}
 	// The comparisons are written so that NaN fails them.
 	requests := cfg.rate * (cfg.warmup + cfg.duration).Seconds()
 	if !(cfg.rate > 0) || cfg.duration <= 0 || cfg.warmup < 0 || cfg.conns <= 0 || !(requests < math.MaxInt32) ||
-		!(*writeShare >= 0 && *writeShare <= 1) || !(*repeat >= 0 && *repeat <= 1) || *k < 1 || *split == "" {
-		return errors.New("loadgen: -split is required; -rate, -duration, -conns and -k must be positive, -warmup not negative, -write-share and -repeat in [0, 1]")
+		!(*writeShare >= 0 && *writeShare <= 1) || !(*repeat >= 0 && *repeat <= 1) || *k < 1 || *split == "" ||
+		*stream && (*writeShare > 0 || *repeat > 0) {
+		return errors.New("loadgen: -split is required; -rate, -duration, -conns and -k must be positive, -warmup not negative, -write-share and -repeat in [0, 1] and 0 with -stream")
 	}
 	rows, err := dataset.Read(*split)
 	if err != nil {
@@ -74,7 +80,9 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		ordered[i] = row{r.User, r.Item, r.TS}
 	}
 	slices.SortStableFunc(ordered, func(a, b row) int { return cmp.Compare(a.ts, b.ts) })
-	cfg.work = newDatasetWorkload(ordered, *k, *writeShare, *repeat, *seed, int(requests))
+	work := newDatasetWorkload(ordered, *k, *writeShare, *repeat, *seed, int(requests))
+	work.stream = *stream
+	cfg.work = work
 	cfg.started = stdout
 	r, err := measure(ctx, cfg)
 	if err != nil {
