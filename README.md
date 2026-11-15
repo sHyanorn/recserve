@@ -2,27 +2,25 @@
 
 [![CI](https://github.com/sHyanorn/recserve/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sHyanorn/recserve/actions/workflows/ci.yml?query=branch%3Amain)
 
-A recommendation serving system in Go: retrieval, features, ranking and rerank behind one HTTP API, with a sharded vector tier, caching, degradation, rate limiting, A/B assignment, metrics and tracing. Its headline, the highest rate with p99 ≤ 50 ms and at most 1% of the responses degraded, is 550 requests/s on a 4-vCPU cloud VM, replaying requests with the cache off; p99 there is 4.6 to 5.1 ms. Every service shares that VM's CPUs, so the figures show behavior under load and do not predict the capacity of a multi-machine deployment. In an offline evaluation registered before the Musical_Instruments test split was read, state kept from the event stream for retrieval and ranking raised that category's recall@10 from 0.0200 to 0.0317, each on a bundle trained once. A gateway whose first bundle names a window keeps that state, from the events topic with `-kafka-brokers`; its cost in serving is not measured yet.
+A recommendation serving system in Go: retrieval, features, ranking and rerank behind one HTTP API, with a sharded vector tier, caching, degradation, rate limiting, A/B assignment, metrics and tracing. Its headline, the highest rate with p99 ≤ 50 ms and at most 1% of the responses degraded, is 550 requests/s on a 4-vCPU cloud VM, replaying requests with the cache off; p99 there is 4.6 to 5.1 ms. Every service shares that VM's CPUs, so the figures show behavior under load and do not predict the capacity of a multi-machine deployment. In an offline evaluation registered before the Musical_Instruments test split was read, state kept from the event stream for retrieval and ranking raised that category's recall@10 from 0.0200 to 0.0317, each on a bundle trained once. A gateway whose first bundle names a window keeps that state, from the events topic with `-kafka-brokers`. On a workload requesting then writing the Video_Games test events in time order, the highest rate meeting that condition on the recommendations is 150 recommend requests/s with the state and 300 without.
 
 ## Results
 
-The load and fault rows of M6 and M7, except the one in kind, were measured on 4-vCPU cloud VMs, with the load generator on one CPU and every service on the other three. Figures from different VMs are not compared. The load and fault runs are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md), and M6 has a [report with charts](bench-results/m6/report.md). Faults were judged by criteria committed before the runs. The quality rows run the pipeline in process, offline, one request per test event of an Amazon Reviews 2023 category; M8's are judged by [a registration](docs/registration/m8-freshness.md) committed before its runs.
+The load and fault rows of M6 to M8, except the one in kind, were measured on 4-vCPU cloud VMs, with the load generator on one CPU and every service on the other three. Figures from different VMs are not compared. The load and fault runs are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md), and M6 has a [report with charts](bench-results/m6/report.md). Faults were judged by criteria committed before the runs. The quality rows run the pipeline in process, offline, one request per test event of an Amazon Reviews 2023 category; M8's are judged by [a registration](docs/registration/m8-freshness.md) committed before its runs.
 
 | What | Result |
 |---|---|
 | Headline: the highest rate with p99 ≤ 50 ms and at most 1% of the responses degraded; replay, cache off, with the earlier 3 ms history budget (M6) | 550 requests/s, p99 4.6 to 5.1 ms |
-| One gateway on 2 CPUs (M6) | about 1,800 requests/s, an estimate from its CPU per request |
 | Faults at 275 requests/s, cache off, outlier detection, three runs each (M7, second set, another VM) | pass: replica killed, replica paused, searches hanging, 50 ms on a shard, with a fault-phase p99 of 6.8 to 20.5 ms; fail: Valkey down, one run recovering in 7 s with 5 allowed; not judged: consumer paused, two valid runs of three |
 | Rolling restarts of gateways and replicas and a swap in kind, 100 requests/s, SPEC §5's stage budgets, three runs (M6) | no failed response; at most 0.133% of a phase's responses degraded |
 | recall@10 of one bundle trained once, b7ff0634dd7b, on 43,249 Video_Games test events, each degradation forced (M7) | 0.0181 healthy, 0.0098 without co-occurrence, 0.0050 without the ranker; without the encoder, with a shard missing or with HNSW at ef 400, within 0.0004 of healthy |
 | recall@10 with state kept from the event stream for retrieval and ranking, against the bundle frozen: Musical_Instruments, its one test read, registered before it (M8) | 0.0317 against 0.0200, +0.0117, 95% interval over users +0.0096 to +0.0137, confirming the registered hypothesis; bundles rebuilt every 7 or 30 days 0.0242 and 0.0231 |
 | The same on Video_Games, exploratory (M8) | 0.0375 against 0.0197, +0.0178, 95% interval over users +0.0152 to +0.0202; a bundle rebuilt every 7 days about the same, 0.0381 |
-| `vec.Dot` in AVX2 | the replicas' CPU per request 37% lower, p99 a quarter lower at 200 requests/s |
-| HNSW on glove-100, one thread | p99 1.0 to 1.3 times faiss's at the same ef; recall@100 reaches 0.95 only at a p99 of 7.66 ms |
+| Headline on the recommendations, Video_Games test events requested then written in time order, cache off (M8) | 150 recommend requests/s with the stream state, 300 without; with it, at 100, 200, 400 and 800 recommend requests/s, the gateway's median CPU per recommendation 1.79 to 1.91 times as high and median resident memory before load 215 to 246 MB higher |
 
 ### Scale
 
-The catalog served has 25.6k items (Amazon Reviews 2023 Video_Games, 5-core). Exact search over the 22,976 items that have a vector, at 256 dimensions, takes a median of 1.784 ms on one core ([bench-results/m8/exact-search.txt](bench-results/m8/exact-search.txt)). At this size sharding only demonstrates the mechanism. ANN and shard performance is measured separately on 1M-scale vectors, and every reported figure says which data it comes from.
+The catalog served has 25.6k items (Amazon Reviews 2023 Video_Games, 5-core). Exact search over the 22,976 items that have a vector, at 256 dimensions, takes a median of 1.784 ms on one core ([bench-results/m8/exact-search.txt](bench-results/m8/exact-search.txt)). At this size sharding only demonstrates the mechanism.
 
 ## How it works
 
@@ -46,10 +44,9 @@ bin/loadgen -split data/Video_Games.test.csv.gz -rate 200 -duration 30s
 
 ## Limits
 
-- The one-gateway capacity is an estimate made while the gateway shared three CPUs with the rest of the service. kind's rate and in-flight limits come from it and apply per gateway (D050).
 - The ranker's effect on users is for an A/B experiment to show. Offline, before MMR, its recall@10 is 0.091 against 0.026 for retrieval order on 680 held-out users (D027).
 - M7's quality figures come from one bundle trained once and not updated over the test period, July 2022 to September 2023. The target item of 60% of the Video_Games test events, and of 33% of Musical_Instruments', has no train event; on those events every row of M8's first Video_Games test read has recall@10 0.0000 ([its file](bench-results/m8/Video_Games/read-1.md)).
-- M8's figures come from the pipeline in process; the state's cost in serving is not measured yet.
+- M8's quality figures come from the pipeline in process. Its serving figures, three runs per rate on one boot, are not compared with M6's or M7's; at 100 recommend requests/s the replicas' CPU per call was higher with the state in every run, on both shards, a measurement anomaly of unknown cause.
 - A gateway whose first bundle names a stream window keeps every event in its process. Its state misses the events produced before it started that its preload files do not hold, and, without Kafka, the events other gateways receive (D062).
 - M8's confirmatory result is one test read of one category. Video_Games' test split had been used in M7 and for 18 exploratory configurations, so its figures are exploratory (D061).
 - User histories keep every event, with no cap and no expiry. When they fill Valkey's memory, `/v1/events` answers 503 (D023, D033).

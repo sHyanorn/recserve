@@ -115,4 +115,4 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] Exact search of every item with a vector on one core, `make bench-exact` (README, Scale)
 - [x] README and BENCHMARKS, M8
 - [x] The gateway keeps the stream state from the events topic (D062)
-- [ ] The stream state's cost in serving, by a protocol committed to docs/BENCHMARKS.md before its runs (the registration, section 1)
+- [x] The stream state's cost in serving, by a protocol committed to docs/BENCHMARKS.md before its runs (the registration, section 1): headline 300 recommend requests/s without the state and 150 with it (BENCHMARKS, M8, stream state in serving; bench-results/m8/serving/)

@@ -935,3 +935,73 @@ A read that fails a condition stops before it writes its file, and each of the t
 | Before it: B1's vector reference equals the grid script's | `TestRealDataValidReference`, realquality_test.go:466-502 (`make valid-reference`): equal on all 34,510 and 41,284 valid events (d0eb293, 6bfdbab) |
 
 Beside them, the checks of section 4 and of the amendment "2026-11-15: Video_Games read 2 stopped before any metric": each request is answered by a bundle rebuilt at or before its time from events before it (rebuilt_test.go:83-96); the rebuilt bundles' items, settings, rankers and rebuild times (freshness_test.go:247-306); B1s6 and B1s8 against B1 and the window chosen (freshness_test.go:310-325); every stream bundle's golden stream inputs against the Go state (freshness_test.go:632-645); a rebuilt bundle opened for a period has the rebuild time it had when checked (freshness_test.go:131-137).
+
+### M8, stream state in serving (2026-11-15)
+
+By [Stream state in serving](#stream-state-in-serving-m8-d062), every step on one boot, f730b1e7, of one VM: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.4, Docker 29.9.2 with cgroup v1; loadgen on CPU 0, the noise baseline on CPU 1, the containers on CPUs 1 to 3; noise reference 711,611 ns per pass. The gate's output, the micro-benchmarks' output and each run's summary name commit 7e7639a and this boot; the swap run's files name the boot only. 7e7639a, committed after this protocol, changes only `BenchmarkRealStreamTake`: it keeps the loaded data live, which, freed between the two heap readings, would count against the events. The environment record has an entry per set of image IDs on the boot, two at 0d3897c and six at 7e7639a; each run's summary names its gateway image. The files are in `bench-results/m8/serving/`, without the per-run scrapes and attempt records, so which counted runs followed a flagged attempt is not shown. MB are 10^6 bytes.
+
+#### Correctness gate: pass
+
+`TestRealDataStreamGateway` passed: the gateway answered the requests of test events 0 to 999 on the preload, 2,000 to 2,999 after the writes and 3,000 to 3,999 after the swap away and back with the items, in order, that the pipeline in process gives, none degraded, with a largest score difference of 0 each time (`gate/gate-f730b1e7.txt`).
+
+#### Micro-benchmarks and the pipeline in process
+
+Ten counts each on one core (`micro/micro.md`, from `micro/micro.txt`). The pipeline's two rows, `F0` and `S3` in the file, answer the requests of every tenth valid event.
+
+| Benchmark | Median | Range |
+|---|---:|---:|
+| Taking a valid event into the state | 2,990.5 ns | 2,795 to 3,820 ns |
+| Heap each event adds, after GC | 230.5 B | 230.5 B in every count |
+| A popular list read that misses the kept list | 0.413 ms | 0.387 to 0.536 ms |
+| The co-occurrence rows of a request's seeds, 5.533 seeds on average | 1.384 ms | 1.221 to 1.608 ms |
+| An item's window count and first event | 164.15 ns | 158.9 to 205.7 ns |
+| A request through the pipeline in process, B1 without the state | 2.383 ms | 2.191 to 2.501 ms |
+| The same on B1s8 with the state | 4.639 ms | 4.243 to 4.765 ms |
+
+#### Phase 1: the state kept at 100 recommend requests/s; 200 to 800 do not show it
+
+All 24 runs are valid and none is noisy; every run is listed in `phase1/table.md`, and its other latencies are in its summary. The recommendations' p99 and degraded share, each group's three runs:
+
+| Rate | p99 off, ms | p99 on, ms | Degraded off | Degraded on |
+|---:|---|---|---|---|
+| 100 | 9.66 to 10.68 | 15.50 to 17.82 | 0.00 to 0.03% | 0.03 to 0.23% |
+| 200 | 11.80 to 13.18 | 31.59 to 37.41 | 0.07 to 0.22% | 1.12 to 1.57% |
+| 400 | 23.38 to 28.22 | 65.12 to 99.14 | 2.24 to 6.00% | 10.63 to 25.51% |
+| 800 | 44.79 to 47.94 | 287.57 to 627.01 | 32.26 to 39.82% | 76.75 to 78.25% |
+
+Readings 1 and 4, from medians over each group's three runs:
+
+| Rate | Gateway CPU per recommendation, on over off | Kafka CPU per recommendation, on over off | p99, on minus off | Resident memory before load, on minus off | Heap in use before load, on minus off |
+|---:|---|---|---:|---:|---:|
+| 100 | 1.865 (5.453 / 2.924 ms) | 1.445 (1.362 / 0.942 ms) | +6.21 ms | +243 MB | +274 MB |
+| 200 | 1.790 (4.291 / 2.397 ms) | 1.254 (0.966 / 0.771 ms) | +20.87 ms | +215 MB | +236 MB |
+| 400 | 1.827 (3.094 / 1.693 ms) | 1.023 (0.665 / 0.650 ms) | +67.22 ms | +246 MB | +222 MB |
+| 800 | 1.906 (2.023 / 1.061 ms) | 0.922 (0.319 / 0.346 ms) | +271.50 ms | +232 MB | +230 MB |
+
+- Reading 2: at 100 recommend requests/s each on run is valid and unflagged, with p99 ≤ 50 ms and at most 1% of its recommendations degraded, so the gateway keeps the state at that rate on this setup. 200 does not show it: 200-on-1, 200-on-2 and 200-on-3 have 1.22%, 1.12% and 1.57% degraded. Nor do 400 and 800, where each on run misses both conditions: p99 95.09, 65.12 and 99.14 ms with 22.10%, 10.63% and 25.51% degraded at 400; 319.11, 627.01 and 287.57 ms with 78.25%, 76.91% and 76.75% at 800.
+- Reading 3: at 100 every run of both groups has at most 1% degraded, and on each shard the replicas' CPU per call forms ranges that do not overlap: shard 0, 2.9488 to 3.0249 ms off and 3.0398 to 3.1123 ms on; shard 1, 3.0167 to 3.0869 ms off and 3.0981 to 3.1864 ms on. 100 is therefore marked as a measurement anomaly, on both shards. The second replicas asked per recommendation are 0.1740 in each off run and 0.1740, 0.1740 and 0.1742 in the on runs. The anomaly's cause is not known. At 200, 400 and 800 a run has more than 1% degraded, so the reading is not judged.
+- In every on run, of phase 1 and of phase 2, no event taken was a duplicate or poison, and no record was left to read when the window ended. In phase 1 the gateway logged that it serves 2.80 to 3.56 s after its container started in the off runs and 5.00 to 5.69 s in the on runs, and its peak resident memory was 346 to 405 MB and 573 to 662 MB.
+
+#### Swaps
+
+One run of the on group at 200 recommend requests/s: valid, not noisy, no container restarted, peak resident memory 890 MB (`swap/swap.md`, `swap/swap.swap.json`). Times count from the first warmup request's due time.
+
+| Swap | To | Admin request, s | Prepare ms | Drain ms | Resident memory before, after, MB | Heap in use before, after, MB | Records left to read before, after |
+|---|---|---:|---:|---:|---|---|---|
+| 1 | B1s6, d6d2691322ca | 50.1 | 760 | 1 | 583, 714 | 385, 438 | 0, 0 |
+| 2 | B1, a8d9c526fb03 | 90.1 | 690 | 27 | 717, 848 | 533, 476 | 0, 0 |
+| 3 | B1s8, 74ad6c83bf3c | 130.1 | 4,055 | 3 | 375, 750 | 160, 390 | 0, 0 |
+
+Over the 7 windows of 1 s that overlap a swap, pooled, the recommendations' p99 is 88.00 ms and their max 114.88 ms; over the other 143, 48.76 ms and 202.30 ms.
+
+#### Profiles
+
+One run of each group at 400 recommend requests/s, outside phase 1's tables, with 30 s of the gateway's CPU profile (`profile/`). off: gateway CPU per recommendation 1.643 ms; 17.85 s of samples; the first three by flat share `internal/runtime/syscall/linux.Syscall6` 14.79%, `runtime.cgocall` 12.16% and `vec.dotAVX2` 8.46%. on: 3.161 ms; 36.81 s of samples; the first by flat share `runtime.mapaccess2_fast32` 9.75%; of the `fresh` functions, by cumulative share, `fresh.top` 42.19%, which `fresh.(*State).Row`, 31.54%, and `fresh.(*State).Popular`, 20.24%, both call.
+
+#### Phase 2, reading 5: headline 300 recommend requests/s off, 150 on
+
+Phase 1's four rates ran on the boot phase 2 ran on, so they are the first rates of both grids. All 12 runs of phase 2 are valid and none is noisy (`phase2/table.md`).
+
+- off: the grid stopped at 1,200, median p99 101.47 ms; 1,200 does not count. Its highest grid rate that meets the condition is 200: at 400 and 800 each run has more than 1% degraded. Between 200 and 400, 300 meets it, with p99 16.02 to 16.35 ms and 0.35% to 0.41% degraded, and 350 does not, with 1.19% to 1.59% degraded; the two are 50 apart, so the headline is 300.
+- on: the grid stopped at 800, median p99 319.11 ms. Its highest grid rate that meets the condition is 100. Between 100 and 200, 150 meets it, with p99 19.48 to 23.68 ms and 0.17% to 0.96% degraded; the two are 50 apart, so the headline is 150.
+- On minus off: -150 recommend requests/s, the difference of the two headlines.
