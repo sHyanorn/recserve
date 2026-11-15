@@ -59,6 +59,7 @@ BASELINE_ALS = {"factors": 64, "regularization": 0.05, "alpha": 1.0, "iterations
 # (D058); a category not listed is built with BASELINE_ALS.
 ALS = {
     "Video_Games": {"factors": 256, "regularization": 0.01, "alpha": 100.0, "iterations": 15},
+    "Musical_Instruments": {"factors": 128, "regularization": 0.01, "alpha": 40.0, "iterations": 15},
 }
 COOC_WINDOW = 5  # items within this many positions of each other in a user's sequence
 COOC_TOP = 50

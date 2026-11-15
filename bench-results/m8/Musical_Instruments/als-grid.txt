@@ -1,0 +1,3 @@
+selected: factors 128, alpha 40, regularization 0.01, iterations 15, seed 1
+valid events: 41284; recall@10 0.0237, NDCG@10 0.0121
+exact user step: recall@10 0.0241; exact - fold-in +0.0004 [-0.0006, +0.0013], 95% interval over 1000 resamples of 15748 users
