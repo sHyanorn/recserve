@@ -23,7 +23,7 @@ const (
 	// registration and of its amendments, which a test read checks before
 	// it opens a test file.
 	registrationSHA256 = "aceb32b6c93c8deb48c795dcbf115374c05056cee9a55f883e6e8884c4b59bd4"
-	amendmentsSHA256   = "67792883c473b579b12b277e0e5d6254f1f1df1d4dc7cf3a054efcd0e3a0c421"
+	amendmentsSHA256   = "545f29c0826ffc0f2e4998ec9c6ed031bdc9b293901742f00fdeb952931dd31e"
 	registrationPath   = "../../docs/registration/m8-freshness.md"
 	amendmentsPath     = "../../docs/registration/m8-freshness-amendments.md"
 	testReadsLog       = "../../bench-results/m8/test-reads.log"
@@ -34,13 +34,18 @@ var testReadsAllowed = map[string]int{"Video_Games": 2, "Musical_Instruments": 1
 
 // failedReads are the log's lines of reads that stopped before they wrote
 // or printed any metric, each named by an amendment: they do not count
-// (section 9).
-var failedReads = map[string]bool{}
+// (section 9), and a later read of their category must have their
+// conditions. The amendment of 2026-11-15 names Video_Games' read 2.
+var failedReads = map[string]bool{
+	"2026-11-14T22:51:31Z 654f0f812c31828f6831f542bffdd0729ea6f4f1 Video_Games 04b5dcba8e82381ba1648be798869c22b11caa916b49a138db994a5475890530": true,
+}
 
 // openTestRead is section 9's check before read n of category opens the
 // test file: the registration at reg and its amendments at amend have
 // registrationSHA256 and amendmentsSHA256, the log holds n - 1 reads of
-// the category and n is within its number, and no output path exists. It
+// the category and n is within its number, the conditions are those of
+// every stopped read of the category in failedReads, and no output path
+// exists. It
 // then appends the read's line to the log: the UTC time, the commit, the
 // category and the conditions' hash. commit returns the commit the read
 // runs on, or an error if the worktree differs from it.
@@ -57,12 +62,17 @@ func openTestRead(reg, amend, log, category string, n int, conditions string, co
 	if n < 1 || n > testReadsAllowed[category] {
 		return fmt.Errorf("read %d of %s: the registration allows %d", n, category, testReadsAllowed[category])
 	}
-	done, err := loggedReads(log, category)
+	done, stopped, err := loggedReads(log, category)
 	if err != nil {
 		return err
 	}
 	if done != n-1 {
 		return fmt.Errorf("%s holds %d reads of %s; read %d follows %d", log, done, category, n, n-1)
+	}
+	for _, c := range stopped {
+		if c != conditions {
+			return fmt.Errorf("%s holds a stopped read of %s with conditions %s, not this read's %s", log, category, c, conditions)
+		}
 	}
 	for _, out := range outs {
 		if _, err := os.Stat(out); err == nil {
@@ -84,19 +94,22 @@ func openTestRead(reg, amend, log, category string, n int, conditions string, co
 }
 
 // loggedReads returns the number of reads of category in the log, but
-// failedReads.
-func loggedReads(log, category string) (int, error) {
+// failedReads, and the conditions of those in failedReads.
+func loggedReads(log, category string) (done int, stopped []string, err error) {
 	logged, err := os.ReadFile(log)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return 0, err
+		return 0, nil, err
 	}
-	var done int
 	for line := range strings.Lines(string(logged)) {
-		if f := strings.Fields(line); len(f) == 4 && f[2] == category && !failedReads[strings.TrimSuffix(line, "\n")] {
-			done++
+		if f := strings.Fields(line); len(f) == 4 && f[2] == category {
+			if failedReads[strings.TrimSuffix(line, "\n")] {
+				stopped = append(stopped, f[3])
+			} else {
+				done++
+			}
 		}
 	}
-	return done, nil
+	return done, stopped, nil
 }
 
 // gitHead returns the commit checked out, or an error if a tracked file
@@ -175,8 +188,9 @@ func TestOpenTestRead(t *testing.T) {
 }
 
 // A read that stopped before any metric, named in failedReads, does not
-// count: read 2 runs once more after it, and is refused after that rerun
-// as after any read 2; unnamed, the stopped read counts.
+// count: read 2 runs once more after it, with the stopped read's
+// conditions only, and is refused after that rerun as after any read 2;
+// unnamed, the stopped read counts.
 func TestOpenTestReadAfterAFailedRead(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "test-reads.log")
@@ -192,6 +206,9 @@ func TestOpenTestReadAfterAFailedRead(t *testing.T) {
 	saved := failedReads
 	t.Cleanup(func() { failedReads = saved })
 	failedReads = map[string]bool{failed: true}
+	if err := openTestRead(registrationPath, amendmentsPath, log, "Video_Games", 2, "h3", head); err == nil || !strings.Contains(err.Error(), "stopped read") {
+		t.Fatalf("read 2 with other conditions than the stopped read's: %v", err)
+	}
 	if err := openTestRead(registrationPath, amendmentsPath, log, "Video_Games", 2, "h2", head); err != nil {
 		t.Fatalf("read 2 after the named stopped read: %v", err)
 	}

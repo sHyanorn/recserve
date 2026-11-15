@@ -381,7 +381,7 @@ func TestRealDataQuality(t *testing.T) {
 		if b := os.Getenv("RECSERVE_BUNDLE_B"); b != "" {
 			plan = append(plan, []string{"B", manifestVersion(t, b)})
 		}
-		done, err := loggedReads(testReadsLog, category)
+		done, _, err := loggedReads(testReadsLog, category)
 		if err != nil {
 			t.Fatal(err)
 		}
