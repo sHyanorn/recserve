@@ -17,6 +17,7 @@ Every component in place, with the decisions that define it. The README gives th
 - Result cache keyed by bundle version, A/B arm and the user's history (D030)
 - Two-phase bundle swap: prepare and verify in the background, atomic activation, previous bundle closed once no request holds it (D031)
 - Events through Kafka to an ingest consumer that applies them idempotently and commits after applying (D034, D035)
+- Stream state in each gateway whose first bundle names a window, read at the request's time: popularity over a sliding window, co-occurrence counted as events arrive and two recency features for the ranker, kept from every partition of the events topic with `-kafka-brokers` (D059, D060, D062)
 - User histories and the result cache on Valkey, shared by the gateways; concurrent misses on one key computed once (D033, D036)
 - Circuit breaker on the gateway's Valkey calls; connections to Valkey opened and replaced outside the request path (D037)
 - Tests on the built binaries with ingest killed, Valkey paused, Kafka stopped, and, on four `annshard` processes, a replica killed, a swap, an empty restart, a rejected swap, swaps in a row over three bundles and a rolling restart of the replicas under requests (`make e2e`)

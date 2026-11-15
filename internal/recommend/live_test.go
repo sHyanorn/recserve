@@ -99,8 +99,9 @@ type swapTest struct {
 	live   *Live
 	broken string // "", "rescore" or "release early"
 
-	mu      sync.Mutex
-	bundles []*bundle.Bundle // every bundle the Live served or was offered
+	mu       sync.Mutex
+	bundles  []*bundle.Bundle       // every bundle the Live served or was offered
+	released map[*bundle.Bundle]int // the times each bundle's pipeline was released
 
 	// The hook stops the first request that reaches vector retrieval until
 	// a swap has activated another version and either waits for that
@@ -123,7 +124,7 @@ func newSwapTest(t testing.TB, ranker []byte, broken string) *swapTest {
 // shards puts into shards. The references search in-process shards.
 func newSwapTestOn(t testing.TB, ranker []byte, broken string, items int, shards func(*bundle.Bundle) (Shards, error)) *swapTest {
 	st := &swapTest{t: t, ranker: ranker, items: items, shards: shards, store: swapStore(t), cache: cache.New[Response](1000, time.Hour),
-		refs: map[string]*Pipeline{}, broken: broken,
+		refs: map[string]*Pipeline{}, released: map[*bundle.Bundle]int{}, broken: broken,
 		hooked: make(chan struct{}), draining: make(chan struct{}), swapped: make(chan struct{})}
 	for _, v := range []string{"a", "b"} {
 		b := swapBundleOf(t, v, ranker, items)
@@ -159,6 +160,11 @@ func (st *swapTest) prepare(v string) func() (*Pipeline, error) {
 		}
 		p := New(b, st.store, s)
 		p.Cache, p.stall = st.cache, st.hook
+		p.Release = func() {
+			st.mu.Lock()
+			st.released[b]++
+			st.mu.Unlock()
+		}
 		if st.broken == "rescore" {
 			p.scoreBundle = func() *bundle.Bundle {
 				q, release, err := st.live.Acquire()
@@ -379,18 +385,18 @@ func TestSwapClosesOnlyUnusedBundles(t *testing.T) {
 	}
 	active := st.bundles[len(st.bundles)-1]
 	for i, b := range st.bundles[:len(st.bundles)-1] {
-		if !closed(b) {
-			t.Fatalf("bundle %d (%s) was replaced but not closed", i, b.ModelVersion)
+		if !closed(b) || st.released[b] != 1 {
+			t.Fatalf("bundle %d (%s) was replaced but not closed, or its pipeline released %d times", i, b.ModelVersion, st.released[b])
 		}
 	}
-	if closed(active) {
-		t.Fatal("the active bundle is closed")
+	if closed(active) || st.released[active] != 0 {
+		t.Fatal("the active bundle is closed, or its pipeline released")
 	}
 	if err := st.live.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if !closed(active) {
-		t.Fatal("Close left the active bundle open")
+	if !closed(active) || st.released[active] != 1 {
+		t.Fatal("Close left the active bundle open, or its pipeline not released once")
 	}
 	if _, err := st.live.Recommend(context.Background(), Request{User: "u1", K: 3}); !errors.Is(err, ErrLiveClosed) {
 		t.Fatalf("after Close: %v", err)
@@ -469,6 +475,9 @@ func TestSwapRejects(t *testing.T) {
 			for _, b := range st.bundles[before:] {
 				if _, err := b.Ranker.Rank(context.Background(), make([]float32, bundle.RankerRows*len(bundle.RankerFeatures))); !errors.Is(err, onnx.ErrClosed) {
 					t.Fatalf("the rejected bundle is open: %v", err)
+				}
+				if n := st.released[b]; n != 1 {
+					t.Fatalf("the rejected pipeline was released %d times, want once", n)
 				}
 			}
 		})

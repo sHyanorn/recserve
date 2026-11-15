@@ -29,6 +29,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/dataset"
 	"github.com/sHyanorn/recserve/internal/events"
 	"github.com/sHyanorn/recserve/internal/experiment"
+	"github.com/sHyanorn/recserve/internal/fresh"
 	"github.com/sHyanorn/recserve/internal/history"
 	"github.com/sHyanorn/recserve/internal/onnx"
 	"github.com/sHyanorn/recserve/internal/recommend"
@@ -151,7 +152,38 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 		return err
 	}
 	defer closeShards() // after live is closed: no request is searching
-	prepare := preparer(opt, store, index, budgets, c)
+	// The first bundle decides whether the gateway keeps the stream state
+	// (D062): then it keeps every event, from the preload on. The topic's
+	// end is listed before the preload, so no event produced meanwhile is
+	// lost; one also in the preload is taken once.
+	first, err := bundle.ReadManifest(dir)
+	if err != nil {
+		return fmt.Errorf("bundle %s: %w", dir, err)
+	}
+	var feed *fresh.Feed
+	var tail *events.Tail
+	if first.Stream != nil {
+		feed = fresh.NewFeed()
+		if kafkaBrokers != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			tail, err = events.NewTail(ctx, strings.Split(kafkaBrokers, ","), events.Topic, log)
+			cancel()
+			if err != nil {
+				return fmt.Errorf("stream state: %w", err)
+			}
+			defer tail.Close()
+		}
+	}
+	if preload != "" {
+		for _, path := range strings.Split(preload, ",") {
+			n, err := preloadHistory(store, feed, path)
+			if err != nil {
+				return err
+			}
+			log.Info("history preloaded", "file", path, "events", n)
+		}
+	}
+	prepare := preparer(opt, store, index, budgets, c, feed)
 	p, err := prepare(dir)
 	if err != nil {
 		return err
@@ -164,15 +196,6 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 			err = errors.Join(err, live.Close())
 		}
 	}()
-	if preload != "" {
-		for _, path := range strings.Split(preload, ",") {
-			n, err := preloadHistory(store, path)
-			if err != nil {
-				return err
-			}
-			log.Info("history preloaded", "file", path, "events", n)
-		}
-	}
 	producer, closeProducer, err := openProducer(kafkaBrokers, store, eventsTimeout)
 	if err != nil {
 		return err
@@ -181,6 +204,12 @@ func run(log *slog.Logger, addr, adminAddr, dir, testSplit, preload, ortLib, val
 	srv := api.New(live, store, log)
 	srv.Register(shardMetrics...)
 	srv.Register(breakerMetrics...)
+	if feed != nil {
+		log.Info("stream events kept", "events", feed.Len())
+		var stop func()
+		producer, stop = follow(feed, tail, producer, srv)
+		defer stop() // after the servers have shut down
+	}
 	srv.Prepare, srv.Events, srv.EventsTimeout, srv.Experiment, srv.Limits = prepare, producer, eventsTimeout, exp, limits
 	if exposureLog {
 		srv.Exposures = api.NewExposures(os.Stdout)
@@ -347,9 +376,9 @@ func openShards(replicas [][]string, cfg shard.Config, hedgeDelay, timeout time.
 // bundle in a directory, for the first bundle and for every swap: the
 // checksums, golden cases and train cutoff are checked against opt, and
 // index puts the vectors into shards. A bundle that names a stream window
-// is rejected: the gateway keeps no stream state (D060). The pipelines
-// share store and cache c, and have budgets.
-func preparer(opt bundle.Options, store history.Store, index func(*bundle.Bundle) (recommend.Shards, error), budgets recommend.Budgets, c recommend.Cache) func(dir string) (*recommend.Pipeline, error) {
+// is served from feed's state for its items (D062), and rejected without
+// a feed. The pipelines share store and cache c, and have budgets.
+func preparer(opt bundle.Options, store history.Store, index func(*bundle.Bundle) (recommend.Shards, error), budgets recommend.Budgets, c recommend.Cache, feed *fresh.Feed) func(dir string) (*recommend.Pipeline, error) {
 	return func(dir string) (*recommend.Pipeline, error) {
 		b, err := bundle.Load(dir, opt)
 		if errors.Is(err, onnx.ErrNotInitialized) {
@@ -358,17 +387,83 @@ func preparer(opt bundle.Options, store history.Store, index func(*bundle.Bundle
 		if err != nil {
 			return nil, err
 		}
+		var state *fresh.State
+		var release func()
 		if b.Stream != nil {
-			return nil, errors.Join(fmt.Errorf("bundle %s names a stream window, and the gateway keeps no stream state", b.ModelVersion), b.Close())
+			if feed == nil {
+				return nil, errors.Join(fmt.Errorf("bundle %s names a stream window, and the gateway keeps no stream state: its first bundle named none", b.ModelVersion), b.Close())
+			}
+			state, release = feed.State(b.SHA256["items.ids"], b.ItemCount, b.Lookup)
 		}
 		s, err := index(b)
 		if err != nil {
+			if release != nil {
+				release()
+			}
 			return nil, errors.Join(err, b.Close())
 		}
 		p := recommend.New(b, store, s)
-		p.Budgets, p.Cache = budgets, c
+		p.Budgets, p.Cache, p.Fresh, p.Release = budgets, c, state, release
 		return p, nil
 	}
+}
+
+// follow feeds feed every event served from now on, with its metrics on
+// srv, and returns the producer for /v1/events and the function that
+// stops it (D062). With a tail of the events topic it reads every
+// partition; without, the producer adds to feed the events that next has
+// stored.
+func follow(feed *fresh.Feed, tail *events.Tail, next events.Producer, srv *api.Server) (events.Producer, func()) {
+	taken := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "recserve_stream_events_total",
+		Help: "Events the stream state took while serving, by result: applied (kept and added to the states), duplicate (taken before) or poison (a record of the events topic that holds no valid event, skipped).",
+	}, []string{"result"})
+	for _, r := range []string{"applied", "duplicate", "poison"} {
+		taken.WithLabelValues(r)
+	}
+	srv.Register(taken)
+	take := func(evs []events.Event, poison int) {
+		h := make([]history.Event, len(evs))
+		for i, e := range evs {
+			h[i] = e.History()
+		}
+		added, skipped := feed.Add(h...)
+		taken.WithLabelValues("applied").Add(float64(added))
+		taken.WithLabelValues("duplicate").Add(float64(skipped))
+		taken.WithLabelValues("poison").Add(float64(poison))
+	}
+	if tail == nil {
+		return feeding{next, take}, func() {}
+	}
+	srv.Register(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "recserve_stream_lag_records",
+		Help: "Records of the events topic produced but not yet read and applied to the stream state, as of each partition's last fetch.",
+	}, func() float64 { return float64(tail.Lag()) }))
+	runCtx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = tail.Run(runCtx, take) //nolint:errcheck // the context's error
+	}()
+	return next, func() {
+		stop()
+		<-done
+	}
+}
+
+// feeding is a producer that gives take the events next has taken.
+type feeding struct {
+	next events.Producer
+	take func(evs []events.Event, poison int)
+}
+
+// Produce implements events.Producer.
+func (f feeding) Produce(ctx context.Context, evs []events.Event) error {
+	if err := f.next.Produce(ctx, evs); err != nil {
+		return err
+	}
+	f.take(evs, 0)
+	return nil
 }
 
 // zeroVectors returns the number of b's items whose vector is zero, which
@@ -390,7 +485,9 @@ func loopback(a net.Addr) bool {
 	return ok && t.IP.IsLoopback()
 }
 
-func preloadHistory(store history.Store, path string) (int, error) {
+// preloadHistory appends the events of a split file to store and, if
+// there is one, feed.
+func preloadHistory(store history.Store, feed *fresh.Feed, path string) (int, error) {
 	rows, err := dataset.Read(path)
 	if err != nil {
 		return 0, err
@@ -398,6 +495,9 @@ func preloadHistory(store history.Store, path string) (int, error) {
 	evs := make([]history.Event, len(rows))
 	for i, r := range rows {
 		evs[i] = history.Event{ID: history.EventID(r.User, r.Item, r.TS, dataset.Kind), User: r.User, Item: r.Item, TS: r.TS}
+	}
+	if feed != nil {
+		feed.Add(evs...)
 	}
 	return len(evs), store.Append(context.Background(), evs)
 }

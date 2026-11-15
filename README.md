@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/sHyanorn/recserve/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sHyanorn/recserve/actions/workflows/ci.yml?query=branch%3Amain)
 
-A recommendation serving system in Go: retrieval, features, ranking and rerank behind one HTTP API, with a sharded vector tier, caching, degradation, rate limiting, A/B assignment, metrics and tracing. Its headline, the highest rate with p99 ≤ 50 ms and at most 1% of the responses degraded, is 550 requests/s on a 4-vCPU cloud VM, replaying requests with the cache off; p99 there is 4.6 to 5.1 ms. Every service shares that VM's CPUs, so the figures show behavior under load and do not predict the capacity of a multi-machine deployment. In an offline evaluation registered before the Musical_Instruments test split was read, state kept from the event stream for retrieval and ranking raised that category's recall@10 from 0.0200 to 0.0317, each on a bundle trained once; the gateway does not keep that state yet.
+A recommendation serving system in Go: retrieval, features, ranking and rerank behind one HTTP API, with a sharded vector tier, caching, degradation, rate limiting, A/B assignment, metrics and tracing. Its headline, the highest rate with p99 ≤ 50 ms and at most 1% of the responses degraded, is 550 requests/s on a 4-vCPU cloud VM, replaying requests with the cache off; p99 there is 4.6 to 5.1 ms. Every service shares that VM's CPUs, so the figures show behavior under load and do not predict the capacity of a multi-machine deployment. In an offline evaluation registered before the Musical_Instruments test split was read, state kept from the event stream for retrieval and ranking raised that category's recall@10 from 0.0200 to 0.0317, each on a bundle trained once. A gateway whose first bundle names a window keeps that state, from the events topic with `-kafka-brokers`; its cost in serving is not measured yet.
 
 ## Results
 
@@ -50,6 +50,7 @@ bin/loadgen -split data/Video_Games.test.csv.gz -rate 200 -duration 30s
 - The ranker's effect on users is for an A/B experiment to show. Offline, before MMR, its recall@10 is 0.091 against 0.026 for retrieval order on 680 held-out users (D027).
 - M7's quality figures come from one bundle trained once and not updated over the test period, July 2022 to September 2023. The target item of 60% of the Video_Games test events, and of 33% of Musical_Instruments', has no train event; on those events every row of M8's first Video_Games test read has recall@10 0.0000 ([its file](bench-results/m8/Video_Games/read-1.md)).
 - M8's figures come from the pipeline in process; the state's cost in serving is not measured yet.
+- A gateway whose first bundle names a stream window keeps every event in its process. Its state misses the events produced before it started that its preload files do not hold, and, without Kafka, the events other gateways receive (D062).
 - M8's confirmatory result is one test read of one category. Video_Games' test split had been used in M7 and for 18 exploratory configurations, so its figures are exploratory (D061).
 - User histories keep every event, with no cap and no expiry. When they fill Valkey's memory, `/v1/events` answers 503 (D023, D033).
 - Valkey persists with snapshots only, so events since the last snapshot are lost if it stops uncleanly.

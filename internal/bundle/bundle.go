@@ -141,9 +141,9 @@ func VersionOf(sums map[string]string) string {
 	return hex.EncodeToString(h.Sum(nil))[:12]
 }
 
-// readManifest reads dir's manifest.json and checks the fields every
+// ReadManifest reads dir's manifest.json and checks the fields every
 // reader depends on.
-func readManifest(dir string) (Manifest, error) {
+func ReadManifest(dir string) (Manifest, error) {
 	var m Manifest
 	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	if err != nil {
@@ -225,7 +225,7 @@ func Vectors(dir string) (Manifest, vec.Matrix, error) {
 	fail := func(err error) (Manifest, vec.Matrix, error) {
 		return Manifest{}, vec.Matrix{}, fmt.Errorf("bundle %s: %w", dir, err)
 	}
-	m, err := readManifest(dir)
+	m, err := ReadManifest(dir)
 	if err != nil {
 		return fail(err)
 	}
@@ -242,7 +242,7 @@ func Vectors(dir string) (Manifest, vec.Matrix, error) {
 
 func (b *Bundle) load(opt Options) error {
 	var err error
-	if b.Manifest, err = readManifest(b.Dir); err != nil {
+	if b.Manifest, err = ReadManifest(b.Dir); err != nil {
 		return err
 	}
 	m := &b.Manifest

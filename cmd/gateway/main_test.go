@@ -83,11 +83,11 @@ func TestPreparerOnReplicas(t *testing.T) {
 	if err := store.Append(context.Background(), []history.Event{{ID: 1, User: "u", Item: "item2", TS: 1}, {ID: 2, User: "u", Item: "item5", TS: 2}}); err != nil {
 		t.Fatal(err)
 	}
-	remote, err := preparer(bundle.Options{}, store, index, recommend.Budgets{}, nil)(dir)
+	remote, err := preparer(bundle.Options{}, store, index, recommend.Budgets{}, nil, nil)(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	local, err := preparer(bundle.Options{}, store, localShards(t), recommend.Budgets{}, nil)(dir)
+	local, err := preparer(bundle.Options{}, store, localShards(t), recommend.Budgets{}, nil, nil)(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestPreparerOnReplicas(t *testing.T) {
 	if len(got.Items) == 0 || !slices.Equal(got.Items, want.Items) || len(got.Degraded) > 0 || *got.Coverage != *want.Coverage {
 		t.Fatalf("got %+v\nwant %+v", got, want)
 	}
-	if _, err := preparer(bundle.Options{}, store, index, recommend.Budgets{}, nil)(bundletest.Write(t, bundletest.Variant(t, 1))); err == nil {
+	if _, err := preparer(bundle.Options{}, store, index, recommend.Budgets{}, nil, nil)(bundletest.Write(t, bundletest.Variant(t, 1))); err == nil {
 		t.Fatal("a version the replicas lack was prepared")
 	}
 }
@@ -114,7 +114,7 @@ func TestPreparerOnReplicas(t *testing.T) {
 func TestSwapThroughPreparer(t *testing.T) {
 	opt := bundle.Options{FirstTestTS: 150}
 	store := history.NewMemory()
-	prepare := preparer(opt, store, localShards(t), recommend.DefaultBudgets, cache.New[recommend.Response](100, time.Hour))
+	prepare := preparer(opt, store, localShards(t), recommend.DefaultBudgets, cache.New[recommend.Response](100, time.Hour), nil)
 	p, err := prepare(bundletest.Write(t))
 	if err != nil {
 		t.Fatal(err)
@@ -208,7 +208,7 @@ func TestLoopback(t *testing.T) {
 
 func newLive(t *testing.T) *recommend.Live {
 	t.Helper()
-	p, err := preparer(bundle.Options{}, history.NewMemory(), localShards(t), recommend.Budgets{}, nil)(bundletest.Write(t))
+	p, err := preparer(bundle.Options{}, history.NewMemory(), localShards(t), recommend.Budgets{}, nil, nil)(bundletest.Write(t))
 	if err != nil {
 		t.Fatal(err)
 	}

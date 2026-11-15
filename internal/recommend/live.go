@@ -141,7 +141,7 @@ func (l *Live) Swap(prepare func() (*Pipeline, error)) (SwapResult, error) {
 	}
 	ob, nb := old.p.Bundle, p.Bundle
 	if nb.ModelVersion == ob.ModelVersion {
-		return SwapResult{}, errors.Join(fmt.Errorf("%w: %s", ErrActive, nb.ModelVersion), nb.Close())
+		return SwapResult{}, errors.Join(fmt.Errorf("%w: %s", ErrActive, nb.ModelVersion), p.Close())
 	}
 	res := SwapResult{Version: nb.ModelVersion, Previous: ob.ModelVersion, Prepare: time.Since(start)}
 	activated := time.Now()
@@ -154,7 +154,7 @@ func (l *Live) Swap(prepare func() (*Pipeline, error)) (SwapResult, error) {
 }
 
 // retire drops the active reference to v, which is no longer active, waits
-// until no request holds it and closes its bundle.
+// until no request holds it and closes it.
 func (l *Live) retire(v *version) error {
 	start := time.Now()
 	v.release()
@@ -166,7 +166,7 @@ func (l *Live) retire(v *version) error {
 	for {
 		select {
 		case <-v.free:
-			return v.p.Bundle.Close()
+			return v.p.Close()
 		case <-tick.C:
 			l.log.Warn("waiting for requests on the previous bundle before closing it",
 				"version", v.p.Bundle.ModelVersion, "requests", v.refs.Load(), "waited", time.Since(start))

@@ -262,6 +262,9 @@ type Pipeline struct {
 	// in milliseconds, is the window for a bundle that names none.
 	Fresh       *fresh.State
 	FreshWindow int64
+	// Release, if not nil, is called once the pipeline is closed, as
+	// whatever lent it Fresh asks.
+	Release func()
 	// Cache, if not nil, holds responses that were not degraded. It may be
 	// shared by pipelines over different bundles, in this process or, on
 	// Valkey, in others: keys include the bundle version. Responses from it
@@ -310,6 +313,15 @@ func (p *Pipeline) stalled(ctx context.Context, stage string, shard int) error {
 // New returns a pipeline over b and h that searches b's vectors in s.
 func New(b *bundle.Bundle, h history.Store, s Shards) *Pipeline {
 	return &Pipeline{Bundle: b, Shards: s, History: h, flight: new(singleflight.Group)}
+}
+
+// Close closes the bundle, then calls Release.
+func (p *Pipeline) Close() error {
+	err := p.Bundle.Close()
+	if p.Release != nil {
+		p.Release()
+	}
+	return err
 }
 
 func (p *Pipeline) ranker() Ranker {

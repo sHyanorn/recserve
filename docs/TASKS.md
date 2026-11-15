@@ -114,4 +114,5 @@ Check off each item when it is done. All tests must pass at the end of every mil
 - [x] Musical_Instruments' one read: H1 confirmed, S3 − F0 recall@10 +0.0117, 95% interval over users +0.0096 to +0.0137 (BENCHMARKS, M8)
 - [x] Exact search of every item with a vector on one core, `make bench-exact` (README, Scale)
 - [x] README and BENCHMARKS, M8
-- [ ] The stream state's cost in serving, by a protocol committed to docs/BENCHMARKS.md before its runs (the registration, section 1). The gateway keeps no stream state yet and rejects a bundle that names a window (D060 point 1)
+- [x] The gateway keeps the stream state from the events topic (D062)
+- [ ] The stream state's cost in serving, by a protocol committed to docs/BENCHMARKS.md before its runs (the registration, section 1)
