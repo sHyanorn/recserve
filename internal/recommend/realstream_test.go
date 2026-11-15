@@ -109,7 +109,10 @@ func BenchmarkRealStreamTake(b *testing.B) {
 	}
 	runtime.GC()
 	runtime.ReadMemStats(&after)
+	// The loaded data stays live too: freed between the two readings, it
+	// would count against the events.
 	runtime.KeepAlive(feed)
+	runtime.KeepAlive(sb)
 	b.ReportMetric(float64(int64(after.HeapAlloc)-int64(before.HeapAlloc))/float64(n), "heap-B/event")
 }
 
