@@ -137,7 +137,7 @@ type realData struct {
 // RECSERVE_DATA, which precede the test split: those of the category
 // RECSERVE_CATEGORY, Video_Games if unset. Without both of the first two
 // variables the test is skipped.
-func loadRealData(t *testing.T) realData {
+func loadRealData(t testing.TB) realData {
 	t.Helper()
 	data, dir := os.Getenv("RECSERVE_DATA"), os.Getenv("RECSERVE_BUNDLE")
 	if data == "" || dir == "" {
