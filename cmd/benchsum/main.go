@@ -18,6 +18,16 @@
 //	benchsum hedge -dir D                        the hedge-delay runs' table, then default_ms=, the default delay
 //	benchsum histories -valkey A -preload P1,P2 -split S -samples S
 //	                                             property 9 after a run with writes: "ok" or what differs
+//	benchsum stream -prefix P -samples S -group G -version V
+//	                                             a run of the stream scenario, group off or on serving V: P.summary.json
+//	benchsum streamtable -dir D1[,D2] [-readings=false]
+//	                                             the stream runs' table and, unless false, each rate's readings
+//	benchsum streamnext -dir D1[,D2] -group G -boot B
+//	                                             a group's next rate in phase 2, or "done headline=H": none, a rate, or "4000 or more"
+//	benchsum streamswap -prefix P -samples S     the run of swaps with the stream state: P.swap.json and its table
+//	benchsum bench -file F                       median and range of each benchmark's counts in go test -bench output
+//	benchsum value -after M -name N [-label k=v,...]
+//	                                             the value of a series in a /metrics scrape; an error and no output if it has none
 package main
 
 import (
@@ -40,7 +50,7 @@ func main() {
 
 func run(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("a subcommand is required: run, rate, next, sweep, fault, faults, breakers, swap, swaps, phases, quantile, hedge or histories")
+		return fmt.Errorf("a subcommand is required: run, rate, next, sweep, fault, faults, breakers, swap, swaps, phases, quantile, hedge, histories, stream, streamtable, streamnext, streamswap, bench or value")
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	prefix := fs.String("prefix", "", "path of the run's files without their suffixes")
@@ -59,6 +69,11 @@ func run(args []string, out io.Writer) error {
 	preload := fs.String("preload", "", "histories: comma-separated splits the gateway preloaded")
 	split := fs.String("split", "", "histories: the split loadgen replayed")
 	valkeyAddr := fs.String("valkey", "", "histories: the Valkey server that holds the histories")
+	group := fs.String("group", "", "stream, streamnext: off or on")
+	version := fs.String("version", "", "stream: the bundle version the group serves")
+	boot := fs.String("boot", "", "streamnext: the boot that phase 2 runs on")
+	file := fs.String("file", "", "bench: go test -bench output")
+	readings := fs.Bool("readings", true, "streamtable: the readings of each rate below the table")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -141,6 +156,74 @@ func run(args []string, out io.Writer) error {
 			return err
 		}
 		return printf(out, "%s", b.String())
+	case "stream":
+		s, err := summarizeStream(*prefix, *samples, *group, *version)
+		if err != nil {
+			return err
+		}
+		if err := writeJSON(*prefix+".summary.json", s); err != nil {
+			return err
+		}
+		return printf(out, "%s: valid %v %v, noisy %v, p99 %.2f ms, degraded %.2f%%\n", s.Name, s.Valid, s.Problems, s.Noisy, s.P99, 100*s.Degraded)
+	case "streamtable":
+		runs, err := readStreamRuns(strings.Split(*dir, ","))
+		if err != nil {
+			return err
+		}
+		var b strings.Builder
+		streamTable(&b, runs, *readings)
+		return printf(out, "%s", b.String())
+	case "streamnext":
+		runs, err := readStreamRuns(strings.Split(*dir, ","))
+		if err != nil {
+			return err
+		}
+		next, done, headline, err := streamNext(runs, *group, *boot)
+		if err != nil {
+			return err
+		}
+		switch {
+		case done && headline == 0:
+			return printf(out, "done headline=none\n")
+		case done && headline >= 4000:
+			return printf(out, "done headline=%g or more\n", headline)
+		case done:
+			return printf(out, "done headline=%g\n", headline)
+		}
+		return printf(out, "%g\n", next)
+	case "streamswap":
+		s, err := summarizeStreamSwap(*prefix, *samples)
+		if err != nil {
+			return err
+		}
+		if err := writeJSON(*prefix+".swap.json", s); err != nil {
+			return err
+		}
+		var b strings.Builder
+		streamSwapTable(&b, s)
+		return printf(out, "%s", b.String())
+	case "bench":
+		t, err := benchMedians(*file)
+		if err != nil {
+			return err
+		}
+		return printf(out, "%s", t)
+	case "value":
+		m, err := readMetrics(*after)
+		if err != nil {
+			return err
+		}
+		want := map[string]string{}
+		for kv := range strings.SplitSeq(*lbl, ",") {
+			if k, v, ok := strings.Cut(kv, "="); ok {
+				want[k] = v
+			}
+		}
+		v := m.value(*name, want)
+		if v == nil {
+			return fmt.Errorf("%s{%s}: no such series", *name, *lbl)
+		}
+		return printf(out, "%g\n", *v)
 	case "quantile":
 		a, err := readMetrics(*after)
 		if err != nil {
