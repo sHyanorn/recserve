@@ -1,0 +1,39 @@
+File: gateway
+Build ID: decc71d842e0bfee666974cdf1a193b5a3bf67a8
+Type: cpu
+Time: 2026-11-15 10:33:16 UTC
+Duration: 30s, Total samples = 17.85s (59.50%)
+Showing nodes accounting for 10.53s, 58.99% of 17.85s total
+Dropped 810 nodes (cum <= 0.09s)
+Showing top 30 nodes out of 279
+      flat  flat%   sum%        cum   cum%
+     2.64s 14.79% 14.79%      2.64s 14.79%  internal/runtime/syscall/linux.Syscall6
+     2.17s 12.16% 26.95%      2.19s 12.27%  runtime.cgocall
+     1.51s  8.46% 35.41%      1.51s  8.46%  github.com/sHyanorn/recserve/internal/vec.dotAVX2
+     0.66s  3.70% 39.10%      0.66s  3.70%  runtime.futex
+     0.48s  2.69% 41.79%      0.56s  3.14%  github.com/sHyanorn/recserve/internal/recommend.mmrHeap.down
+     0.37s  2.07% 43.87%      0.37s  2.07%  github.com/sHyanorn/recserve/internal/vec.dot32AVX2
+     0.28s  1.57% 45.43%      0.70s  3.92%  github.com/sHyanorn/recserve/internal/recommend.cosine
+     0.23s  1.29% 46.72%      1.53s  8.57%  github.com/sHyanorn/recserve/internal/recommend.mmr
+     0.16s   0.9% 47.62%      0.38s  2.13%  github.com/sHyanorn/recserve/internal/recommend.(*Pipeline).rank.func1
+     0.15s  0.84% 48.46%      0.25s  1.40%  slices.partitionCmpFunc[go.shape.struct { github.com/sHyanorn/recserve/internal/recommend.id int32; github.com/sHyanorn/recserve/internal/recommend.score float64 }]
+     0.14s  0.78% 49.24%      0.27s  1.51%  runtime.mapaccess2_fast32
+     0.14s  0.78% 50.03%      0.14s  0.78%  runtime.memmove
+     0.13s  0.73% 50.76%      0.13s  0.73%  runtime.nanotime (inline)
+     0.12s  0.67% 51.43%      0.26s  1.46%  container/heap.down
+     0.12s  0.67% 52.10%      0.12s  0.67%  runtime.nextFreeFast (inline)
+     0.12s  0.67% 52.77%      0.38s  2.13%  slices.partitionCmpFunc[go.shape.struct { ID int32; Score float64 }]
+     0.11s  0.62% 53.39%      0.12s  0.67%  cmp.Compare[go.shape.float64] (inline)
+     0.11s  0.62% 54.01%      0.11s  0.62%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+     0.10s  0.56% 54.57%      0.14s  0.78%  github.com/sHyanorn/recserve/internal/vec.worstFirst.Less
+     0.09s   0.5% 55.07%      0.09s   0.5%  cmp.Compare[go.shape.int32] (inline)
+     0.09s   0.5% 55.57%      0.11s  0.62%  runtime.casgstatus
+     0.08s  0.45% 56.02%      0.25s  1.40%  encoding/json/v2.makeStructArshaler.func2
+     0.08s  0.45% 56.47%      0.09s   0.5%  runtime.unlock2
+     0.08s  0.45% 56.92%      0.15s  0.84%  slices.insertionSortCmpFunc[go.shape.struct { ID int32; Score float64 }]
+     0.07s  0.39% 57.31%      0.11s  0.62%  google.golang.org/protobuf/internal/impl.consumeInt32Slice
+     0.06s  0.34% 57.65%      0.10s  0.56%  internal/runtime/maps.(*Iter).Next
+     0.06s  0.34% 57.98%      0.89s  4.99%  runtime.findRunnable
+     0.06s  0.34% 58.32%      0.24s  1.34%  runtime.mallocgcSmallScanNoHeaderSC5
+     0.06s  0.34% 58.66%      0.09s   0.5%  runtime.step
+     0.06s  0.34% 58.99%      0.11s  0.62%  sync.(*Pool).Get

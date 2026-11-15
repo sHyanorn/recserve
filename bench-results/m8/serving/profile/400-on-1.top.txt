@@ -1,0 +1,39 @@
+File: gateway
+Build ID: decc71d842e0bfee666974cdf1a193b5a3bf67a8
+Type: cpu
+Time: 2026-11-15 10:34:48 UTC
+Duration: 30s, Total samples = 36.81s (122.68%)
+Showing nodes accounting for 25.27s, 68.65% of 36.81s total
+Dropped 917 nodes (cum <= 0.18s)
+Showing top 30 nodes out of 204
+      flat  flat%   sum%        cum   cum%
+     3.59s  9.75%  9.75%     11.11s 30.18%  runtime.mapaccess2_fast32
+     2.15s  5.84% 15.59%      2.15s  5.84%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+     1.91s  5.19% 20.78%      1.91s  5.19%  internal/runtime/maps.(*groupReference).key (inline)
+     1.83s  4.97% 25.75%      1.83s  4.97%  internal/runtime/syscall/linux.Syscall6
+     1.81s  4.92% 30.67%      1.81s  4.92%  internal/runtime/maps.memHash32AES
+     1.79s  4.86% 35.53%      1.79s  4.86%  github.com/sHyanorn/recserve/internal/vec.dotAVX2
+     1.49s  4.05% 39.58%      1.50s  4.07%  runtime.cgocall
+     1.07s  2.91% 42.49%      1.21s  3.29%  github.com/sHyanorn/recserve/internal/fresh.(*State).First
+     0.98s  2.66% 45.15%     13.71s 37.25%  github.com/sHyanorn/recserve/internal/fresh.top.func1
+     0.89s  2.42% 47.57%      3.59s  9.75%  runtime.mapassign_fast32
+     0.76s  2.06% 49.63%     11.75s 31.92%  runtime.mapaccess1_fast32
+     0.69s  1.87% 51.51%     10.73s 29.15%  slices.partitionCmpFunc[go.shape.int32]
+     0.58s  1.58% 53.08%      0.58s  1.58%  cmp.Or[go.shape.int] (inline)
+     0.52s  1.41% 54.50%      0.52s  1.41%  internal/runtime/maps.bitset.first (inline)
+     0.50s  1.36% 55.85%      0.50s  1.36%  internal/runtime/maps.h1 (inline)
+     0.46s  1.25% 57.10%      0.46s  1.25%  internal/runtime/maps.(*groupsReference).group (inline)
+     0.45s  1.22% 58.33%      0.45s  1.22%  cmp.Compare[go.shape.int32] (inline)
+     0.43s  1.17% 59.49%      0.43s  1.17%  cmp.Compare[go.shape.int] (inline)
+     0.41s  1.11% 60.61%      0.56s  1.52%  internal/runtime/maps.(*Iter).Next
+     0.38s  1.03% 61.64%      0.38s  1.03%  internal/runtime/maps.(*Map).directoryIndex (inline)
+     0.37s  1.01% 62.65%      0.49s  1.33%  slices.BinarySearchFunc[go.shape.[]go.shape.int64,go.shape.int64,go.shape.int64]
+     0.30s  0.81% 63.46%      0.30s  0.81%  runtime.memclrNoHeapPointers
+     0.29s  0.79% 64.25%      0.29s  0.79%  runtime.memmove
+     0.28s  0.76% 65.01%      0.28s  0.76%  runtime.nextFreeFast
+     0.24s  0.65% 65.66%      0.24s  0.65%  internal/runtime/maps.makeProbeSeq (inline)
+     0.24s  0.65% 66.31%      0.24s  0.65%  sync/atomic.(*Int32).Add (inline)
+     0.23s  0.62% 66.94%      0.92s  2.50%  internal/runtime/maps.(*table).uncheckedPutSlot
+     0.22s   0.6% 67.54%      0.22s   0.6%  math.log1p
+     0.21s  0.57% 68.11%      2.98s  8.10%  slices.insertionSortCmpFunc[go.shape.int32]
+     0.20s  0.54% 68.65%      0.20s  0.54%  internal/runtime/maps.ctrlGroup.matchEmpty (inline)

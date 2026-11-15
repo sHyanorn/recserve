@@ -1,0 +1,77 @@
+boot: f730b1e7-5571-455d-87d9-1dc906fb305d
+commit: 7e7639a1f46471d148dd48fb0aab583e5f3bfaca
+goos: linux
+goarch: amd64
+pkg: github.com/sHyanorn/recserve/internal/recommend
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkRealStreamTake 	   34510	      2813 ns/op	       230.5 heap-B/event
+BenchmarkRealStreamTake 	   34510	      2876 ns/op	       230.5 heap-B/event
+BenchmarkRealStreamTake 	   34510	      3416 ns/op	       230.5 heap-B/event
+BenchmarkRealStreamTake 	   34510	      3820 ns/op	       230.5 heap-B/event
+BenchmarkRealStreamTake 	   34510	      3382 ns/op	       230.5 heap-B/event
+BenchmarkRealStreamTake 	   34510	      2795 ns/op	       230.5 heap-B/event
+BenchmarkRealStreamTake 	   34510	      3194 ns/op	       230.5 heap-B/event
+BenchmarkRealStreamTake 	   34510	      2839 ns/op	       230.5 heap-B/event
+BenchmarkRealStreamTake 	   34510	      3105 ns/op	       230.5 heap-B/event
+BenchmarkRealStreamTake 	   34510	      2832 ns/op	       230.5 heap-B/event
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/sHyanorn/recserve/internal/recommend
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkRealStreamReads/popular         	    2462	    469824 ns/op
+BenchmarkRealStreamReads/popular         	    2548	    535870 ns/op
+BenchmarkRealStreamReads/popular         	    2961	    408005 ns/op
+BenchmarkRealStreamReads/popular         	    2788	    446724 ns/op
+BenchmarkRealStreamReads/popular         	    2545	    443410 ns/op
+BenchmarkRealStreamReads/popular         	    2964	    390846 ns/op
+BenchmarkRealStreamReads/popular         	    2958	    386901 ns/op
+BenchmarkRealStreamReads/popular         	    2970	    389961 ns/op
+BenchmarkRealStreamReads/popular         	    2792	    398463 ns/op
+BenchmarkRealStreamReads/popular         	    2788	    418556 ns/op
+BenchmarkRealStreamReads/rows            	     901	   1380541 ns/op	         5.533 seeds/op
+BenchmarkRealStreamReads/rows            	     914	   1316887 ns/op	         5.533 seeds/op
+BenchmarkRealStreamReads/rows            	     883	   1466663 ns/op	         5.533 seeds/op
+BenchmarkRealStreamReads/rows            	     895	   1220665 ns/op	         5.533 seeds/op
+BenchmarkRealStreamReads/rows            	     904	   1608017 ns/op	         5.533 seeds/op
+BenchmarkRealStreamReads/rows            	     931	   1387540 ns/op	         5.533 seeds/op
+BenchmarkRealStreamReads/rows            	     838	   1412831 ns/op	         5.533 seeds/op
+BenchmarkRealStreamReads/rows            	     896	   1238951 ns/op	         5.533 seeds/op
+BenchmarkRealStreamReads/rows            	     837	   1295366 ns/op	         5.533 seeds/op
+BenchmarkRealStreamReads/rows            	     883	   1501762 ns/op	         5.533 seeds/op
+BenchmarkRealStreamReads/count           	 7227710	       160.3 ns/op
+BenchmarkRealStreamReads/count           	 7063796	       158.9 ns/op
+BenchmarkRealStreamReads/count           	 6720508	       178.2 ns/op
+BenchmarkRealStreamReads/count           	 7002698	       170.2 ns/op
+BenchmarkRealStreamReads/count           	 7776091	       162.5 ns/op
+BenchmarkRealStreamReads/count           	 5736308	       205.7 ns/op
+BenchmarkRealStreamReads/count           	 7404115	       159.7 ns/op
+BenchmarkRealStreamReads/count           	 7315134	       180.2 ns/op
+BenchmarkRealStreamReads/count           	 7653355	       164.2 ns/op
+BenchmarkRealStreamReads/count           	 7745144	       164.1 ns/op
+PASS
+goos: linux
+goarch: amd64
+pkg: github.com/sHyanorn/recserve/internal/recommend
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+BenchmarkRealStreamPipeline/F0         	    3451	   2190552 ns/op
+BenchmarkRealStreamPipeline/F0         	    3451	   2373311 ns/op
+BenchmarkRealStreamPipeline/F0         	    3451	   2451844 ns/op
+BenchmarkRealStreamPipeline/F0         	    3451	   2500808 ns/op
+BenchmarkRealStreamPipeline/F0         	    3451	   2256463 ns/op
+BenchmarkRealStreamPipeline/F0         	    3451	   2464443 ns/op
+BenchmarkRealStreamPipeline/F0         	    3451	   2466670 ns/op
+BenchmarkRealStreamPipeline/F0         	    3451	   2243604 ns/op
+BenchmarkRealStreamPipeline/F0         	    3451	   2364348 ns/op
+BenchmarkRealStreamPipeline/F0         	    3451	   2393326 ns/op
+BenchmarkRealStreamPipeline/S3         	    3451	   4765150 ns/op
+BenchmarkRealStreamPipeline/S3         	    3451	   4705901 ns/op
+BenchmarkRealStreamPipeline/S3         	    3451	   4559726 ns/op
+BenchmarkRealStreamPipeline/S3         	    3451	   4243019 ns/op
+BenchmarkRealStreamPipeline/S3         	    3451	   4668535 ns/op
+BenchmarkRealStreamPipeline/S3         	    3451	   4665843 ns/op
+BenchmarkRealStreamPipeline/S3         	    3451	   4678426 ns/op
+BenchmarkRealStreamPipeline/S3         	    3451	   4524649 ns/op
+BenchmarkRealStreamPipeline/S3         	    3451	   4504426 ns/op
+BenchmarkRealStreamPipeline/S3         	    3451	   4611602 ns/op
+PASS

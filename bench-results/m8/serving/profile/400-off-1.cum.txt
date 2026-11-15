@@ -1,0 +1,39 @@
+File: gateway
+Build ID: decc71d842e0bfee666974cdf1a193b5a3bf67a8
+Type: cpu
+Time: 2026-11-15 10:33:16 UTC
+Duration: 30s, Total samples = 17.85s (59.50%)
+Showing nodes accounting for 6.77s, 37.93% of 17.85s total
+Dropped 810 nodes (cum <= 0.09s)
+Showing top 30 nodes out of 279
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%     11.26s 63.08%  net/http.(*conn).serve
+         0     0%     0%      9.50s 53.22%  github.com/sHyanorn/recserve/internal/api.(*Server).Handler.func3
+     0.01s 0.056% 0.056%      9.50s 53.22%  net/http.(*ServeMux).ServeHTTP
+         0     0% 0.056%      9.50s 53.22%  net/http.HandlerFunc.ServeHTTP
+         0     0% 0.056%      9.50s 53.22%  net/http.serverHandler.ServeHTTP
+     0.02s  0.11%  0.17%      9.38s 52.55%  github.com/sHyanorn/recserve/internal/api.(*Server).instrument.func1
+         0     0%  0.17%      8.76s 49.08%  github.com/sHyanorn/recserve/internal/api.(*Server).recommend
+         0     0%  0.17%      8.26s 46.27%  github.com/sHyanorn/recserve/internal/recommend.(*Live).Recommend
+     0.03s  0.17%  0.34%      8.26s 46.27%  github.com/sHyanorn/recserve/internal/recommend.(*Pipeline).Recommend
+     0.02s  0.11%  0.45%      7.88s 44.15%  github.com/sHyanorn/recserve/internal/recommend.(*Pipeline).compute
+         0     0%  0.45%      3.14s 17.59%  github.com/sHyanorn/recserve/internal/recommend.(*Pipeline).rank
+     2.64s 14.79% 15.24%      2.64s 14.79%  internal/runtime/syscall/linux.Syscall6
+         0     0% 15.24%      2.48s 13.89%  syscall.Syscall
+         0     0% 15.24%      2.42s 13.56%  syscall.RawSyscall6
+         0     0% 15.24%      2.41s 13.50%  internal/poll.ignoringEINTRIO (inline)
+     0.01s 0.056% 15.29%      2.31s 12.94%  net.(*conn).Write
+         0     0% 15.29%      2.30s 12.89%  github.com/sHyanorn/recserve/internal/onnx.run
+     0.01s 0.056% 15.35%      2.29s 12.83%  net.(*netFD).Write
+     0.02s  0.11% 15.46%      2.28s 12.77%  internal/poll.(*FD).Write
+     0.02s  0.11% 15.57%      2.24s 12.55%  github.com/yalue/onnxruntime_go.(*DynamicAdvancedSession).RunWithOptions
+         0     0% 15.57%      2.22s 12.44%  github.com/yalue/onnxruntime_go.(*DynamicAdvancedSession).RunWithOptions.func1 (inline)
+         0     0% 15.57%      2.22s 12.44%  syscall.Write (inline)
+     0.03s  0.17% 15.74%      2.22s 12.44%  syscall.write
+         0     0% 15.74%      2.19s 12.27%  github.com/yalue/onnxruntime_go._Cfunc_RunOrtSessionWithOptions
+     2.17s 12.16% 27.90%      2.19s 12.27%  runtime.cgocall
+     0.05s  0.28% 28.18%      1.56s  8.74%  github.com/sHyanorn/recserve/internal/vec.Dot
+         0     0% 28.18%      1.54s  8.63%  github.com/sHyanorn/recserve/internal/recommend.(*Pipeline).retrievalScores
+     0.23s  1.29% 29.47%      1.53s  8.57%  github.com/sHyanorn/recserve/internal/recommend.mmr
+     1.51s  8.46% 37.93%      1.51s  8.46%  github.com/sHyanorn/recserve/internal/vec.dotAVX2
+         0     0% 37.93%      1.49s  8.35%  github.com/sHyanorn/recserve/internal/onnx.(*Ranker).Rank

@@ -1,0 +1,9 @@
+=== RUN   TestRealDataStreamGateway
+    realstream_test.go:349: preload: largest score difference 0
+    realstream_test.go:375: written: largest score difference 0
+    realstream_test.go:380: rebuilt: largest score difference 0
+--- PASS: TestRealDataStreamGateway (40.74s)
+PASS
+ok  	github.com/sHyanorn/recserve/internal/recommend	40.771s
+commit: 7e7639a1f46471d148dd48fb0aab583e5f3bfaca
+boot: f730b1e7-5571-455d-87d9-1dc906fb305d

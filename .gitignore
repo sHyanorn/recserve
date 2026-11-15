@@ -14,3 +14,19 @@ bench-results/m6/**/raw/
 bench-results/m7/**/raw/
 bench-results/m8/**/raw/
 bench-results/m8/**/valid-ranks.txt.gz
+# The stream state's runs keep their summaries, tables, records and profile
+# texts; the scrapes and other per-run files stay with the machine.
+bench-results/m8/serving/**
+!bench-results/m8/serving/**/
+bench-results/m8/serving/**/raw/
+!bench-results/m8/serving/env.txt
+!bench-results/m8/serving/noise-reference-*.json
+!bench-results/m8/serving/gate/gate-*.txt
+!bench-results/m8/serving/micro/micro.txt
+!bench-results/m8/serving/micro/micro.md
+!bench-results/m8/serving/**/*.summary.json
+!bench-results/m8/serving/**/table.md
+!bench-results/m8/serving/swap/swap.md
+!bench-results/m8/serving/swap/swap.swap.json
+!bench-results/m8/serving/profile/*.top.txt
+!bench-results/m8/serving/profile/*.cum.txt

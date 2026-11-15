@@ -1,0 +1,60 @@
+{
+  "name": "150-on-3",
+  "rate": 150,
+  "valid": true,
+  "noisy": false,
+  "achieved_rate": 150,
+  "answers": 9000,
+  "p50_ms": 5.951,
+  "p90_ms": 10.197,
+  "p99_ms": 20.37,
+  "p99_9_ms": 74.603,
+  "max_ms": 152.282,
+  "errors": 0,
+  "busy": 0,
+  "degraded_share": 0.004,
+  "degraded_by_reason": {
+    "history_unavailable": 0.0007777777777777777,
+    "ranker_timeout": 0.0006666666666666666,
+    "shards_partial": 0.0023333333333333335,
+    "vector_timeout": 0.0003333333333333333
+  },
+  "mean_coverage": 0.9982681205901218,
+  "events": 9000,
+  "events_p99_ms": 9.882,
+  "past_budget_share": 0.000778296642205915,
+  "cache_hit_rate": 0,
+  "cpu_ms_per_request": null,
+  "group": "on",
+  "version": "74ad6c83bf3c",
+  "boot": "f730b1e7-5571-455d-87d9-1dc906fb305d",
+  "commit": "7e7639a1f46471d148dd48fb0aab583e5f3bfaca",
+  "image": "sha256:b4af4cec4b0e199068bc73ef9a0c1ee6aef20d23b31e9b5d7af8646529c8361c",
+  "cpu_ms_per_recommendation": {
+    "annshard-0": 1.188432922888889,
+    "annshard-1": 1.1652703082222222,
+    "annshard-2": 1.2193898031111112,
+    "annshard-3": 1.1994271691111111,
+    "gateway": 4.7591186143333335,
+    "ingest": 0.5944362222222223,
+    "kafka": 1.2948658943333333,
+    "valkey": 0.3855349235555556
+  },
+  "replica_cpu_ms_per_call": {
+    "0": 2.471800359393232,
+    "1": 2.5398848150740867
+  },
+  "hedges_per_recommendation": 0.1731111111111111,
+  "memory": {
+    "ready_rss": 505548800,
+    "ready_heap_inuse": 416645120,
+    "end_rss": 587460608,
+    "end_heap_inuse": 450314240,
+    "peak_rss": 587866112
+  },
+  "ready_s": 5.372655052,
+  "applied": 8993,
+  "duplicate": 0,
+  "poison": 0,
+  "lag_records": 0
+}

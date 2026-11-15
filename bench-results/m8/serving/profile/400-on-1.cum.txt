@@ -1,0 +1,39 @@
+File: gateway
+Build ID: decc71d842e0bfee666974cdf1a193b5a3bf67a8
+Type: cpu
+Time: 2026-11-15 10:34:48 UTC
+Duration: 30s, Total samples = 36.81s (122.68%)
+Showing nodes accounting for 7.74s, 21.03% of 36.81s total
+Dropped 917 nodes (cum <= 0.18s)
+Showing top 30 nodes out of 204
+      flat  flat%   sum%        cum   cum%
+     0.02s 0.054% 0.054%     19.45s 52.84%  sync.(*WaitGroup).Go.func1
+     0.07s  0.19%  0.24%     15.53s 42.19%  github.com/sHyanorn/recserve/internal/fresh.top
+         0     0%  0.24%     14.92s 40.53%  slices.SortFunc[go.shape.[]int32,go.shape.int32] (inline)
+     0.20s  0.54%  0.79%     14.92s 40.53%  slices.pdqsortCmpFunc[go.shape.int32]
+     0.98s  2.66%  3.45%     13.71s 37.25%  github.com/sHyanorn/recserve/internal/fresh.top.func1
+     0.76s  2.06%  5.51%     11.75s 31.92%  runtime.mapaccess1_fast32
+     0.01s 0.027%  5.54%     11.65s 31.65%  github.com/sHyanorn/recserve/internal/bundle.CoocHitsOf (inline)
+         0     0%  5.54%     11.65s 31.65%  github.com/sHyanorn/recserve/internal/recommend.(*Pipeline).cooc
+         0     0%  5.54%     11.65s 31.65%  github.com/sHyanorn/recserve/internal/recommend.(*Pipeline).retrieve.func2
+     0.01s 0.027%  5.57%     11.64s 31.62%  net/http.(*conn).serve
+     0.05s  0.14%  5.70%     11.61s 31.54%  github.com/sHyanorn/recserve/internal/fresh.(*State).Row
+         0     0%  5.70%     11.61s 31.54%  github.com/sHyanorn/recserve/internal/recommend.(*Pipeline).cooc.func1 (inline)
+     3.59s  9.75% 15.46%     11.11s 30.18%  runtime.mapaccess2_fast32
+     0.69s  1.87% 17.33%     10.73s 29.15%  slices.partitionCmpFunc[go.shape.int32]
+     0.01s 0.027% 17.36%     10.31s 28.01%  github.com/sHyanorn/recserve/internal/api.(*Server).Handler.func3
+         0     0% 17.36%     10.31s 28.01%  net/http.HandlerFunc.ServeHTTP
+         0     0% 17.36%     10.31s 28.01%  net/http.serverHandler.ServeHTTP
+         0     0% 17.36%     10.29s 27.95%  net/http.(*ServeMux).ServeHTTP
+         0     0% 17.36%     10.24s 27.82%  github.com/sHyanorn/recserve/internal/api.(*Server).instrument.func1
+         0     0% 17.36%      9.61s 26.11%  github.com/sHyanorn/recserve/internal/api.(*Server).recommend
+         0     0% 17.36%      9.18s 24.94%  github.com/sHyanorn/recserve/internal/recommend.(*Live).Recommend
+     0.01s 0.027% 17.39%      9.18s 24.94%  github.com/sHyanorn/recserve/internal/recommend.(*Pipeline).Recommend
+     0.03s 0.081% 17.47%      8.87s 24.10%  github.com/sHyanorn/recserve/internal/recommend.(*Pipeline).compute
+     0.01s 0.027% 17.50%      7.48s 20.32%  github.com/sHyanorn/recserve/internal/recommend.(*Pipeline).popular
+         0     0% 17.50%      7.48s 20.32%  github.com/sHyanorn/recserve/internal/recommend.(*Pipeline).retrieve.func3
+     0.07s  0.19% 17.69%      7.45s 20.24%  github.com/sHyanorn/recserve/internal/fresh.(*State).Popular
+     0.02s 0.054% 17.74%      5.41s 14.70%  github.com/sHyanorn/recserve/internal/recommend.(*Pipeline).rank
+     0.89s  2.42% 20.16%      3.59s  9.75%  runtime.mapassign_fast32
+     0.11s   0.3% 20.46%      3.37s  9.16%  github.com/sHyanorn/recserve/internal/bundle.(*Bundle).Features
+     0.21s  0.57% 21.03%      2.98s  8.10%  slices.insertionSortCmpFunc[go.shape.int32] (inline)

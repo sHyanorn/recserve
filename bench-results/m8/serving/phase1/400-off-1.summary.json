@@ -1,0 +1,61 @@
+{
+  "name": "400-off-1",
+  "rate": 400,
+  "valid": true,
+  "noisy": false,
+  "achieved_rate": 400,
+  "answers": 24000,
+  "p50_ms": 6.251,
+  "p90_ms": 15.484,
+  "p99_ms": 27.873,
+  "p99_9_ms": 47.673,
+  "max_ms": 88.357,
+  "errors": 0,
+  "busy": 0,
+  "degraded_share": 0.041958333333333334,
+  "degraded_by_reason": {
+    "encoder_timeout": 0.0003333333333333333,
+    "history_unavailable": 0.010541666666666666,
+    "ranker_timeout": 0.00016666666666666666,
+    "shards_partial": 0.027875,
+    "vector_timeout": 0.0030416666666666665
+  },
+  "mean_coverage": 0.9783957162549041,
+  "events": 24000,
+  "events_p99_ms": 21.808,
+  "past_budget_share": 0.010547379830741652,
+  "cache_hit_rate": 0,
+  "cpu_ms_per_request": null,
+  "group": "off",
+  "version": "a8d9c526fb03",
+  "boot": "f730b1e7-5571-455d-87d9-1dc906fb305d",
+  "commit": "7e7639a1f46471d148dd48fb0aab583e5f3bfaca",
+  "image": "sha256:70fb937f3d4e3c4139f2418d016a81f6f9eec7d6e6ee1d92623e2a531eccd442",
+  "cpu_ms_per_recommendation": {
+    "annshard-0": 0.7064019794166667,
+    "annshard-1": 0.7560152277916666,
+    "annshard-2": 0.7070686909583332,
+    "annshard-3": 0.7942465915833333,
+    "gateway": 1.693486757375,
+    "ingest": 0.5003104034583333,
+    "kafka": 0.7801648685,
+    "valkey": 0.20320390358333335
+  },
+  "replica_cpu_ms_per_call": {
+    "0": 1.7100961300428765,
+    "1": 1.7458846196821398
+  },
+  "hedges_per_recommendation": 0.14416666666666667,
+  "memory": {
+    "ready_rss": 252329984,
+    "ready_heap_inuse": 127524864,
+    "end_rss": 180187136,
+    "end_heap_inuse": 67887104,
+    "peak_rss": 382304256
+  },
+  "ready_s": 2.834723812,
+  "applied": null,
+  "duplicate": null,
+  "poison": null,
+  "lag_records": null
+}
