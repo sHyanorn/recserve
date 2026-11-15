@@ -359,8 +359,9 @@ func meanOf(v []float64) float64 {
 // directory, it then compares that bundle with the first
 // (compareRealBundles). A run is a test read of
 // docs/registration/m8-freshness.md, section 9: on Video_Games it takes
-// the next of the registered reads after openTestRead's check, and it
-// refuses Musical_Instruments, whose one read is TestRealDataFreshness's.
+// the next of the registered reads after openTestRead's check, read 3 only
+// with RECSERVE_BUNDLE_B, and it refuses Musical_Instruments, whose one
+// read is TestRealDataFreshness's.
 func TestRealDataQuality(t *testing.T) {
 	data, dir := os.Getenv("RECSERVE_DATA"), os.Getenv("RECSERVE_BUNDLE")
 	if data == "" || dir == "" {
@@ -371,6 +372,14 @@ func TestRealDataQuality(t *testing.T) {
 		t.Fatal("Musical_Instruments' test split is read by TestRealDataFreshness only (docs/registration/m8-freshness.md, section 9)")
 	}
 	if category == "Video_Games" {
+		done, _, err := loggedReads(testReadsLog, category)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := os.Getenv("RECSERVE_BUNDLE_B")
+		if done+1 == 3 && b == "" {
+			t.Fatal(read3)
+		}
 		plan := [][]string{{"TestRealDataQuality", manifestVersion(t, dir)}}
 		var outs []string
 		for _, name := range []string{"RECSERVE_QUALITY_OUT", "RECSERVE_COMPARE_OUT"} {
@@ -378,12 +387,8 @@ func TestRealDataQuality(t *testing.T) {
 				outs = append(outs, out)
 			}
 		}
-		if b := os.Getenv("RECSERVE_BUNDLE_B"); b != "" {
+		if b != "" {
 			plan = append(plan, []string{"B", manifestVersion(t, b)})
-		}
-		done, _, err := loggedReads(testReadsLog, category)
-		if err != nil {
-			t.Fatal(err)
 		}
 		if err := openTestRead(registrationPath, amendmentsPath, testReadsLog, category, done+1, conditionsHash(plan), gitHead, outs...); err != nil {
 			t.Fatal(err)

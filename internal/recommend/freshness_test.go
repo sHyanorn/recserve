@@ -497,6 +497,7 @@ func trainedItems(train, events []dataset.Row) []bool {
 // RECSERVE_READ1_RANKS. Musical_Instruments' one read holds both. The
 // report goes to RECSERVE_FRESHNESS_OUT and the per-event ranks to the
 // directory RECSERVE_RANKS_DIR, outside the repository; neither may exist.
+// It refuses Video_Games' read 3, which is TestRealDataQuality's.
 func TestRealDataFreshness(t *testing.T) {
 	if os.Getenv("RECSERVE_READ") == "" {
 		t.Skip("RECSERVE_READ not set")
@@ -506,6 +507,9 @@ func TestRealDataFreshness(t *testing.T) {
 		t.Fatal(err)
 	}
 	category := cmp.Or(os.Getenv("RECSERVE_CATEGORY"), "Video_Games")
+	if category == "Video_Games" && n == 3 {
+		t.Fatal(read3)
+	}
 	read1, read2 := n == 1, category != "Video_Games" || n == 2
 	env := func(name string) string {
 		v := os.Getenv(name)
