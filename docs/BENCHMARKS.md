@@ -115,6 +115,10 @@ Set 2026-11-12, before any seqrec-lab bundle exists.
 - **Also reported.** The number of requests without a user vector under each bundle. The training periods: the baseline's item vectors come from recserve's train split, to 2021-08-11, its ranker from the valid split; the seqrec-lab model's weights from events at or before T_val = 1618224866975 (2021-04-12), early stopping on validation targets in (T_val, T] and its vocabulary from the 5-core of events at or before T = 1649219168790 (2022-04-06), all of the 0-core file deduplicated by (user, item) (seqrec-lab `data/splits.py`, `global_temporal`; `data/preprocess.py`, `build_log`). The histories: for each test event, the length of recserve's history and the number of the same user's events before it in seqrec-lab's data (0-core, deduplicated, in its vocabulary), with the median of each and the share of events where they differ; and the repeated items in recserve's histories, 0 in its three split files.
 - **Histories, 2026-11-12**, computed before any seqrec-lab bundle existed: `tools/bundle/histories.py` on recserve's split files and the 0-core `Video_Games.csv.gz` (sha256 30692f9806e33a7b5d8b599b73d7ca33dbfefb0abdfc1578052a101f2e64b3cd, as in seqrec-lab's registry), following seqrec-lab's code at 6aa5d87; its output is bench-results/m7/histories.txt. It gives seqrec-lab's figures: T = 1649219168790, T_val = 1618224866975, a vocabulary of 21,930 items, and 18,092 of the 43,249 test targets in it (41.83%). On both sides an event's history holds the events with an earlier ts. recserve's history: median 5 (p10 2, p90 17, max 427). The same user's events in seqrec-lab's data, deduplicated and in its vocabulary: median 3 (p10 0, p90 12, max 386). They differ in 25,950 events (60.00%), each with fewer in seqrec-lab's data. recserve's histories hold no repeated item.
 
+### Freshness (M8, D061)
+
+Registered before any of its runs in [registration/m8-freshness.md](registration/m8-freshness.md), which fixes the bundles, the stream state, how the choices on valid are made, the conditions, the criteria and the counted test reads; amended in [registration/m8-freshness-amendments.md](registration/m8-freshness-amendments.md). `make bench-read` runs a read, TestRealDataFreshness. The state's cost in serving is not measured yet; its protocol will be committed to this file before its runs (the registration, section 1).
+
 ## Load tests
 
 **Generator.** `cmd/loadgen` (D009): request i is due at t0 + i/rate, sent over a fixed pool of keep-alive connections whatever the replies; latency counts from the due time. Service time and send lag are kept apart. A 1 ms sleep loop records the generator's own pauses.
@@ -779,3 +783,98 @@ By the protocol of Second M7 set, on one VM other than the first set's: Intel Xe
 - **Replies cut short after the status line**, found 2026-11-13, criteria not changed, nothing rerun: `cmd/benchsum` judged a sample by its status alone, while loadgen records a reply whose status line arrived and whose body did not with that status and the outcome `error`, so a 200 or 202 cut short counted as an answer or an accepted event and not as an error. Fixed 2026-11-13: a sample with the outcome `error` is an error, neither an answer nor an accepted event (`TestOutcomeErrorIsAnError`). Loadgen gives that outcome also to a reply that is neither a 503 nor its endpoint's success, a 4xx for one, which the tool counted as neither an error nor an answer. No committed verdict changes: the change concerns only samples with the outcome `error`, and each of the 236 loadgen reports under `bench-results/` counts 0 requests with the outcome `error` and 0 with `busy`.
 - **Each phase's hedges and failovers**, 2026-11-13, criteria not changed, nothing rerun: `cmd/benchsum` takes them as differences of the gateway's metrics read at 30 s (`*.b0.metrics`), at the injection (`*.b1.metrics`), at the removal (`*.b2.metrics`) and after the load, and `scripts/bench-fault.sh` read `b1` and `b2` after the injection and the removal returned, so what was counted between the injection and that read went to the healthy phase, and between the removal and that read to the fault phase. In F1 run 1 of this set, toxiproxy:19091 has 0 failed calls and 0 failovers in `F1-run1-a1.b0.metrics` and 1 of each in `F1-run1-a1.b1.metrics`, and `F1-run1-a1.fault.json` puts that failover in the healthy phase and none in the fault phase; F1 run 2 of the first M7 set is the same (`faults/F1-run2.b0.metrics`, `.b1.metrics`, `.fault.json`). F1's "no failover in any fault phase", in this set's table and the first M7 set's, rests on that split, and the hedges in the tables' notes are split at the same reads. No pass criterion reads these counts. Fixed 2026-11-13: the script reads `b1` and `b2` before the injection and the removal, which follow that read, each mark still written just before them; the criteria's phases are cut at 90 and 150 s, not at the marks.
 - **Invalid attempts in the fault tables**, 2026-11-13, criteria not changed, nothing rerun: `cmd/benchsum` printed an invalid attempt's Pass as `false`, though an invalid run is neither a pass nor a fail; each fault's verdict counts valid runs only and is unchanged. Fixed 2026-11-13: the cell is empty (`TestFaultTableLeavesInvalidPassBlank`). The committed tables are the earlier tool's and are not regenerated; in them an invalid attempt's Pass is `false`: F4-run2 in `faults/faults.md` and F4-run1-a3 in `rerun/faults/faults.md`.
+
+### M8 (2026-11-14 and 15)
+
+By docs/registration/m8-freshness.md and its amendment "2026-11-15: Video_Games read 2 stopped before any metric". For every row but the references, each read sends one request per test event through the pipeline in process, every stage budget off, MMR included; the references are computed without a request. The reads record no environment. Per-event ranks are not committed (D011); the end of each read's file gives the SHA-256 of each row's rank file.
+
+#### Choices on valid (section 6) and bundles
+
+| | Video_Games | Musical_Instruments |
+|---|---|---|
+| ALS (6.1): factors, α, λ; recall@10 with the fold-in, with the exact user step | 256, 100, 0.01; 0.0282, 0.0310 | 128, 40, 0.01; 0.0237, 0.0241 |
+| Window (6.2) | 14 days: 14 and 30 days tie at 0.0581, 14 has the higher NDCG@10 | 30 days, recall@10 0.0193 |
+| B1, B0 | a8d9c526fb03, b7ff0634dd7b | 3be5f6667aaa, 2dda7923d636 |
+| B1s6, B1s8 | d6d2691322ca, 74ad6c83bf3c | f79fea0f6a5a, 244c913c1cc8 |
+| Bundles rebuilt every 7 days, every 30, every 30 with B1s8's ranker | 59, 14, 14 | 60, 14, 14 |
+
+The grids and windows are in `bench-results/m8/<category>/` (`als-grid.tsv`, `als-grid.txt`, `windows.txt`), and the bundles' versions at the top of each read's file.
+
+#### Reads
+
+`bench-results/m8/test-reads.log`: Video_Games' read 1 at 868f9be (2026-11-14T22:01:40Z); its read 2, logged at 22:51:31Z and stopped by the kernel for memory before any metric, then run again under the amendment "2026-11-15: Video_Games read 2 stopped before any metric" at b1df253 (2026-11-15T00:37:15Z); Musical_Instruments' one read at 6bfdbab (02:36:09Z). Before that read, besides the bundle builds that sections 2 and 4 describe, three tests opened Musical_Instruments' test file through loadRealData and used only its earliest event time (section 2), and none sent a test event as a request: on valid, before 6bfdbab, TestRealDataValidReference and TestRealDataPopularityReference; and after 6bfdbab, TestRealDataStreamGolden on B1s6 and on B1s8, which logs nothing.
+
+#### H1: confirmed
+
+On Musical_Instruments' 42,595 test events, S3's recall@10 is 0.0317 and F0's 0.0200. S3 − F0 is +0.0117, with a 95% interval over users of [+0.0096, +0.0137] and over events of [+0.0102, +0.0131]. The interval over users is above 0, so H1 is confirmed (section 8). The SHA-256 of the rank files: F0 49588aab22c8ad3f094ae69325a8209bac3c198d6bb31034e40eb093ee72910d, S3 7cf93b94779ad5a76b93e0a389d0d2d4f6b1ca8871ad218557d6f05457d47c04.
+
+#### The conditions of section 7
+
+Musical_Instruments (MI) with a window of 30 days, Video_Games (VG) with 14; Video_Games' rows are exploratory (section 11).
+
+| Row | MI Recall@10 | MI Recall@20 | MI NDCG@10 | VG Recall@10 | VG Recall@20 | VG NDCG@10 |
+|---|---:|---:|---:|---:|---:|---:|
+| F0 | 0.0200 | 0.0293 | 0.0105 | 0.0197 | 0.0272 | 0.0094 |
+| S1 | 0.0186 | 0.0284 | 0.0105 | 0.0247 | 0.0362 | 0.0144 |
+| S2 | 0.0197 | 0.0292 | 0.0109 | 0.0298 | 0.0398 | 0.0172 |
+| S3a | 0.0237 | 0.0336 | 0.0126 | 0.0431 | 0.0618 | 0.0235 |
+| S3 | 0.0317 | 0.0522 | 0.0159 | 0.0375 | 0.0572 | 0.0207 |
+| R7 | 0.0242 | 0.0362 | 0.0136 | 0.0381 | 0.0532 | 0.0202 |
+| R30 | 0.0231 | 0.0347 | 0.0130 | 0.0355 | 0.0483 | 0.0184 |
+| S3+R30 | 0.0327 | 0.0539 | 0.0167 | 0.0394 | 0.0635 | 0.0225 |
+| vector reference | 0.0180 | 0.0279 | 0.0100 | 0.0166 | 0.0239 | 0.0089 |
+| popularity reference | 0.0155 | 0.0302 | 0.0073 | 0.0320 | 0.0510 | 0.0169 |
+
+Recall@10 on the events whose item has a train event and on the others:
+
+| Row | MI, item with train events (28,609) | MI, others (13,986) | VG, item with train events (17,091) | VG, others (26,158) |
+|---|---:|---:|---:|---:|
+| F0 | 0.0299 | 0.0000 | 0.0499 | 0.0000 |
+| S1 | 0.0278 | 0.0000 | 0.0439 | 0.0122 |
+| S2 | 0.0294 | 0.0000 | 0.0500 | 0.0166 |
+| S3a | 0.0307 | 0.0092 | 0.0150 | 0.0615 |
+| S3 | 0.0284 | 0.0386 | 0.0105 | 0.0551 |
+| R7 | 0.0317 | 0.0089 | 0.0557 | 0.0266 |
+| R30 | 0.0311 | 0.0066 | 0.0563 | 0.0219 |
+| S3+R30 | 0.0304 | 0.0374 | 0.0116 | 0.0575 |
+| vector reference | 0.0268 | 0.0000 | 0.0421 | 0.0000 |
+| popularity reference | 0.0077 | 0.0315 | 0.0148 | 0.0433 |
+
+| Δ Recall@10 | MI mean | MI 95% CI, users | MI 95% CI, events | VG mean | VG 95% CI, users | VG 95% CI, events |
+|---|---:|---:|---:|---:|---:|---:|
+| S3 − F0 | +0.0117 | [+0.0096, +0.0137] | [+0.0102, +0.0131] | +0.0178 | [+0.0152, +0.0202] | [+0.0155, +0.0197] |
+| S1 − F0 | -0.0014 | [-0.0020, -0.0008] | [-0.0020, -0.0008] | +0.0050 | [+0.0037, +0.0062] | [+0.0039, +0.0062] |
+| S2 − S1 | +0.0011 | [+0.0006, +0.0016] | [+0.0006, +0.0016] | +0.0051 | [+0.0042, +0.0061] | [+0.0042, +0.0060] |
+| S3a − S2 | +0.0039 | [+0.0031, +0.0048] | [+0.0031, +0.0047] | +0.0133 | [+0.0112, +0.0153] | [+0.0114, +0.0152] |
+| S3 − S3a | +0.0081 | [+0.0062, +0.0099] | [+0.0067, +0.0094] | -0.0057 | [-0.0075, -0.0039] | [-0.0074, -0.0039] |
+| S3 − R7 | +0.0075 | [+0.0056, +0.0094] | [+0.0060, +0.0091] | -0.0006 | [-0.0035, +0.0019] | [-0.0029, +0.0014] |
+| S3 − R30 | +0.0086 | [+0.0067, +0.0105] | [+0.0071, +0.0102] | +0.0019 | [-0.0009, +0.0044] | [-0.0005, +0.0041] |
+| R7 − F0 | +0.0042 | [+0.0029, +0.0054] | [+0.0030, +0.0053] | +0.0184 | [+0.0167, +0.0200] | [+0.0168, +0.0200] |
+| R30 − F0 | +0.0031 | [+0.0019, +0.0042] | [+0.0019, +0.0042] | +0.0158 | [+0.0142, +0.0174] | [+0.0142, +0.0173] |
+| S3+R30 − S3 | +0.0010 | [-0.0003, +0.0022] | [-0.0003, +0.0022] | +0.0019 | [+0.0007, +0.0032] | [+0.0007, +0.0031] |
+| S3+R30 − R30 | +0.0096 | [+0.0079, +0.0113] | [+0.0081, +0.0110] | +0.0039 | [+0.0011, +0.0063] | [+0.0013, +0.0060] |
+
+- In both categories S3 is above F0, with both intervals above 0.
+- The parts differ between them: popularity from the stream alone (S1 − F0) is -0.0014 on Musical_Instruments and +0.0050 on Video_Games, and the two recency features (S3 − S3a) +0.0081 and -0.0057; each of these intervals excludes 0.
+- Against rebuilding, S3 − R7 and S3 − R30 are +0.0075 and +0.0086 on Musical_Instruments, with intervals above 0, and -0.0006 and +0.0019 on Video_Games, with intervals that include 0.
+- On the events whose item has no train event, F0 and the vector reference have recall@10 0.0000 in both categories; on Musical_Instruments S1 and S2 do too, while S3a has 0.0092 and S3 0.0386.
+
+#### Read 1
+
+TestRealDataQuality's conditions on B1, and B0's reference and healthy rows, are in each category's `read-1.md` with the strata. B1's healthy recall@10 is above B0's in both: 0.0200 against 0.0187 on Musical_Instruments and 0.0197 against 0.0181 on Video_Games, B0 healthy minus B1 healthy within [-0.0023, -0.0005] and [-0.0024, -0.0008] over events. On Video_Games, B0 is b7ff0634dd7b and gives M7's healthy and reference recall@10 again, 0.0181 and 0.0043.
+
+#### Validity (section 10)
+
+A read that fails a condition stops before it writes its file, and each of the three counted reads wrote its file. The checks, at a5ff644, in internal/recommend:
+
+| Condition | Checked in |
+|---|---|
+| No response of a condition is degraded | `runConditionOn`, realquality_test.go:126-143, for read 1's conditions (realquality_test.go:445), B0 healthy (freshness_test.go:606), F0 to S3 (freshness_test.go:178) and each rebuilt bundle's requests (freshness_test.go:146) |
+| In TestRealDataQuality's forced conditions, every response reports its reason exactly when forced | realquality_test.go:126-146 |
+| Every test event at or after 1658002729837 | freshness_test.go:578-580 |
+| Each request's window count equals a binary search of its item's sorted event times | `checkWindowCounts`, freshness_test.go:352-372, called at freshness_test.go:646 |
+| Video_Games' read 2: F0's and the vector reference's ranks equal read 1's B1 healthy and B1 reference | freshness_test.go:653-663; the rank files' SHA-256 agree as well (bench-results/m8/Video_Games/read-2.md:46 and read-1.md:44, read-2.md:54 and read-1.md:43) |
+| Before a category's first read, on valid: the popularity reference's ranks equal fresh.py's for every window | `TestRealDataPopularityReference`, popularity_test.go:165-205 (`make bench-windows`): no rank differs, on Video_Games (d0eb293) and on all 41,284 valid events of Musical_Instruments (6bfdbab) |
+| Before it: B1's vector reference equals the grid script's | `TestRealDataValidReference`, realquality_test.go:466-502 (`make valid-reference`): equal on all 34,510 and 41,284 valid events (d0eb293, 6bfdbab) |
+
+Beside them, the checks of section 4 and of the amendment "2026-11-15: Video_Games read 2 stopped before any metric": each request is answered by a bundle rebuilt at or before its time from events before it (rebuilt_test.go:83-96); the rebuilt bundles' items, settings, rankers and rebuild times (freshness_test.go:247-306); B1s6 and B1s8 against B1 and the window chosen (freshness_test.go:310-325); every stream bundle's golden stream inputs against the Go state (freshness_test.go:632-645); a rebuilt bundle opened for a period has the rebuild time it had when checked (freshness_test.go:131-137).
