@@ -41,7 +41,7 @@ func Read(path string) (_ []Row, err error) {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	if !slices.Equal(head, []string{"user_id", "parent_asin", "rating", "timestamp"}) {
-		return nil, fmt.Errorf("%s: header %v", path, head)
+		return nil, fmt.Errorf("%s: header %v, want user_id,parent_asin,rating,timestamp", path, head)
 	}
 	var rows []Row
 	for {
@@ -54,7 +54,7 @@ func Read(path string) (_ []Row, err error) {
 		}
 		ts, err := strconv.ParseInt(rec[3], 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("%s line %d: timestamp %q", path, len(rows)+2, rec[3])
+			return nil, fmt.Errorf("%s line %d: timestamp %q: %w", path, len(rows)+2, rec[3], err)
 		}
 		rows = append(rows, Row{User: rec[0], Item: rec[1], TS: ts})
 	}

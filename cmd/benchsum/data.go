@@ -49,11 +49,11 @@ func readSamples(path string) ([]sample, error) {
 	defer f.Close() //nolint:errcheck // read only
 	z, err := gzip.NewReader(f)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	r := csv.NewReader(bufio.NewReader(z))
 	if _, err := r.Read(); err != nil { // header
-		return nil, err
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	var out []sample
 	for {
@@ -62,7 +62,7 @@ func readSamples(path string) ([]sample, error) {
 			return out, nil
 		}
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%s: %w", path, err)
 		}
 		s := sample{events: rec[1] == "/v1/events", errored: rec[5] == "error"}
 		var errs [6]error
@@ -98,7 +98,10 @@ func readJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(data, v)
+	if err := json.Unmarshal(data, v); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return nil
 }
 
 func writeJSON(path string, v any) error {
@@ -133,7 +136,11 @@ func readMetrics(path string) (metrics, error) {
 	}
 	defer f.Close() //nolint:errcheck // read only
 	p := expfmt.NewTextParser(model.UTF8Validation)
-	return p.TextToMetricFamilies(f)
+	m, err := p.TextToMetricFamilies(f)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return m, nil
 }
 
 // sum adds the values of name's counters and untyped series, or the

@@ -773,7 +773,7 @@ func benchMedians(path string) (string, error) {
 		for i := 2; i+1 < len(f); i += 2 {
 			v, err := strconv.ParseFloat(f[i], 64)
 			if err != nil {
-				return "", fmt.Errorf("%s: %q", path, line)
+				return "", fmt.Errorf("%s: %q: %w", path, line, err)
 			}
 			k := key{f[0], f[i+1]}
 			if _, ok := values[k]; !ok {

@@ -241,6 +241,38 @@ h_count{shard="1",kind="a"} 100
 	}
 }
 
+// A file that does not parse is named in the error: the readers run over
+// every file of a directory.
+func TestReadersNameTheFile(t *testing.T) {
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "bad")
+	if err := os.WriteFile(bad, []byte("x y z\nnot json, not gzip, not metrics"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var v struct{}
+	bench := filepath.Join(dir, "bench")
+	if err := os.WriteFile(bench, []byte("BenchmarkX 10 x ns/op\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, err := range map[string]error{
+		"readJSON":     readJSON(bad, &v),
+		"readMetrics":  func() error { _, err := readMetrics(bad); return err }(),
+		"readSamples":  func() error { _, err := readSamples(bad); return err }(),
+		"benchMedians": func() error { _, err := benchMedians(bench); return err }(),
+	} {
+		want := bad
+		if name == "benchMedians" {
+			want = bench
+		}
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: got %v, want an error naming %s", name, err, want)
+		}
+	}
+	if _, err := benchMedians(bench); err == nil || !strings.Contains(err.Error(), `parsing "x"`) {
+		t.Errorf("benchMedians: got %v, want the parse error", err)
+	}
+}
+
 func TestSamplesRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.csv.gz")
 	if err := writeGz(path, "i,path,due_ms,latency_ms,status,outcome,degraded,answered,shards\n"+
