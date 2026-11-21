@@ -283,7 +283,8 @@ func TestHealthyEjectionsReadBefore30And90(t *testing.T) {
 			t.Errorf("ejection first read in second %d: %v %v, want %v", c.first, v, ok, c.want)
 		}
 	}
-	if _, ok := testReads(t, 100, func(int) string { return "" }).deltaBefore("x", nil, 0, injectAt); ok {
+	// The first read is 3 ms in: none lies before second 0.
+	if _, ok := testReads(t, 100, func(int) string { return "x 1\n" }).deltaBefore("x", nil, 0, injectAt); ok {
 		t.Error("a delta from before the first read")
 	}
 }

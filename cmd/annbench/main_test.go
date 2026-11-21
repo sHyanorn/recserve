@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/sHyanorn/recserve/internal/bench"
@@ -165,15 +166,23 @@ func TestBadInput(t *testing.T) {
 	dir := t.TempDir()
 	writeSet(t, dir)
 	measure := func() float64 { return 1 }
-	for name, o := range map[string]options{
-		"unknown mode":   {mode: "x"},
-		"build no graph": {mode: "build", m: 8, efc: 16},
-		"missing graph":  {mode: "query", graph: filepath.Join(dir, "none"), efs: []int{10}, ks: []int{10}},
-		"k above truth":  {mode: "query", graph: filepath.Join(dir, "none"), efs: []int{200}, ks: []int{101}},
+	graph := filepath.Join(dir, "g.bin")
+	if err := run(options{mode: "build", dataDir: dir, set: "t", graph: graph, m: 8, efc: 16, workers: 1, seed: 1}, measure, t.Logf); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		o    options
+		want string // in the error
+	}{
+		"unknown mode":   {options{mode: "x"}, `unknown mode "x"`},
+		"build no graph": {options{mode: "build", m: 8, efc: 16}, "needs -graph"},
+		"missing graph":  {options{mode: "query", graph: filepath.Join(dir, "none"), efs: []int{10}, ks: []int{10}}, "no such file"},
+		"k above truth":  {options{mode: "query", graph: graph, efs: []int{200}, ks: []int{101}}, "k 101 above the"},
 	} {
+		o := tc.o
 		o.dataDir, o.set = dir, "t"
-		if err := run(o, measure, t.Logf); err == nil {
-			t.Errorf("%s: accepted", name)
+		if err := run(o, measure, t.Logf); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: got %v, want an error containing %q", name, err, tc.want)
 		}
 	}
 	if _, err := ints("10,x"); err == nil {
