@@ -23,6 +23,7 @@ test: ## Run all tests with the race detector
 	$(GO) test -race ./...
 
 test-real: ## Run internal/recommend on the real data (make data) and BUNDLE, a directory made by make bundle, but TestRealDataQuality, a registered test read; with the race detector it runs past go test's 10 minutes
+	@test -n "$(BUNDLE)" || { echo "set BUNDLE"; exit 1; }
 	RECSERVE_DATA=$(abspath $(DATA)) RECSERVE_BUNDLE=$(abspath $(BUNDLE)) $(GO) test -race -count=1 -timeout 50m -skip '^TestRealDataQuality$$' ./internal/recommend/
 
 e2e: ## Run the binaries, most tests against Kafka and Valkey (needs infra-up); pauses Valkey and stops Kafka, so run nothing else on them

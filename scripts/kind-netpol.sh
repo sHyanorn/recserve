@@ -26,11 +26,12 @@ kind load image-archive --name recserve "$tmp/client.tar"
 # manifests would set the gateways' version back (D048).
 k get deploy gateway >/dev/null 2>&1 || kubectl apply -k deploy/kind >/dev/null
 # The replica's name resolves once its address is in the Service's EndpointSlice.
-for _ in $(seq 180); do
+listed() {
   k get endpointslice -l kubernetes.io/service-name=annshard \
-    -o jsonpath='{.items[*].endpoints[*].targetRef.name}' | grep -qw annshard-0 && break
-  sleep 1
-done
+    -o jsonpath='{.items[*].endpoints[*].targetRef.name}' | grep -qw annshard-0
+}
+for _ in $(seq 180); do listed && break; sleep 1; done
+listed || { echo "annshard-0 is not in the annshard EndpointSlice after 180 s" >&2; exit 1; }
 for pod in pod/annshard-0 "$(k get pods -l app.kubernetes.io/name=gateway -o name | head -1)"; do
   k wait --for=jsonpath='{.status.phase}'=Running "$pod" --timeout=3m >/dev/null
 done

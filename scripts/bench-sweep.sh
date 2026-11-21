@@ -46,7 +46,9 @@ if (($# > 0)); then
 else
 	bisect=false
 	[[ $SCENARIO == replay && $CACHE == off ]] && bisect=true
-	while next=$(bin/benchsum next -dir "$OUT" -bisect="$bisect" -grid-max "${GRID_MAX:-0}") && [[ $next != done* ]]; do
+	while :; do
+		next=$(bin/benchsum next -dir "$OUT" -bisect="$bisect" -grid-max "${GRID_MAX:-0}")
+		[[ $next != done* ]] || break
 		run_rate "$next"
 	done
 	log "$next"

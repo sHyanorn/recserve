@@ -32,6 +32,13 @@ def load(path):
         return json.load(f)
 
 
+def matching(pattern):
+    found = glob.glob(pattern)
+    if not found:
+        raise SystemExit(f"report: no file matches {pattern}")
+    return found
+
+
 def style(t):
     plt.rcParams.update({
         "figure.facecolor": t["surface"], "axes.facecolor": t["surface"], "savefig.facecolor": t["surface"],
@@ -63,7 +70,7 @@ def save(fig, out, name, mode):
 
 def sweep(res, out, t, mode):
     """Replay with the cache off: p99 and the degraded share of each run by rate."""
-    runs = [load(p) for p in glob.glob(f"{res}/sweep-replay-cache-off/*.summary.json")]
+    runs = [load(p) for p in matching(f"{res}/sweep-replay-cache-off/*.summary.json")]
     fig, (top, bottom) = plt.subplots(2, 1, figsize=(7, 5), sharex=True, layout="constrained")
     for ax, key, scale, label in ((top, "p99_ms", 1, "p99, ms"), (bottom, "degraded_share", 100, "degraded, % of responses")):
         for clean, kw, name in ((True, dot(t, t["series"][0]), "valid, baselines not flagged"),
@@ -94,7 +101,7 @@ def faults(res, out, t, mode):
               "F4": "F4 ingest paused", "F5": "F5 replica paused", "F6": "F6 searches hang"}
     fig, axes = plt.subplots(len(names), 2, figsize=(8, 11), sharex=True, layout="constrained")
     for row, f in zip(axes, names):
-        for p in sorted(glob.glob(f"{res}/faults/{f}-run*.fault.json")):
+        for p in sorted(matching(f"{res}/faults/{f}-run*.fault.json")):
             r = load(p)
             color = t["series"][0] if r["pass"] else t["series"][1]
             secs = range(30, len(r["windows"]))
@@ -122,7 +129,7 @@ def swaps(res, out, t, mode):
     groups = (("gc", "GC on"), ("gc-off", "GOGC=off"))
     for ax, key, title in ((axes[0], "p99_ms", "p99 over the windows, ms"), (axes[1], "max_ms", "max over the windows, ms")):
         for i, (prefix, _) in enumerate(groups):
-            runs = [load(p) for p in sorted(glob.glob(f"{res}/swap/{prefix}-run*.swap.json"))]
+            runs = [load(p) for p in sorted(matching(f"{res}/swap/{prefix}-run*.swap.json"))]
             for j, (w, name) in enumerate((("swap_windows", "seconds with a swap"), ("other_windows", "other seconds"))):
                 ax.plot([i + (j - 0.5) * 0.25] * len(runs), [r[w][key] for r in runs], linestyle="none",
                         label=name if i == 0 else None, **dot(t, t["series"][j]))
@@ -138,7 +145,7 @@ def swaps(res, out, t, mode):
 
 def kind(res, out, t, mode):
     """p99 per second in kind with SPEC §5's budgets, the phases marked, one panel per run."""
-    paths = sorted(glob.glob(f"{res}/kind/run*.phases.json"))
+    paths = sorted(matching(f"{res}/kind/run*.phases.json"))
     fig, axes = plt.subplots(len(paths), 1, figsize=(7, 1.8 * len(paths)), sharex=True, sharey=True, layout="constrained")
     for ax, p in zip(axes, paths):
         r, run = load(p), load(p.replace(".phases.json", ".json"))
