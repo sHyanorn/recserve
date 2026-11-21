@@ -1,5 +1,5 @@
 // Package bench holds the helpers shared by the M0 risk checks: exact
-// percentiles, the noise baseline of docs/BENCHMARKS.md, .npy and raw
+// percentiles, the noise baseline of docs/BENCHMARK_PROTOCOL.md, .npy and raw
 // float32 readers, and the environment record.
 package bench
 

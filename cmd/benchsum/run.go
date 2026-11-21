@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// runSummary is one load run of a sweep (docs/BENCHMARKS.md, Load tests).
+// runSummary is one load run of a sweep (docs/BENCHMARK_PROTOCOL.md, Load tests).
 type runSummary struct {
 	Name     string   `json:"name"`
 	Rate     float64  `json:"rate"`
@@ -110,7 +110,7 @@ func meetsAsWritten(runs []runSummary) bool {
 }
 
 // sweepTable writes one row per rate: the run with the median p99
-// represents it, as docs/BENCHMARKS.md has it.
+// represents it, as docs/BENCHMARK_PROTOCOL.md has it.
 func sweepTable(w *strings.Builder, byRate map[float64][]runSummary, containers []string) {
 	fmt.Fprintf(w, "| Rate | Verdict | D005 as written | p50 | p90 | p99 | p99.9 | max | p99 of each run | Degraded, each run | Past budget | Cache hits |")
 	for _, c := range containers {
@@ -146,7 +146,7 @@ func sweepTable(w *strings.Builder, byRate map[float64][]runSummary, containers 
 type rateVerdict struct{ meets, stop bool }
 
 // nextRate returns the next rate of a sweep from the verdicts of the rates
-// run so far (docs/BENCHMARKS.md, Load tests): the grid 100, 200, 400, 800,
+// run so far (docs/BENCHMARK_PROTOCOL.md, Load tests): the grid 100, 200, 400, 800,
 // then steps of 400, up to the first rate that stops it, or to gridMax if
 // that is above 0; then, with bisect, halving between the highest grid rate
 // that meets the headline condition and the next grid rate until the two

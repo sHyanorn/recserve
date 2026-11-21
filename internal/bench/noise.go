@@ -11,7 +11,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// The noise baseline of docs/BENCHMARKS.md: a dot product of a 64-value
+// The noise baseline of docs/BENCHMARK_PROTOCOL.md: a dot product of a 64-value
 // query against 16,384 rows, 200 passes, timed 30 times.
 const (
 	noiseDim     = 64

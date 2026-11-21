@@ -37,7 +37,7 @@ FROM gcr.io/distroless/static-debian13:nonroot@sha256:25ac8f0c3b2334a9eb05452266
 COPY --from=build /out/ingest /usr/local/bin/
 ENTRYPOINT ["/usr/local/bin/ingest"]
 
-# The faulty replica of the fault runs (docs/BENCHMARKS.md, F6), built only
+# The faulty replica of the fault runs (docs/BENCHMARK_PROTOCOL.md, F6), built only
 # when this target is named; make images does not.
 FROM build AS faultshard-build
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \

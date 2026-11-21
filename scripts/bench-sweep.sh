@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Load sweep of docs/BENCHMARKS.md (Load tests and its M6 additions):
+# Load sweep of docs/BENCHMARK_PROTOCOL.md (Load tests and its M6 additions):
 #   scripts/bench-sweep.sh SCENARIO CACHE [RATE...]
 # SCENARIO is replay, writes or repeats, CACHE on or off. Each rate runs
 # three times on fresh services, each run bracketed by noise baselines and

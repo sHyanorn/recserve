@@ -14,7 +14,7 @@ import (
 
 // compareTable writes the before and after ranges of scripts/bench-compare.sh's
 // runs, and a verdict per quantity: lower after or before only if the three
-// runs of one side are all below the three of the other (docs/BENCHMARKS.md).
+// runs of one side are all below the three of the other (docs/BENCHMARK_PROTOCOL.md).
 func compareTable(w *strings.Builder, dir string) error {
 	micro, err := microRanges(dir)
 	if err != nil {
@@ -92,7 +92,7 @@ func span(v []float64) string {
 
 // lower compares the runs before and after a change: one side is lower
 // only if each of its runs is below each of the other's, with three runs a
-// side (BENCHMARKS, Profiles and an optimization).
+// side (BENCHMARK_PROTOCOL, Profiles and an optimization).
 func lower(before, after []float64) string {
 	switch {
 	case len(before) < 3 || len(after) < 3:
@@ -194,7 +194,7 @@ func recallSpan(v []float64) string {
 	return fmt.Sprintf("%.4f to %.4f", slices.Min(v), slices.Max(v))
 }
 
-// recallVerdict checks docs/BENCHMARKS.md's bound on the same graph file:
+// recallVerdict checks docs/BENCHMARK_PROTOCOL.md's bound on the same graph file:
 // recall@100 before and after differs by at most 0.001. Recalls are counts
 // over 10^6, so the difference is compared in those units.
 func recallVerdict(before, after []float64) string {

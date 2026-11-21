@@ -52,7 +52,7 @@ func summary(d []time.Duration) string {
 	return fmt.Sprintf("p50 %.0f µs, p99 %.0f µs", s.P50, s.P99)
 }
 
-// recallAt is recall@k as docs/BENCHMARKS.md defines it for R2: a returned
+// recallAt is recall@k as docs/BENCHMARK_PROTOCOL.md defines it for R2: a returned
 // item counts if it scores at least the true k-th score less 1e-5.
 func recallAt(got, truth []vec.Hit, k int) float64 {
 	if len(truth) < k {

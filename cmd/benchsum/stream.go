@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-// The stream state's cost in serving (docs/BENCHMARKS.md, Stream state in
+// The stream state's cost in serving (docs/BENCHMARK_PROTOCOL.md, Stream state in
 // serving; D062). A reading that could not be taken is nil, written as
 // null and shown as "missing", never as 0.
 
@@ -433,7 +433,7 @@ func degradedOf(r streamRun) string {
 }
 
 // streamTable writes, per rate, each run of both groups and, with
-// readings, the readings of docs/BENCHMARKS.md, Stream state in serving.
+// readings, the readings of docs/BENCHMARK_PROTOCOL.md, Stream state in serving.
 func streamTable(w *strings.Builder, runs []streamRun, readings bool) {
 	byRate := map[float64][]streamRun{}
 	for _, r := range runs {

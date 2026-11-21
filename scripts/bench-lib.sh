@@ -1,4 +1,4 @@
-# Shared by the benchmark scripts (docs/BENCHMARKS.md, M6; D052). Sourced,
+# Shared by the benchmark scripts (docs/BENCHMARK_PROTOCOL.md, M6; D052). Sourced,
 # with DATA, VERSION, OUT and REF set: the data directory, the bundle
 # version, the result directory, and the session's noise reference in ns
 # (make bench-ref). Raw samples go to OUT/raw, which git ignores.
@@ -125,7 +125,7 @@ one_run() {
 	bin/benchsum run -prefix "$p" -samples "$(samples "$p")"
 }
 
-# env_record: the environment of docs/BENCHMARKS.md, once per result directory.
+# env_record: the environment of docs/BENCHMARK_PROTOCOL.md, once per result directory.
 env_record() {
 	[[ -s $OUT/env.txt ]] && return
 	{

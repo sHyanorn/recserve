@@ -1,4 +1,4 @@
-// Command onnx runs risk check R1 of docs/BENCHMARKS.md: parity and latency of
+// Command onnx runs risk check R1 of docs/BENCHMARK_PROTOCOL.md: parity and latency of
 // ONNX Runtime called from Go, against a pure-Go reference.
 package main
 

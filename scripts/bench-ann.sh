@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ANN of docs/BENCHMARKS.md (ANN in M6, and annbench's profile in Profiles
+# ANN of docs/BENCHMARK_PROTOCOL.md (ANN in M6, and annbench's profile in Profiles
 # and an optimization):
 #   scripts/bench-ann.sh profile|table
 # profile: a glove M = 16 graph of its own, then annbench's query at ef 400,

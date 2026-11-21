@@ -1,6 +1,6 @@
 """Histories of recserve's test events in recserve's data and in seqrec-lab's.
 
-docs/BENCHMARKS.md, seqrec-lab's bundle against the baseline: for each test
+docs/BENCHMARK_PROTOCOL.md, seqrec-lab's bundle against the baseline: for each test
 event of recserve's split, the length of its history in recserve (the
 user's events before it in the train, valid and test files) and the number
 of the same user's events before it in seqrec-lab's data, and the repeated
@@ -33,7 +33,7 @@ import numpy as np
 ZERO_CORE_SHA256 = "30692f9806e33a7b5d8b599b73d7ca33dbfefb0abdfc1578052a101f2e64b3cd"
 
 # seqrec-lab's figures for Video_Games' global temporal split, and the share
-# of recserve's test targets in its vocabulary (docs/BENCHMARKS.md), in %.
+# of recserve's test targets in its vocabulary (docs/BENCHMARK_PROTOCOL.md), in %.
 EXPECTED = {"T": 1649219168790, "T_val": 1618224866975, "vocabulary": 21930, "target_share": 41.8}
 
 # pandas.read_csv's default missing values (pandas 2 and 3), which seqrec-lab's

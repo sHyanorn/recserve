@@ -20,7 +20,7 @@ import (
 )
 
 // Scatter-gather over shard processes, for the comparison of
-// docs/BENCHMARKS.md (Hand-written HNSW): each shard serves the rows that
+// docs/BENCHMARK_PROTOCOL.md (Hand-written HNSW): each shard serves the rows that
 // shard.Of assigns to it with its own index; the parent sends every query
 // to all shards and merges their top k. Messages are little-endian: a
 // request is k and ef as int32, then the query's float32 values; a reply

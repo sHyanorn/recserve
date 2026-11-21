@@ -1,4 +1,4 @@
-"""faiss IndexHNSWFlat reference for R2 (docs/BENCHMARKS.md), on one thread.
+"""faiss IndexHNSWFlat reference for R2 (docs/BENCHMARK_PROTOCOL.md), on one thread.
 
 usage: faiss_ref.py DATA SET M EFC OUT_JSON
 

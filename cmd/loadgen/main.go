@@ -1,5 +1,5 @@
 // Command loadgen offers the test events of the split to a running gateway
-// at a fixed rate and reports the latency distribution (docs/BENCHMARKS.md,
+// at a fixed rate and reports the latency distribution (docs/BENCHMARK_PROTOCOL.md,
 // Load tests).
 //
 // Latency counts from the time each request was due, so a stall of the

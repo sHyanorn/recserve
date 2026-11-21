@@ -27,7 +27,7 @@ type Config struct {
 }
 
 // DefaultConfig is two exact shards; the HNSW settings are those of
-// docs/BENCHMARKS.md, used when Mode is HNSW.
+// docs/BENCHMARK_PROTOCOL.md, used when Mode is HNSW.
 var DefaultConfig = Config{Shards: 2, Mode: Exact, HNSW: hnsw.Config{M: 16, EfConstruction: 200, Seed: 1}, Ef: 400}
 
 // checkEvery is how many rows an exact search scans between checks of its

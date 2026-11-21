@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// swapRun is one run of docs/BENCHMARKS.md's Bundle swaps under load.
+// swapRun is one run of docs/BENCHMARK_PROTOCOL.md's Bundle swaps under load.
 // Times are in ms from the due time of the run's first request.
 type swapRun struct {
 	Name    string     `json:"name"`
@@ -196,7 +196,7 @@ func readGCs(prefix string, start float64) ([][2]float64, error) {
 }
 
 // swapTable writes the swap runs of dir and the attribution of
-// docs/BENCHMARKS.md: with GOGC=off (runs named gc-off-*), is the median
+// docs/BENCHMARK_PROTOCOL.md: with GOGC=off (runs named gc-off-*), is the median
 // over runs of the max over swap windows at most 1.2 times the median of the
 // max over the other windows?
 func swapTable(w *strings.Builder, dir string) error {

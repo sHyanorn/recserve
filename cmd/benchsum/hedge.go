@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// hedgeRun is one run of docs/BENCHMARKS.md's Hedge delay, between the
+// hedgeRun is one run of docs/BENCHMARK_PROTOCOL.md's Hedge delay, between the
 // gateway's scrapes at the start (at0) and the end (at1) of the window.
 type hedgeRun struct {
 	runSummary

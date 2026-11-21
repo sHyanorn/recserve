@@ -25,7 +25,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/shard"
 )
 
-// The stream state's cost in serving (docs/BENCHMARKS.md, Stream state in
+// The stream state's cost in serving (docs/BENCHMARK_PROTOCOL.md, Stream state in
 // serving): its benchmarks on the train and valid splits, and the gate
 // that compares a gateway in compose with the pipeline in process.
 
@@ -302,7 +302,7 @@ func (g gateway) compare(t *testing.T, p *Pipeline, rows []dataset.Row) float64 
 	return worst
 }
 
-// TestRealDataStreamGateway is the gate of docs/BENCHMARKS.md, Stream state
+// TestRealDataStreamGateway is the gate of docs/BENCHMARK_PROTOCOL.md, Stream state
 // in serving. It runs when RECSERVE_GATEWAY names a gateway that serves the
 // bundle at RECSERVE_BUNDLE, which names a window, with the train and valid
 // splits of RECSERVE_DATA preloaded and a new events topic;

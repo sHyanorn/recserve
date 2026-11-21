@@ -1,5 +1,5 @@
 // Command benchsum turns the files of the benchmark scripts (scripts/bench-*.sh)
-// into the summaries and verdicts of docs/BENCHMARKS.md:
+// into the summaries and verdicts of docs/BENCHMARK_PROTOCOL.md:
 //
 //	benchsum run -prefix P -samples S            a sweep run: P.summary.json
 //	benchsum rate -dir D -rate R                 whether rate R meets the headline condition, and whether the sweep stops
@@ -75,7 +75,7 @@ func run(args []string, out io.Writer) error {
 	reads := fs.String("reads", "", "fault: the run's per-second reads, written by scripts/bench-fault.sh")
 	dir := fs.String("dir", "", "directory of a sweep's or of the fault runs' files")
 	rate := fs.Float64("rate", 0, "rate of the sweep")
-	fault := fs.String("fault", "", "F1 to F6, as docs/BENCHMARKS.md names them, or none")
+	fault := fs.String("fault", "", "F1 to F6, as docs/BENCHMARK_PROTOCOL.md names them, or none")
 	after := fs.String("after", "", "a /metrics scrape")
 	before := fs.String("before", "", "an earlier scrape of the same process")
 	name := fs.String("name", "", "histogram name")
@@ -353,7 +353,7 @@ func chosen(attempts []faultRun) []faultRun {
 	return out
 }
 
-// faultVerdict is a fault's verdict by the rule (BENCHMARKS, Faults): it
+// faultVerdict is a fault's verdict by the rule (BENCHMARK_PROTOCOL, Faults): it
 // passes if all three of its valid runs pass, and fails if one of them
 // fails; with fewer valid runs and none failed it is not judged.
 func faultVerdict(runs []faultRun) string {

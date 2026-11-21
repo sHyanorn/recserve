@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bundle swaps under load of docs/BENCHMARKS.md (D031):
+# Bundle swaps under load of docs/BENCHMARK_PROTOCOL.md (D031):
 #   scripts/bench-swap.sh RATE [RUNS]
 # RATE is half the headline rate; replay, cache off, 10 s warmup and 150 s
 # measured. Every 15 s from 15 s on, the admin API swaps to the other of

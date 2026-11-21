@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fault runs of docs/BENCHMARKS.md (Faults, setup and pass criteria (M6), as
+# Fault runs of docs/BENCHMARK_PROTOCOL.md (Faults, setup and pass criteria (M6), as
 # amended for M7) and the runs of Valkey circuit breaker openings (M7):
 #   scripts/bench-fault.sh FAULT RATE [RUNS]
 # FAULT is F1 to F6, with the cache off, or none: nothing injected and the

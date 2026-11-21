@@ -28,7 +28,7 @@ import (
 	"github.com/sHyanorn/recserve/internal/vec"
 )
 
-// The quality evaluation's settings (docs/BENCHMARKS.md, Recommendation
+// The quality evaluation's settings (docs/BENCHMARK_PROTOCOL.md, Recommendation
 // quality).
 const (
 	qualityK         = 20 // items per request
@@ -349,7 +349,7 @@ func meanOf(v []float64) float64 {
 	return s / float64(len(v))
 }
 
-// TestRealDataQuality evaluates recommendation quality as docs/BENCHMARKS.md
+// TestRealDataQuality evaluates recommendation quality as docs/BENCHMARK_PROTOCOL.md
 // fixes it (Recommendation quality), on the real data and bundle (see
 // TestRealDataSmoke) with the test split preloaded as well: one request per
 // test event through the pipeline in process, every budget off, under each

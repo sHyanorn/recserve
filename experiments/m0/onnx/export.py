@@ -1,4 +1,4 @@
-"""Export the R1 models (docs/BENCHMARKS.md) with random weights, plus parity cases.
+"""Export the R1 models (docs/BENCHMARK_PROTOCOL.md) with random weights, plus parity cases.
 
 Writes to OUT: enc_l50.onnx, enc_l200.onnx, ranker.onnx, the ranker weights as
 .npy for the pure-Go reference, and per model 100 seeded inputs with the

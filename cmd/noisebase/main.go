@@ -1,4 +1,4 @@
-// Command noisebase measures the noise baseline of docs/BENCHMARKS.md n
+// Command noisebase measures the noise baseline of docs/BENCHMARK_PROTOCOL.md n
 // times and reports the median. With the default n = 10 on an idle machine
 // the median is the session reference; with -ref the median is checked
 // against a reference. Every baseline of a session is taken with the same

@@ -1,5 +1,5 @@
 // Command annbench measures the hand-written HNSW index (internal/hnsw)
-// with the R2 protocol of docs/BENCHMARKS.md, on a set written by
+// with the R2 protocol of docs/BENCHMARK_PROTOCOL.md, on a set written by
 // experiments/m0/ann/prep.py.
 //
 //	annbench -mode checkgt -set glove                                 verify the ground truth of the first queries

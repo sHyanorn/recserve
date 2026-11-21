@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hedge delay of docs/BENCHMARKS.md (Hedge delay, D041):
+# Hedge delay of docs/BENCHMARK_PROTOCOL.md (Hedge delay, D041):
 #   scripts/bench-hedge.sh RATE
 # RATE is half the headline rate; replay, cache off. Three runs with hedging
 # off give each shard's p95 of a call to a replica and so the default delay;

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rollouts with SPEC §5's budgets of docs/BENCHMARKS.md (D047):
+# Rollouts with SPEC §5's budgets of docs/BENCHMARK_PROTOCOL.md (D047):
 #   scripts/bench-kind.sh [RUNS]
 # Each run on a new cluster (scripts/kind-up.sh): the gateways' stage budgets
 # set back to the binary's defaults, SPEC §5's, in place of kind's 100 ms;

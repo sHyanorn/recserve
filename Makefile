@@ -78,36 +78,36 @@ kind-netpol: ## Check in kind that only the gateways reach the replicas' port; f
 kind-down: ## Delete the kind cluster
 	kind delete cluster --name recserve
 
-bench-ref: build ## Take the session's noise reference on an idle machine (docs/BENCHMARKS.md), before the bench- targets
+bench-ref: build ## Take the session's noise reference on an idle machine (docs/BENCHMARK_PROTOCOL.md), before the bench- targets
 	mkdir -p $(dir $(REF_FILE)) && taskset -c 1 bin/noisebase -n 10 -cpu 1 -out $(REF_FILE)
 
-bench-sweep: build ## Load sweep in compose (docs/BENCHMARKS.md): SCENARIO replay, writes or repeats, CACHE on or off, RATES (empty: the grid, to GRID_MAX if set); DATA, VERSION
+bench-sweep: build ## Load sweep in compose (docs/BENCHMARK_PROTOCOL.md): SCENARIO replay, writes or repeats, CACHE on or off, RATES (empty: the grid, to GRID_MAX if set); DATA, VERSION
 	$(BENCH) GRID_MAX=$(GRID_MAX) scripts/bench-sweep.sh $(SCENARIO) $(CACHE) $(RATES)
 
-bench-fault: build ## Fault runs in compose (docs/BENCHMARKS.md): FAULT F1 to F6 (cache off), or none for the breaker's runs (cache on), RATE half the headline rate; DATA, VERSION
+bench-fault: build ## Fault runs in compose (docs/BENCHMARK_PROTOCOL.md): FAULT F1 to F6 (cache off), or none for the breaker's runs (cache on), RATE half the headline rate; DATA, VERSION
 	$(BENCH) scripts/bench-fault.sh $(FAULT) $(RATE)
 
-bench-hedge: build ## The hedge delay's default from shard call latencies in compose (docs/BENCHMARKS.md): RATE half the headline rate; DATA, VERSION
+bench-hedge: build ## The hedge delay's default from shard call latencies in compose (docs/BENCHMARK_PROTOCOL.md): RATE half the headline rate; DATA, VERSION
 	$(BENCH) scripts/bench-hedge.sh $(RATE)
 
-bench-swap: build ## Bundle swaps under load in compose, with GC on and off (docs/BENCHMARKS.md): RATE half the headline rate; DATA, VERSION
+bench-swap: build ## Bundle swaps under load in compose, with GC on and off (docs/BENCHMARK_PROTOCOL.md): RATE half the headline rate; DATA, VERSION
 	$(BENCH) scripts/bench-swap.sh $(RATE)
 
-bench-kind: build ## kind-check's rollouts and swap to VERSION with SPEC §5's budgets, three new clusters (docs/BENCHMARKS.md); DATA, VERSION
+bench-kind: build ## kind-check's rollouts and swap to VERSION with SPEC §5's budgets, three new clusters (docs/BENCHMARK_PROTOCOL.md); DATA, VERSION
 	$(BENCH) scripts/bench-kind.sh
 
-bench-vegeta: build ## loadgen and vegeta at RATE, half the headline rate, three runs each (docs/BENCHMARKS.md); needs vegeta v12.12.0; DATA, VERSION
+bench-vegeta: build ## loadgen and vegeta at RATE, half the headline rate, three runs each (docs/BENCHMARK_PROTOCOL.md); needs vegeta v12.12.0; DATA, VERSION
 	$(BENCH) scripts/bench-vegeta.sh $(RATE)
 
-bench-ann: build ## ANN in docs/BENCHMARKS.md, STEP profile or table: annbench and faiss on glove and synth in ANN_DATA (DATA/ann); PY, a Python with faiss-cpu 1.15.1, h5py and numpy
+bench-ann: build ## ANN in docs/BENCHMARK_PROTOCOL.md, STEP profile or table: annbench and faiss on glove and synth in ANN_DATA (DATA/ann); PY, a Python with faiss-cpu 1.15.1, h5py and numpy
 	$(BENCH) ANN_DATA=$(ANN_DATA) PY=$(PY) scripts/bench-ann.sh $(STEP)
 
-bench-quality: ## Recommendation quality (docs/BENCHMARKS.md) into bench-results/m7/quality.md: TestRealDataQuality on DATA and the bundle DATA/bundle/VERSION; RECSERVE_ORT_LIB for its ONNX models
+bench-quality: ## Recommendation quality (docs/BENCHMARK_PROTOCOL.md) into bench-results/m7/quality.md: TestRealDataQuality on DATA and the bundle DATA/bundle/VERSION; RECSERVE_ORT_LIB for its ONNX models
 	mkdir -p bench-results/m7
 	RECSERVE_DATA=$(abspath $(DATA)) RECSERVE_BUNDLE=$(abspath $(DATA))/bundle/$(VERSION) RECSERVE_QUALITY_OUT=$(abspath bench-results/m7/quality.md) \
 		$(GO) test -count=1 -timeout 60m -run '^TestRealDataQuality$$' ./internal/recommend/
 
-bench-bundles: ## A bundle against the baseline (docs/BENCHMARKS.md, seqrec-lab's bundle against the baseline) into bench-results/m7/bundles-<B's directory name>.md, a new file: TestRealDataQuality on DATA, the baseline DATA/bundle/VERSION and BUNDLE_B, a bundle directory; RECSERVE_ORT_LIB for their ONNX models
+bench-bundles: ## A bundle against the baseline (docs/BENCHMARK_PROTOCOL.md, seqrec-lab's bundle against the baseline) into bench-results/m7/bundles-<B's directory name>.md, a new file: TestRealDataQuality on DATA, the baseline DATA/bundle/VERSION and BUNDLE_B, a bundle directory; RECSERVE_ORT_LIB for their ONNX models
 	@test -n "$(VERSION)" -a -n "$(BUNDLE_B)" || { echo "set VERSION and BUNDLE_B"; exit 1; }
 	@test ! -e bench-results/m7/bundles-$(notdir $(abspath $(BUNDLE_B))).md || { echo "bench-results/m7/bundles-$(notdir $(abspath $(BUNDLE_B))).md exists"; exit 1; }
 	RECSERVE_DATA=$(abspath $(DATA)) RECSERVE_BUNDLE=$(abspath $(DATA))/bundle/$(VERSION) RECSERVE_BUNDLE_B=$(abspath $(BUNDLE_B)) \
@@ -144,7 +144,7 @@ bench-read: ## Test read READ of CATEGORY (docs/registration/m8-freshness.md, se
 		RECSERVE_FRESHNESS_OUT=$(abspath bench-results/m8/$(CATEGORY))/read-$(READ).md RECSERVE_RANKS_DIR=$(abspath $(RANKS)) \
 		$(GO) test -count=1 -timeout 0 -run '^TestRealDataFreshness$$' ./internal/recommend/
 
-bench-stream: images ## The stream state's cost in serving (docs/BENCHMARKS.md, Stream state in serving): STEP gate, micro, phase1, swap, profile or phase2, in that order, on DATA's bundles; RECSERVE_ORT_LIB for gate and micro
+bench-stream: images ## The stream state's cost in serving (docs/BENCHMARK_PROTOCOL.md, Stream state in serving): STEP gate, micro, phase1, swap, profile or phase2, in that order, on DATA's bundles; RECSERVE_ORT_LIB for gate and micro
 	$(GO) build -buildvcs=false -o bin/ ./cmd/...
 	DATA=$(abspath $(DATA)) scripts/bench-stream.sh $(STEP)
 
@@ -156,7 +156,7 @@ bench-exact: ## Exact search of every item of the bundle DATA/bundle/VERSION on 
 report: ## Charts of docs/BENCHMARKS.md's M6 results into bench-results/m6/figures (needs uv)
 	cd tools/report && uv run --locked python report.py $(abspath bench-results/m6) $(abspath bench-results/m6/figures)
 
-bench-profile: build ## CPU profiles of the gateway and a replica under load in compose (docs/BENCHMARKS.md); DATA, VERSION
+bench-profile: build ## CPU profiles of the gateway and a replica under load in compose (docs/BENCHMARK_PROTOCOL.md); DATA, VERSION
 	$(BENCH) scripts/bench-profile.sh
 
 bench-compare: build ## Before and after an optimization: BEFORE, a commit; vec's benchmark MICRO (Dot), annbench on the glove graph ANN_GRAPH in ANN_DATA if set, the service at RATES (200 400); DATA, VERSION, DOCKER_BUILD_FLAGS, OUT

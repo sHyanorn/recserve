@@ -11,7 +11,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
-// faultRun is one fault run judged by the criteria of docs/BENCHMARKS.md
+// faultRun is one fault run judged by the criteria of docs/BENCHMARK_PROTOCOL.md
 // (Faults, setup and pass criteria (M6), as amended for M7), or, with fault
 // none, a run for the breaker's openings, judged for validity only. Its
 // phases are warmup [0, 30 s), healthy [30 s, inject), fault [inject,

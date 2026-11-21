@@ -1,5 +1,5 @@
 // Package bench holds what the benchmark commands share, as fixed in
-// docs/BENCHMARKS.md: exact percentiles, the noise baseline, GC and heap
+// docs/BENCHMARK_PROTOCOL.md: exact percentiles, the noise baseline, GC and heap
 // statistics, the ANN datasets with their recall definition, and the
 // environment record.
 package bench

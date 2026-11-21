@@ -1,4 +1,4 @@
-"""Prepare the R2 datasets (docs/BENCHMARKS.md) as raw little-endian files.
+"""Prepare the R2 datasets (docs/BENCHMARK_PROTOCOL.md) as raw little-endian files.
 
 usage: prep.py GLOVE_HDF5 OUT
 

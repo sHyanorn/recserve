@@ -24,7 +24,7 @@ type eventSubset struct {
 }
 
 // comparisonSubsets returns the subsets of the secondary readings of
-// docs/BENCHMARKS.md (seqrec-lab's bundle against the baseline): the events
+// docs/BENCHMARK_PROTOCOL.md (seqrec-lab's bundle against the baseline): the events
 // whose target is in b's items, those whose target has a non-zero vector in
 // base, and those in both. A target is looked up by its raw ID in each
 // bundle.
@@ -53,7 +53,7 @@ type bundleRef struct {
 }
 
 // comparisonReport returns the comparison of b's reference row with base's
-// (docs/BENCHMARKS.md, seqrec-lab's bundle against the baseline): the
+// (docs/BENCHMARK_PROTOCOL.md, seqrec-lab's bundle against the baseline): the
 // primary result on all events, b minus base for each metric with the
 // paired bootstrap's 95% interval over events, then the same on each
 // subset, then healthy, b's healthy pipeline row, described only.
@@ -144,7 +144,7 @@ func metricValues(ranks []int, keep []bool, of func(int) float64) []float64 {
 
 // compareRealBundles compares the reference row of the bundle in dir, B,
 // with base's, ranks and noVector, on rd's test events with the test split
-// preloaded (docs/BENCHMARKS.md, seqrec-lab's bundle against the baseline),
+// preloaded (docs/BENCHMARK_PROTOCOL.md, seqrec-lab's bundle against the baseline),
 // and runs B's healthy pipeline. Loaded twice, the same bundle must give
 // the same ranks. The report goes to the file RECSERVE_COMPARE_OUT names, if
 // set, and to the log.

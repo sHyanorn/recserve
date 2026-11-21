@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Before and after an optimization (docs/BENCHMARKS.md, Profiles and an
+# Before and after an optimization (docs/BENCHMARK_PROTOCOL.md, Profiles and an
 # optimization): scripts/bench-compare.sh BEFORE, a commit; after is the
 # working tree's HEAD. Builds vec's test binary, annbench and the images of
 # both, then alternates before and after, three runs each: the vec benchmark

@@ -56,7 +56,7 @@ func workers(n int, do func(i int)) {
 	wg.Wait()
 }
 
-// TestRealDataValkey is the stage check of docs/BENCHMARKS.md (Valkey
+// TestRealDataValkey is the stage check of docs/BENCHMARK_PROTOCOL.md (Valkey
 // path): on the real bundle and the requests of realQueries, sent by four
 // workers in two rounds, it reports the latency and the time of the history
 // read and the cache lookup, with the store and the cache in the process

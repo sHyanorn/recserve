@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cross-check of docs/BENCHMARKS.md (Load tests, M6): at RATE, half the
+# Cross-check of docs/BENCHMARK_PROTOCOL.md (Load tests, M6): at RATE, half the
 # headline rate, replay with the cache off, three loadgen runs and three
 # vegeta runs alternate, each on fresh services with noise baselines.
 # vegeta (v12.12.0, go install github.com/tsenart/vegeta/v12@v12.12.0) sends

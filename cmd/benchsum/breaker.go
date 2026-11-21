@@ -13,7 +13,7 @@ import (
 
 // opening is a change of the gateway's Valkey circuit breaker from closed
 // to open, attributed by the Valkey calls that failed in the interval
-// between reads that holds it and the one before (docs/BENCHMARKS.md,
+// between reads that holds it and the one before (docs/BENCHMARK_PROTOCOL.md,
 // Valkey circuit breaker openings).
 type opening struct {
 	AtS         float64            `json:"at_s"`             // from the first request's due time

@@ -1,5 +1,5 @@
 // Command faultshard is annshard with one fault, for the fault runs of
-// docs/BENCHMARKS.md (F6) only: no manifest and no default image build
+// docs/BENCHMARK_PROTOCOL.md (F6) only: no manifest and no default image build
 // runs it. After SIGUSR1 every search waits until its caller cancels it,
 // while gRPC's transport goes on answering keepalive pings, so the gateway
 // keeps the replica as ready (D041 Limits point 2); SIGUSR2 ends the fault.

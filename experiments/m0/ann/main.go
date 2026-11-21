@@ -1,4 +1,4 @@
-// Command ann runs risk check R2 of docs/BENCHMARKS.md: coder/hnsw and exact
+// Command ann runs risk check R2 of docs/BENCHMARK_PROTOCOL.md: coder/hnsw and exact
 // search in pure Go, and the recall of faiss results written by faiss_ref.py.
 package main
 

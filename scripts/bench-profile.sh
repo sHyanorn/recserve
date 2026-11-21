@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CPU profiles of docs/BENCHMARKS.md (Profiles and an optimization): replay,
+# CPU profiles of docs/BENCHMARK_PROTOCOL.md (Profiles and an optimization): replay,
 # cache off, 400 requests/s; 30 s profiles of the gateway and of annshard-0
 # while each container's CPU per request is measured. The profiles' top
 # functions go to OUT/profile-*.txt, the profiles to OUT/raw.

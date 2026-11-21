@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The stream state's cost in serving, docs/BENCHMARKS.md, Stream state in
+# The stream state's cost in serving, docs/BENCHMARK_PROTOCOL.md, Stream state in
 # serving (D062):
 #   scripts/bench-stream.sh STEP
 # STEP is gate, micro, phase1, swap, profile or phase2, in that order, run
