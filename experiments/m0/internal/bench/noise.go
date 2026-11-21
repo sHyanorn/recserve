@@ -57,7 +57,7 @@ func MeasureNoise(cpu int) float64 {
 	if err := unix.SchedGetaffinity(0, &old); err == nil {
 		set.Set(cpu)
 		if unix.SchedSetaffinity(0, &set) == nil {
-			defer unix.SchedSetaffinity(0, &old) //nolint:errcheck
+			defer unix.SchedSetaffinity(0, &old) //nolint:errcheck // best effort, as the pin above
 		}
 	}
 	t := make([]time.Duration, noiseTimings)

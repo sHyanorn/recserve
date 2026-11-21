@@ -99,12 +99,13 @@ func (e *Experiment) Assign(user string) Arm {
 	return e.arm(Bucket(e.Name, user))
 }
 
-// arm returns the arm that holds bucket b.
+// arm returns the arm that holds bucket b; the last arm holds every bucket left.
 func (e *Experiment) arm(b int) Arm {
-	for _, a := range e.Arms {
+	last := len(e.Arms) - 1
+	for _, a := range e.Arms[:last] {
 		if b < a.upto {
 			return a
 		}
 	}
-	return e.Arms[len(e.Arms)-1] // unreachable: the last arm holds every bucket left
+	return e.Arms[last]
 }

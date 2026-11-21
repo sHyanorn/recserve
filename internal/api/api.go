@@ -176,16 +176,13 @@ func (s *Server) instrument(route string, h func(http.ResponseWriter, *http.Requ
 		r.Body = http.MaxBytesReader(w, r.Body, MaxBody)
 		if err := h(sw, r); err != nil {
 			code := http.StatusInternalServerError
-			var be badRequest
 			var he httpError
 			var tooLarge *http.MaxBytesError
 			switch {
+			case errors.As(err, &tooLarge): // before httpError: an oversized body's decode error comes wrapped as a bad request
+				code = http.StatusRequestEntityTooLarge
 			case errors.As(err, &he):
 				code = he.code
-			case errors.As(err, &tooLarge):
-				code = http.StatusRequestEntityTooLarge
-			case errors.As(err, &be):
-				code = http.StatusBadRequest
 			case errors.Is(err, recommend.ErrLiveClosed): // shutting down
 				code = http.StatusServiceUnavailable
 			case errors.Is(err, context.Canceled) && r.Context().Err() != nil:
@@ -204,9 +201,8 @@ func (s *Server) instrument(route string, h func(http.ResponseWriter, *http.Requ
 	})
 }
 
-type badRequest struct{ error }
-
-func (b badRequest) Unwrap() error { return b.error }
+// badRequest is err answered with 400.
+func badRequest(err error) error { return httpError{http.StatusBadRequest, err} }
 
 // httpError is an error answered with its own status code, not logged.
 type httpError struct {
@@ -237,10 +233,10 @@ func decode(r io.Reader, v any) error {
 	d := json.NewDecoder(r)
 	d.DisallowUnknownFields()
 	if err := d.Decode(v); err != nil {
-		return badRequest{fmt.Errorf("body: %w", err)}
+		return badRequest(fmt.Errorf("body: %w", err))
 	}
 	if _, err := d.Token(); !errors.Is(err, io.EOF) {
-		return badRequest{errors.New("body: trailing data")}
+		return badRequest(errors.New("body: trailing data"))
 	}
 	return nil
 }
@@ -261,13 +257,13 @@ func ParseRecommend(r io.Reader, now int64) (recommend.Request, error) {
 		return recommend.Request{}, err
 	}
 	if in.UserID == "" {
-		return recommend.Request{}, badRequest{errors.New("user_id is required")}
+		return recommend.Request{}, badRequest(errors.New("user_id is required"))
 	}
 	if in.K < 1 || in.K > recommend.MaxK {
-		return recommend.Request{}, badRequest{fmt.Errorf("k must be in 1..%d", recommend.MaxK)}
+		return recommend.Request{}, badRequest(fmt.Errorf("k must be in 1..%d", recommend.MaxK))
 	}
 	if len(in.Recent) > recommend.MaxRecent {
-		return recommend.Request{}, badRequest{fmt.Errorf("recent must hold at most %d items", recommend.MaxRecent)}
+		return recommend.Request{}, badRequest(fmt.Errorf("recent must hold at most %d items", recommend.MaxRecent))
 	}
 	ts := now
 	if in.TS != nil {
@@ -359,11 +355,11 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if len(in.Events) == 0 || len(in.Events) > MaxEvents {
-		return badRequest{fmt.Errorf("events must hold 1..%d events", MaxEvents)}
+		return badRequest(fmt.Errorf("events must hold 1..%d events", MaxEvents))
 	}
 	for i, e := range in.Events {
 		if err := e.Validate(); err != nil {
-			return badRequest{fmt.Errorf("event %d: %w", i, err)}
+			return badRequest(fmt.Errorf("event %d: %w", i, err))
 		}
 	}
 	ctx := r.Context()
@@ -411,7 +407,7 @@ func (s *Server) swap(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if in.Bundle == "" {
-		return badRequest{errors.New("bundle is required")}
+		return badRequest(errors.New("bundle is required"))
 	}
 	if s.Prepare == nil {
 		return httpError{http.StatusNotImplemented, errors.New("swaps are not configured")}

@@ -12,7 +12,6 @@ package main
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sHyanorn/recserve/internal/bench"
 	"github.com/sHyanorn/recserve/internal/dataset"
 )
 
@@ -92,11 +92,7 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	if *out != "" {
-		data, err := json.MarshalIndent(r, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(*out, append(data, '\n'), 0o644); err != nil {
+		if err := bench.WriteJSON(*out, r); err != nil {
 			return err
 		}
 	}

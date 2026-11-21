@@ -106,9 +106,8 @@ func (d *data) recall(q int, got []int32, k int) float64 {
 }
 
 type gcStats struct {
-	NumGC          uint64  `json:"num_gc"`
-	MaxPauseUpper  float64 `json:"max_pause_upper_ms"` // upper bound of the highest histogram bucket hit
-	HeapObjectsMiB float64 `json:"heap_objects_mib,omitempty"`
+	NumGC         uint64  `json:"num_gc"`
+	MaxPauseUpper float64 `json:"max_pause_upper_ms"` // upper bound of the highest histogram bucket hit
 }
 
 var gcSamples = []metrics.Sample{

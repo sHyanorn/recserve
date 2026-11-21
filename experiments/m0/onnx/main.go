@@ -62,11 +62,10 @@ type caller interface {
 
 // ortCaller owns the input and output tensors of one goroutine; the session is shared.
 type ortCaller struct {
-	sess    *ort.DynamicAdvancedSession
-	ins     []ort.Value
-	out     *ort.Tensor[float32]
-	fill    func(i int)
-	outSize int
+	sess *ort.DynamicAdvancedSession
+	ins  []ort.Value
+	out  *ort.Tensor[float32]
+	fill func(i int)
 }
 
 func (c *ortCaller) call(i int) []float32 {
@@ -95,7 +94,7 @@ func encoder(length int) model {
 		newCall: func(sess *ort.DynamicAdvancedSession) caller {
 			x := must(ort.NewEmptyTensor[int64](ort.NewShape(1, int64(length))))
 			o := must(ort.NewEmptyTensor[float32](ort.NewShape(1, dim)))
-			return &ortCaller{sess: sess, ins: []ort.Value{x}, out: o, outSize: dim,
+			return &ortCaller{sess: sess, ins: []ort.Value{x}, out: o,
 				fill: func(i int) { copy(x.GetData(), in.I64[i*length:(i+1)*length]) }}
 		},
 	}
@@ -116,7 +115,7 @@ func ranker(d rankerData) model {
 			it := must(ort.NewEmptyTensor[float32](ort.NewShape(1, candidates, dim)))
 			f := must(ort.NewEmptyTensor[float32](ort.NewShape(1, candidates, feats)))
 			o := must(ort.NewEmptyTensor[float32](ort.NewShape(1, candidates)))
-			return &ortCaller{sess: sess, ins: []ort.Value{u, it, f}, out: o, outSize: candidates,
+			return &ortCaller{sess: sess, ins: []ort.Value{u, it, f}, out: o,
 				fill: func(i int) {
 					copy(u.GetData(), d.user.F32[i*dim:(i+1)*dim])
 					copy(it.GetData(), d.items.F32[i*candidates*dim:(i+1)*candidates*dim])
@@ -271,7 +270,7 @@ func main() {
 	if err := ort.InitializeEnvironment(); err != nil {
 		log.Fatal(err)
 	}
-	defer ort.DestroyEnvironment() //nolint:errcheck
+	defer ort.DestroyEnvironment() //nolint:errcheck // the process exits next
 	rd := loadRanker()
 	onnxModels := map[string]model{"enc_l50": encoder(50), "enc_l200": encoder(200), "ranker": ranker(rd)}
 	env := bench.Env(map[string]string{"onnxruntime": ort.GetVersion()})
@@ -283,7 +282,7 @@ func main() {
 			m := onnxModels[name]
 			sess := newSession(m, 0)
 			d := maxDiff(m.newCall(sess), m.cases, m.outSize, m.want)
-			sess.Destroy() //nolint:errcheck
+			sess.Destroy() //nolint:errcheck // the session is not used again
 			fmt.Printf("%s: max abs diff Go vs Python onnxruntime %.3g\n", name, d)
 			res[name] = d
 		}
@@ -299,7 +298,7 @@ func main() {
 					for _, th := range ints(*threads) {
 						sess := newSession(m, th)
 						r := run(name, threadName(th), conc, func() caller { return m.newCall(sess) }, m.cases)
-						sess.Destroy() //nolint:errcheck
+						sess.Destroy() //nolint:errcheck // the session is not used again
 						res = append(res, r)
 					}
 					continue

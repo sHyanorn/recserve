@@ -23,14 +23,9 @@ type config struct {
 	warmup   time.Duration
 	duration time.Duration
 	conns    int
-	work     workload
+	work     *datasetWorkload
 	samples  string    // file for one sample per measured request; empty for none
 	started  io.Writer // if set, told "start <unix ms>" once request 0's due time is fixed
-}
-
-// workload produces the body of request i.
-type workload interface {
-	request(i int, buf []byte) (path string, body []byte)
 }
 
 // report is the result of a measurement, written as JSON.
@@ -77,9 +72,9 @@ type worker struct {
 	reply, service, lag []int64
 }
 
-func newWorker(ctx context.Context, cfg config, end time.Time) (*worker, error) {
+func newWorker(ctx context.Context, cfg config) (*worker, error) {
 	w := &worker{
-		cfg: cfg, base: "http://" + cfg.addr, end: end,
+		cfg: cfg, base: "http://" + cfg.addr,
 		client: &http.Client{
 			Transport: &http.Transport{MaxConnsPerHost: 1, MaxIdleConnsPerHost: 1, DisableCompression: true},
 			Timeout:   30 * time.Second,
@@ -184,14 +179,13 @@ func measure(ctx context.Context, cfg config) (report, error) {
 	total := int(cfg.rate * (cfg.warmup + cfg.duration).Seconds())
 	period := float64(time.Second) / cfg.rate
 	workers := make([]*worker, cfg.conns)
-	t0 := time.Now() // provisional, for the workers' window end
 	var err error
 	for i := range workers {
-		if workers[i], err = newWorker(ctx, cfg, t0); err != nil {
+		if workers[i], err = newWorker(ctx, cfg); err != nil {
 			return report{}, fmt.Errorf("opening connection %d: %w", i+1, err)
 		}
 	}
-	t0 = time.Now()
+	t0 := time.Now()
 	if cfg.started != nil {
 		if _, err := fmt.Fprintf(cfg.started, "start %d\n", t0.UnixMilli()); err != nil {
 			return report{}, err

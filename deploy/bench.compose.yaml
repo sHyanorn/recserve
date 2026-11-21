@@ -1,5 +1,5 @@
 # Overrides compose.yaml for the benchmarks of docs/BENCHMARKS.md (M6, D052),
-# run by scripts/bench.sh: every service on CPUs 1 to 3, leaving CPU 0 to
+# run by the scripts/bench-*.sh scripts: every service on CPUs 1 to 3, leaving CPU 0 to
 # loadgen; no tracing; annshard-0 serves its profiles on :6060. The gateway's
 # varying flags come from the environment, with the binary's defaults:
 # CACHE_SIZE, HEDGE_DELAY, BUDGET_HISTORY, SHARD_ADDRS, VALKEY_ADDR, and
