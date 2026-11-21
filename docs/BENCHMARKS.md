@@ -1,629 +1,187 @@
 # Benchmarks
 
-This file fixes how every figure in the project is measured. The protocol sections were written before any result was looked at; results are appended under Results, and a change to the protocol after results exist is recorded in DECISIONS.md with its reason.
+recserve is a recommendation serving system in Go: retrieval, ranking and rerank behind one HTTP API, with sharded vector search, caching and degradation. This file holds its measured results, newest first. The headline is 550 requests/s on a 4-vCPU cloud VM: the highest rate with p99 ≤ 50 ms and at most 1% of the responses degraded, replaying the test split with the cache off, with p99 4.6 to 5.1 ms. Every service shares that VM's CPUs, so a figure is that machine's and that topology's, and figures from different VMs are not compared (Limits).
 
-## Environment record
+How each figure is measured is in [BENCHMARK_PROTOCOL.md](BENCHMARK_PROTOCOL.md), written before the runs; amendments made after some results, such as D054's, are dated in place with their reasons. Code comments and decisions that cite `docs/BENCHMARKS.md` with a protocol section such as Load tests or Noise baseline mean that file. Defects found after the runs are in [BENCHMARK_ERRATA.md](BENCHMARK_ERRATA.md). D-numbers are entries of [DECISIONS.md](DECISIONS.md); F1 to F6 are the faults of the fault runs; M0 to M8 are the milestones.
 
-Every result directory under `bench-results/` holds an `env.txt` with: CPU model, vCPU count, memory, kernel, Go version, ONNX Runtime version, GOMAXPROCS, CPU sets of each process, the commit, and the date. Unless a section says otherwise, results come from one cloud VM; such VMs share physical CPUs with other tenants, so their speed varies from run to run and the noise baseline below is part of every run.
+## Current state
 
-In compose, Kafka's health check starts a JVM. Every 2 s, as compose.yaml had it until M6, an idle broker used 639 to 686 ms of CPU per second on the M6 VM (five one-minute readings); with checks 2 s apart only until it is healthy and 10 minutes apart after, 24 ms. Figures taken in compose before M6 carry the first load (D039).
-
-The VM that ran M6's sweeps and later runs is noisier than the earlier ones: on the idle machine its reference's ten runs spread from 0.56 to 0.87 ms per pass (median 0.658 ms), three of them at 0.81 ms or more. A baseline more than 10% above the reference, 0.724 ms, flags its run, which is rerun: 52 of the 88 attempts of the headline sweep were flagged. The protocol is unchanged; a rate that misses the headline condition on flags alone is reported as such.
-
-## Noise baseline
-
-`experiments/m0/cmd/noise` (later `cmd/noisebase`) runs a fixed single-core workload: a dot product of a 64-dimensional float32 query against 16,384 float32 vectors, repeated for 200 passes, timed 30 times; the result is the median time of one pass.
-
-- **One build.** From M2 on, the reference and every baseline of a session are taken by the same `cmd/noisebase` binary, run as its own process; result files record its SHA-256. A reference is compared with another session's only if both come from builds of the same commit with the same toolchain (D025).
-- **Reference.** At the start of a benchmark session, on an idle machine, the baseline runs 10 times; the median is the session reference.
-- **Per run.** The baseline runs right before and right after each benchmark run, pinned to the CPU the measured process uses (or the first one, if it uses several).
-- **Flag.** A run is flagged when either baseline is more than 10% slower than the reference. A flagged run is rerun, at most twice; if all three attempts are flagged, the last one is reported and marked "noisy".
-- The baselines of the reported attempt and its attempt number are kept in its result file.
-
-## M0 risk checks
-
-The checks run on the benchmark VM. Each has a pass criterion set here; if it fails, the named fallback is adopted. Criteria are not changed after results exist.
-
-### R1: ONNX Runtime from Go
-
-**Models** (`experiments/m0/onnx/export.py`, PyTorch, random weights with a fixed seed; latency does not depend on the weights):
-
-- User encoder, shaped like SASRec: item embedding table of 140,000 × 64 (above the 137.2k items of the full Video_Games catalog), learned positions, 2 Transformer encoder layers (2 heads, feed-forward 256, causal mask), the last position's output as the user vector. Input `item_seq` int64 [B, L], output `user_emb` float32 [B, 64]. Exported for L = 50 and L = 200.
-- Ranker: inputs `user` float32 [B, 64], `items` float32 [B, C, 64], `feats` float32 [B, C, 8]; each candidate's concatenation (136 values) goes through an MLP 136 → 128 → 64 → 1; output `scores` float32 [B, C].
-- Opset 17, dynamic B, L and C.
-
-**Measurements** (`experiments/m0/onnx`, Go with onnxruntime_go v1.38.0 and ONNX Runtime 1.31.1):
-
-- **Parity.** 100 seeded random inputs per model; the maximum absolute difference between Go and Python (onnxruntime 1.31.1) outputs.
-- **Latency.** B = 1. Encoder at L = 50 and L = 200; ranker at C = 500. Concurrency 1, 2, 4 and 8: that many goroutines share one session and call it in a loop for 20 s after a 5 s warmup; every call's duration is recorded, percentiles are exact. Each configuration runs twice: with ONNX Runtime's intra-op threads at 1, and at its default. The process is limited to 4 CPUs; the noise baseline brackets each configuration.
-- **Pure-Go reference.** The same ranker MLP and a plain dot-product scorer written in Go with the exported weights, measured the same way.
-- **Image.** A multi-stage Dockerfile builds the Go program with cgo and runs it on `gcr.io/distroless/cc-debian13:nonroot` with the ONNX Runtime library copied in; it must pass the parity check inside the container.
-
-**Pass** if all hold for at least one thread setting:
-
-1. Parity: maximum absolute difference ≤ 1e-5 for both models
-2. At concurrency 4: encoder (L = 50) p99 ≤ 5 ms and ranker (C = 500) p99 ≤ 10 ms
-3. The image builds and passes parity
-
-**Fallback.** If 1 or 3 fails: run models in a separate inference process. If only 2 fails for the ranker: rank with the pure-Go MLP and keep ONNX for the encoder; if it fails for the encoder: compute user vectors on event ingestion instead of per request, and measure that path in M2.
-
-### R2: pure-Go HNSW
-
-**Data** (downloaded by script, never committed):
-
-- glove-100-angular from ann-benchmarks: base vectors and 10,000 queries. Vectors are L2-normalized, and inner product is the similarity. Ground truth is recomputed by brute force (faiss `IndexFlatIP`); its overlap with the file's neighbors is printed by `prep.py`.
-- Synthetic: 1,000,000 base and 10,000 query vectors of 64 dimensions from a mixture of 1,000 Gaussians (seed 1), L2-normalized; exact ground truth computed by brute force.
-
-**Indexes:**
-
-- `coder/hnsw` (pinned version), M = 16 and efConstruction = 200, then M = 32 and efConstruction = 400 if the first setting does not reach the recall target. Cosine distance on normalized vectors.
-- Exact search in pure Go (flat float32 array, single goroutine), as the baseline.
-- faiss `IndexHNSWFlat` (faiss-cpu 1.15.1, Python, inner product), same M and efConstruction, one thread, as the outside reference.
-
-**Measurements**, one query at a time on one thread, as ann-benchmarks does:
-
-- ef ∈ {10, 20, 40, 80, 120, 200, 400, 800} (only ef ≥ k for each k)
-- recall@10 and recall@100, defined as in ann-benchmarks: a returned item counts if it is at least as similar as the true k-th neighbor, so ties do not lower recall. The tolerance is 1e-5 on inner product (ann-benchmarks uses 1e-3 on distance)
-- per-query latency p50 and p99 over the 10,000 queries, after one warm pass over 1,000 queries
-- build time, heap in use after build (runtime/metrics), and for the Go indexes the GC pauses (`/sched/pauses/total/gc:seconds`) and GC cycles over the query phase (D017)
-- the noise baseline brackets each index and dataset
-
-**Pass** if on both datasets coder/hnsw has an ef with recall@100 ≥ 0.95 and single-thread p99 ≤ 5 ms, and its longest GC pause during the query phase is ≤ 5 ms.
-
-**Fallback.** Write HNSW by hand with neighbor lists in flat int32 arrays (no pointers for the GC to scan), measured with the same protocol in M2.
-
-### Hand-written HNSW (M2, D016)
-
-R2 failed, so M2 writes HNSW by hand. It is measured with the R2 protocol above: same data, ground truth, ef values, recall definition, single-thread latency, GC statistics, noise baseline, and the same exact and faiss baselines.
-
-**Pass** if on both datasets there is an ef, with M = 16 and efConstruction = 200 or with M = 32 and efConstruction = 400, at which recall@100 ≥ 0.95 and single-thread p99 ≤ 5 ms, and the longest GC pause during the query phase is ≤ 5 ms. This is the R2 criterion unchanged.
-
-**Known before measuring.** In M0, faiss itself does not meet the latency part on glove: it reaches recall@100 ≥ 0.95 only at M = 32, ef = 800 (0.961), with p99 6.59 ms (Results, R2). The hand-written index may fail the same way.
-
-**If only the glove latency part fails** (synthetic passes, and on glove recall@100 ≥ 0.95 is reached but only with p99 > 5 ms), the criterion is reported as failed and no threshold is changed. The report then gives, for glove:
-
-- the recall@100 and p99 curve over all ef values, beside faiss's curve
-- p99 at the lowest ef reaching recall@100 ≥ 0.95, through scatter-gather over two shards (two annshard processes, each with half the base vectors and its own index, built with the same settings; the merged top-100 is scored against the full ground truth)
-
-The index is still used in later milestones, with its measured p99 stated wherever retrieval latency is reported. **If any other part fails**, retrieval at 1M-scale stays on exact search, the shard tier serves exact search, and the hand-written index is reported as a negative result.
-
-## Retrieval quality
-
-- ANN recall@k against exact search, defined as in R2, for k = 10 and 100, on one node and through scatter-gather over the shards.
-- Exact mode through scatter-gather must equal single-node exact search item by item (SPEC §7, property 6); this is a test, not a measurement.
-
-## Recommendation quality
-
-- **Split.** The Amazon 2023 Video_Games 5-core timestamp split (D013). seqrec-lab splits the same data its own way, so an exported bundle is evaluated only if its `train_cutoff_ts` is before the first test event; the loader checks this.
-- **Requests.** One request per test event: the user, k = 20, and `ts` = the event's timestamp, with the user's history before `ts` loaded.
-- **Metrics.** Recall@10, Recall@20 and NDCG@10 of the held-out item over the full catalog, no negative sampling. Items in the user's history are excluded from every candidate list, the reference's included.
-- **Conditions.**
-  - reference: exact dot-product scoring of all items offline
-  - full pipeline, healthy
-  - each degradation forced on its own through a test hook: vector retrieval skipped (encoder timeout), co-occurrence skipped, ranker skipped (retrieval order), one of two shards missing, HNSW instead of exact search
-- **Reporting.** Each condition's metrics and its difference from the healthy pipeline, with a paired bootstrap 95% interval over test events (1,000 resamples, seed 1).
-- **Amended 2026-11-12, before the first run.** The test hook is the pipeline's `stall` field (`internal/recommend`), which is unexported, nil in production and set only by the package's tests; TestRealDataDegradation already uses it. The evaluation is `TestRealDataQuality`, which runs the pipeline in process on the real data and bundle (`RECSERVE_DATA`, `RECSERVE_BUNDLE`), with the test split's events preloaded and every stage budget off, so nothing degrades by time. The encoder, co-occurrence and the ranker are forced to fail at their stage, and shard 1 of two at its search; HNSW is the shards' mode, with the gateway's default ef. The reference's user vector is the bundle's encoder on the same history; a request without one has an empty reference. A condition is valid if no response of the healthy pipeline is degraded, and in a forced condition every response reports its reason exactly when the hook forced the stage in that request, and no other reason; HNSW reports none. Results in `bench-results/m7/quality.md`, first on bundle b7ff0634dd7b. The intervals are percentile intervals of the mean difference.
-
-### seqrec-lab's bundle against the baseline (M7, D056)
-
-Set 2026-11-12, before any seqrec-lab bundle exists.
-
-- **Bundles.** The baseline is b7ff0634dd7b. The other is the bundle exported from the seqrec-lab run that D056 point 2 picks; its `model_version` is known only after the export and is given with the results. It is evaluated only after seqrec-lab has committed its Video_Games test results (D056 point 3).
-- **What is compared.** Each bundle's reference row of Recommendation quality: its encoder's user vector from the request's history, exact dot-product scoring of all of its items, the history excluded, an empty list for a request without a user vector. The seqrec-lab bundle has no co-occurrence, popularity or ranker, so the pipeline rows are not compared between the bundles; its healthy pipeline row is reported, described only. seqrec-lab's own test figures, on its own split, are not compared with these.
-- **Primary result, the only one.** On all 43,249 test events, the seqrec-lab bundle's reference minus the baseline's, for Recall@10, Recall@20 and NDCG@10, each with a paired bootstrap 95% interval over test events (1,000 resamples, seed 1). A difference whose interval excludes 0 is reported as a difference, otherwise as none shown; there is no pass or fail. A target outside a bundle's items is a miss.
-- **Secondary readings**, reported with their event counts and intervals, not used to qualify the primary result: the events whose target is in the seqrec-lab bundle's items (41.8% of the test events are in its vocabulary of 21,930); those whose target has a non-zero vector in the baseline; and the events in both.
-- **Also reported.** The number of requests without a user vector under each bundle. The training periods: the baseline's item vectors come from recserve's train split, to 2021-08-11, its ranker from the valid split; the seqrec-lab model's weights from events at or before T_val = 1618224866975 (2021-04-12), early stopping on validation targets in (T_val, T] and its vocabulary from the 5-core of events at or before T = 1649219168790 (2022-04-06), all of the 0-core file deduplicated by (user, item) (seqrec-lab `data/splits.py`, `global_temporal`; `data/preprocess.py`, `build_log`). The histories: for each test event, the length of recserve's history and the number of the same user's events before it in seqrec-lab's data (0-core, deduplicated, in its vocabulary), with the median of each and the share of events where they differ; and the repeated items in recserve's histories, 0 in its three split files.
-- **Histories, 2026-11-12**, computed before any seqrec-lab bundle existed: `tools/bundle/histories.py` on recserve's split files and the 0-core `Video_Games.csv.gz` (sha256 30692f9806e33a7b5d8b599b73d7ca33dbfefb0abdfc1578052a101f2e64b3cd, as in seqrec-lab's registry), following seqrec-lab's code at 6aa5d87; its output is bench-results/m7/histories.txt. It gives seqrec-lab's figures: T = 1649219168790, T_val = 1618224866975, a vocabulary of 21,930 items, and 18,092 of the 43,249 test targets in it (41.83%). On both sides an event's history holds the events with an earlier ts. recserve's history: median 5 (p10 2, p90 17, max 427). The same user's events in seqrec-lab's data, deduplicated and in its vocabulary: median 3 (p10 0, p90 12, max 386). They differ in 25,950 events (60.00%), each with fewer in seqrec-lab's data. recserve's histories hold no repeated item.
-
-### Freshness (M8, D061)
-
-Registered before any of its runs in [registration/m8-freshness.md](registration/m8-freshness.md), which fixes the bundles, the stream state, how the choices on valid are made, the conditions, the criteria and the counted test reads; amended in [registration/m8-freshness-amendments.md](registration/m8-freshness-amendments.md). `make bench-read` runs a read, TestRealDataFreshness. The state's cost in serving is measured under [Stream state in serving](#stream-state-in-serving-m8-d062), committed before its runs (the registration, section 1).
-
-## Load tests
-
-**Generator.** `cmd/loadgen` (D009): request i is due at t0 + i/rate, sent over a fixed pool of keep-alive connections whatever the replies; latency counts from the due time. Service time and send lag are kept apart. A 1 ms sleep loop records the generator's own pauses.
-
-**Workload.** The test events of the split in time order, one `/v1/recommend` request per event as in Recommendation quality, cycled when exhausted. A second scenario adds `/v1/events` writes as 10% of requests. Each scenario runs with the cache on and off; the hit rate is reported.
-
-**Run.**
-
-- Fresh services per run, loaded from the same bundle.
-- 10 s warmup, then 60 s measured.
-- loadgen and the services on disjoint CPUs: loadgen on CPU 0, services on CPUs 1 to 3.
-- Noise baseline before and after.
-
-**Valid run.**
-
-- At least 99% of the target requests are sent within the window.
-- No request fails (HTTP 5xx or a transport error). 503 from overload protection counts as a failure here.
-- Every response carries an arm and versions.
-
-The share of degraded responses is reported per run, and runs above 1% are marked.
-
-**Sweep.**
-
-- Rates 100, 200, 400, 800 requests/s, then steps of 400.
-- Each rate runs three times; the run with the median p99 represents it.
-- The sweep stops at the first rate with an invalid run, or whose median p99 exceeds 100 ms.
-
-**Reported.**
-
-- Per rate: p50, p90, p99, p99.9 and max; the p99 of each run; service CPU per request; degraded share; cache hit rate; worst hiccup; noise flags.
-- The headline (D005) is the highest rate at which all three runs are valid and unflagged with p99 ≤ 50 ms; amended in M6, also with at most 1% of each run's responses degraded (D054, Amendment below).
-
-**Cross-check.** One rate is also driven by vegeta at the same constant rate, and the two p99 values are reported side by side.
-
-### Additions for M6 (D052)
-
-Fixed before the first M6 run.
-
-**Setup.** `deploy/bench.compose.yaml` over `deploy/compose.yaml`: the gateway, two shards of two annshard replicas, Valkey, Kafka and ingest, on the bundle with every stage, b7ff0634dd7b (`make bundle ENCODER=onnx RANKER=1`). The containers run on CPUs 1 to 3 (`cpuset`); loadgen runs on CPU 0 and sends to the gateway's address on the compose network, not through the published port; the noise baseline runs on CPU 1. Tracing is off (the OTLP variables are empty), the exposure log is off, and Prometheus, Grafana and Jaeger do not run: the scripts read the services' `/metrics` themselves. The gateway has compose's flags, `-cache-size 0` when the cache is off, and no admission limits. Before each run Valkey is emptied, and ingest, the replicas and the gateway are recreated; the gateway preloads the train and valid splits, as in compose, and the run starts once it is ready.
-
-**Scenarios.** Three workloads, each with the cache on and off:
-
-- replay: the test split in time order, as above;
-- writes: replay with 10% of the requests writing their event to `/v1/events` instead;
-- repeats: replay in which each request, with probability 0.3, is replaced by a copy of one of the 1 to 1,000 requests before it, drawn uniformly with a fixed seed. Without writes a copy has the same history, so the same cache key. 0.3 is a chosen value; no traffic it could be taken from exists.
-
-The headline sweep is replay with the cache off. The other five scenarios run the rates of its grid, without the bisection, and stop by the same rule.
-
-**Bisection.** After the grid of the headline sweep, the rate halfway between the highest grid rate that meets the headline condition and the next grid rate, rounded to a multiple of 50, runs three times, and the half that holds the boundary is kept, until the two rates are 50 apart. The headline is the lower one. If 100 requests/s does not meet the condition, 50 runs as well and the result says so.
-
-**Also reported, per rate.** Each container's CPU time over the measured window (its cgroup's counter) per recommendation answered, `/v1/events` requests not counted, so in the writes scenario about 1.11 times the time per request answered (2026-11-13: this read "per request answered" while `cmd/benchsum` divided, as it still does, by the recommendations answered; the tables now name it per recommendation; no figure of the writes scenario is cited in this document). The share of recommend requests whose history read or cache call ran past `-budget-history`: `history_unavailable` in `recserve_degraded_total` plus `error` in `recserve_cache_lookups_total`, over the recommend requests. In the writes scenario, the latency of `/v1/events` apart from that of `/v1/recommend`.
-
-**Capacity and admission limits (D050).** c is the gateway's CPU time per request at the headline rate. A gateway's capacity with the 2 CPUs of its kind limit is estimated as 2/c requests/s: an estimate from one measured quantity, since here the gateway shares three CPUs with the rest of the service. `-max-rate` in kind becomes 80% of it, rounded down to a multiple of 50, and `-max-inflight` 2 × `-max-rate` × 50 ms, rounded up to a multiple of 8.
-
-**History budget (D039).** In the replay sweep with the cache on, if the share past the budget is at most 1% at every rate up to the headline, the 3 ms budget stays, the per-user history version is not built and D039 is closed. Otherwise the headline rate runs three more times with `-budget-history` 5 ms, then 8 ms, and SPEC §5 takes the smallest that brings the share to at most 1% in all three runs; if neither does, the budget is recorded as not met at the headline and stays.
-
-**Cross-check.** vegeta drives half the headline rate, three runs.
-
-**Amendment, 2026-11-11 (D054).** Made after the grid of the headline sweep had run from 100 to 4,400 requests/s, and before its bisection.
-
-- The headline condition also requires that at most 1% of each run's responses are degraded. 1% is the share this section already marks and the history budget rule above uses; it is not chosen anew.
-- Reason: a degraded response skips work. A request whose history read runs past its budget has no user vector and no vector retrieval, so it costs little. In the grid the degraded share rose from at most 1.93% of a run at 800 requests/s to 12 to 19% at 1,200/s and 94% at 2,400/s, while p99 stayed between 11 and 17 ms: p99 ≤ 50 ms held where almost no response was complete, and the condition as written did not find the highest rate that meets the service target.
-- The grid of the headline sweep ran in full to 4,000 requests/s and once at 4,400/s, 98.79% degraded, and was stopped there; its stop rule was not reached. Its bisection runs as above, from the highest grid rate that meets the amended condition. Every grid rate is also reported with its verdict under D005 as written.
-- Every rule that takes the headline takes the amended one, with its ratios unchanged: capacity and admission limits, the history budget, the cross-check, and the fault runs, hedge delay and swaps below.
-- The other five scenarios run 100, 200, 400 and 800 requests/s, set with this amendment and before any of their runs, stopping earlier by the stop rule.
-- Amended 2026-11-11, later the same day (D054): a rule here ended every grid at its first rate that missed the amended condition, with the bisection below it; it changed the stop rule and the bisection, which the amendment was not to change, and is withdrawn. Nothing that was run changes, and the headline stays 550 requests/s.
-
-## Valkey path (M3, D039)
-
-Two checks of the gateway with its histories and result cache on Valkey, fixed here before either was run. The second is an interim figure for M3: the sweep and the headline stay with M6.
-
-**Stage check.** `TestRealDataValkey` in `internal/recommend`, on the baseline bundle and the 2,000 requests of the M2 real-data tests (every 20th test event in time order, k = 50, the request time the event's), with the events of all three splits as histories.
-
-- Four workers share the requests; each request is sent once per round, in two rounds, so that with a cache the first round misses and the second hits.
-- Four configurations: history store and cache in the process, or both on the compose Valkey over loopback through the gateway's circuit breaker; each with the cache on and off. No budgets, so a slow read is measured and not cut off.
-- Per request: the latency, and the time in the stage "history read, then cache lookup": the sum of the two calls, timed around the store and the cache, which leaves out the digest of the key between them.
-- Control, for the Valkey configurations: the four workers send 2,000 `GET`s of one 16-byte value, timed the same way.
-- The test runs three times, each in a new process, with a noise baseline before and after on CPU 0; the processes are not pinned, since the workers use all four CPUs. All three runs are reported; the median of their p99 values counts.
-- **Pass** if, on Valkey with the cache on, the stage's p99 is at most 3 ms (SPEC §5) in the first round and in the second.
-- If it fails: a per-user history version in the cache key (D036 point 6) is taken up only if the control's p99 is at least 30% below the p99 of the history read alone in the same run. Otherwise the budget is recorded as not met and the decision is left open.
-
-**Load at 200 requests/s.** One rate of Load tests, by its Run and Valid run rules: a gateway started fresh for each run with `-valkey-addr`, `-kafka-brokers` and its default flags (cache on, two exact shards, the budgets of SPEC §5) on the baseline bundle; loadgen with its defaults (k = 20, 64 connections) replaying the test split; 10 s warmup and 60 s measured; loadgen on CPU 0, the gateway and the Valkey and Kafka containers on CPUs 1 to 3; a noise baseline on CPU 1 before and after, a flagged run rerun as Noise baseline says.
-
-- Valkey holds the histories of the three splits, loaded once before the first run; its result cache entries are deleted before each run. Kafka runs and receives nothing: the scenario has no writes.
-- Arms come with M5, so "every response carries an arm and versions" is not checked; loadgen's own checks stand for a valid run (99% of the target sent, no failed request).
-- Per run: p50, p90, p99, p99.9 and max from the due time, the degraded share by reason and the cache hit rate from the gateway's `/metrics`, the noise baselines.
-- **Pass** if all three runs are valid and each has p99 ≤ 50 ms.
-
-## Fault injection under load
-
-Faults (D021), each in its own run: one shard replica killed; 50 ms of added latency on every connection to one shard; Valkey unavailable; the ingest consumer paused, with `/v1/events` writes at 10% of requests; and, from D041, a replica that goes silent with its connection up and one that answers keepalive pings while its searches hang.
-
-**Run.** One rate: half the headline rate of the cache-off sweep. 30 s warmup, 60 s healthy, 60 s with the fault, then the fault is removed and the run continues for 120 s. Three runs per fault. Noise baseline before and after.
-
-**Reported per run**, for each of the three phases and as a time series in 1 s windows:
-
-- p50, p99 and max latency from the due time
-- error rate (HTTP 5xx and transport errors) and 503 rate
-- share of degraded responses, by reason, and mean shard coverage
-- recovery time: from fault removal until the 10 s rolling p99 is within 1.2 times the healthy phase's p99 and the degraded share is within 1 percentage point of the healthy phase's
-- consumer pause only: consumer lag and the time to drain it after resuming; and whether every user history after the run equals the one built from all produced events (property 9)
-
-**Pass criteria** are added to this section and committed before the first fault run (M6). They are not changed after results exist.
-
-### Faults, setup and pass criteria (M6)
-
-Committed before the first fault run. A criterion found not to measure what it states is amended with its date and reason, and the runs it judges are repeated.
-
-**Setup.** As in Load tests (M6), with toxiproxy 2.13 between the gateway and each replica and between the gateway and Valkey (D021), in every phase, so the healthy phase is the comparison. Kafka is not proxied. Faults are set through toxiproxy's HTTP API and `docker`. The gateway has compose's flags, with the cache on. Shard 0 is annshard-0 and annshard-1, shard 1 annshard-2 and annshard-3. The workload is replay, except for F4.
-
-| Fault | Injected | Removed |
+| What | Result | Section |
 |---|---|---|
-| F1 a replica killed | `docker kill annshard-1` | `docker start` |
-| F2 latency on one shard | toxiproxy `latency` of 50 ms on the replies of annshard-2 and annshard-3 | toxic deleted |
-| F3 Valkey unavailable | the gateway's proxy to Valkey disabled: open connections closed, new ones refused | enabled |
-| F4 consumer paused | `docker pause ingest`, with the writes scenario | `docker unpause` |
-| F5 a replica silent, its connection up | `docker pause annshard-1` | `docker unpause` |
-| F6 a replica that answers keepalive pings while its searches hang | annshard-1 runs `cmd/faultshard` for the whole run; `SIGUSR1` makes every search wait until its caller cancels it | `SIGUSR2` |
-
-**Phases.** From the first request's due time: warmup [0, 30 s), healthy [30, 90 s), fault [90, 150 s), recovery [150, 270 s). Errors are transport errors and HTTP 5xx, 503 included, on either endpoint. The gateway's `/metrics` is read at the four phase boundaries, giving each phase's hedges by result and failovers.
-
-**Valid run.** In the healthy phase: no error, p99 ≤ 50 ms, at most 1% degraded; at least 99% of the target requests sent; neither noise baseline flagged. An invalid run is rerun, at most twice, and is neither a pass nor a fail.
-
-**Recovery time.** The first second t after removal at which the window [t, t + 10 s) has a p99 within 1.2 times the healthy phase's and a degraded share within 1 percentage point of it, measured from removal; "not recovered" if none starts within the recovery phase.
-
-**A reason's excess** is its share of the fault phase's responses minus its share of the healthy phase's.
-
-**Pass criteria.** A fault passes if all three of its valid runs pass. In every run: no error in any phase, and p99 ≤ 50 ms in the fault phase. Further:
-
-- F1: every reason's excess at most 1 percentage point (failover answers the searches that the killed replica held); recovery within 10 s; annshard-1 uses CPU in the last 60 s of the run (its cgroup's counter), so searches reach it again.
-- F2: every reason other than `shards_partial` has an excess of at most 1 percentage point, so the other shard still answers; recovery within 5 s.
-- F3: every reason other than `history_unavailable` has an excess of at most 1 percentage point; recovery within 5 s.
-- F4: p99 ≤ 50 ms in every phase; every reason's excess at most 1 percentage point; the consumer's lag (events the gateway accepted minus records ingest applied, read every second) back at 0 within 30 s of removal; after the run, every user's history in Valkey equals the one built from the preloaded events and the events the gateway accepted (property 9).
-- F5: in [15, 60 s) after the pause, every reason's excess at most 1 percentage point, the keepalive having taken the replica out; recovery within 10 s; annshard-1 uses CPU in the last 60 s.
-- F6: recovery within 5 s. Its degraded share is reported, not judged: D041 Limits point 2 expects about 40% of the responses with `shards_partial` for as long as the fault lasts.
-- Defects, found 2026-11-11 after the M6 runs, criteria not changed and nothing rerun: (1) "annshard-1 uses CPU in the last 60 s" is judged as more than zero, which a replica that only answers health checks and keepalive pings may also use, so it does not show that searches reach the replica again. (2) Recovery is judged on all responses, and the cache answers most of them in the recovery phase, so a replica fault's recovery rests on few searches. (3) `cmd/benchsum` checks "no error in any phase" and F4's p99 from 30 s on, leaving out the warmup, and the recovery window's degraded share only from above. Results, M6, gives what each defect changes.
-
-**Also reported.** F5's share of responses with `shards_partial` in [0, 13 s), [13, 15 s) and [15, 60 s) after the pause; F6's over the fault phase.
-
-**Outlier detection (D041).** If F5's share in [0, 13 s) or F6's over the fault phase exceeds 1%, D041 records outlier detection as adopted, with a design (a replica taken out after a number of searches in a row end at the shard deadline, and asked again after a wait), and TASKS gets an item for it; it is not built in M6. Otherwise D041 records it as not needed at this rate.
-
-### Faults, amended for M7
-
-Committed 2026-11-12, before the first M7 fault run. M6's setup, criteria and results above stay as they are. M7's runs are not compared with them, nor with runs on any other VM.
-
-**Why the cache is off.** The result cache is on in production (`-cache-size` 13,000). These runs turn it off so that every response searches the shards and the criteria can tell recovery apart: with it on, M6's recovery phases had 86 to 99% hits and 2 to 25 calls per second to shard 0. They answer how the retrieval path behaves under each fault; how the service behaves with the cache on is M6's result.
-
-**Setup.** As in M6, with these changes:
-
-- the gateway runs with the cache off (`CACHE_SIZE=0`), and with the defaults of the commit named with the results (hedge delay 2.5 ms, history budget 5 ms);
-- from the first request's due time, the gateway's `/metrics` and each container's CPU time (its cgroup's `cpuacct.usage`) are read every second, each read with its time. The gateway's give the calls of each replica by result (`recserve_shard_calls_total`), the Valkey calls by result and the breaker's state (D037);
-- the results go to `bench-results/m7/faults`, and those of the runs with outlier detection to `bench-results/m7/faults-outlier`.
-
-**A replica's share** in an interval is its answered calls over all answered calls to its shard's replicas in that interval, taken from the reads at the interval's ends.
-
-**Changes to M6's criteria.**
-
-1. F1, F5 and F6: "annshard-1 uses CPU in the last 60 s" is replaced by: annshard-1's share in [210, 270 s) is at least 40%. At 275 requests/s shard 0 answers about 16,500 calls in those 60 s, and taking the ready replicas in turn gives annshard-1 about half, with a binomial standard deviation of about 0.4 points. 40% is far below that, and far above a replica that is not back (0%) and one back for only the last half of the interval (about 25%). Health checks and keepalive pings are not calls, so a replica that answers only them has a share of 0.
-2. Recovery is judged as in M6, on all responses, which now all search. A 10 s window holds about 2,750 responses: its p99 is the 28th largest, and 1 percentage point is about 28 responses, while the healthy share's standard deviation over a window is about 0.1 point. F1, F5 and F6 also need the replica back: the first whole second t after removal such that annshard-1's share is at least 30% in each second of [t, t + 10 s). In a second shard 0 answers about 275 calls and annshard-1 about 137, with a standard deviation of about 8; 30% is about 83, six standard deviations below, and a second in which the replica answers for half of it is at about 25%, so its return is resolved to about a second. A fault's recovery time is the later of the two, within M6's limits.
-3. M6's defect 3 is fixed: "no error in any phase" and F4's p99 are judged from 0 s, and the recovery window's degraded share must be within 1 percentage point of the healthy phase's either way.
-4. F6 without outlier detection: its `shards_partial` share over the fault phase is reported, not judged, as in M6.
-
-**Outlier detection (D041)**, judged in the runs with it, of F2, F5 and F6: F5's `shards_partial` share in [0, 13 s) after the pause, and F6's over the fault phase, exceed the healthy phase's by at most 1 percentage point; no replica is taken out in any healthy phase (`recserve_shard_ejections_total` the same at 30 and 90 s); F2 passes its criteria. F5's [0, 13 s) holds about 3,575 responses, so 1 point is about 36. Without outlier detection about 40% of them are expected to be partial, since half of shard 0's first calls go to the paused replica and the hedge budget covers about a fifth of those; with it, about 8, until five calls have ended at the deadline. F6's fault phase holds about 16,500 responses, 1 point about 165. 1% is the share by which M6 adopted outlier detection.
-
-**Runs.** All six faults, three valid runs each, on one VM, at the commit before outlier detection; then F2, F5 and F6, three each, at the commit that adds it. F1, F3 and F4 are not run with it: it does not touch Valkey or ingest, and a killed replica's calls fail at once while its connection is not ready.
-
-### Valkey circuit breaker openings (M7)
-
-Committed before these runs. In M6, 15 of the 18 valid fault runs had the breaker open for 1.0 s, and F4 and F5 failed on such a second; what made five Valkey calls in a row fail was not established (Results, M6).
-
-**Runs.** The M7 fault setup with the cache on, as in M6 (`CACHE_SIZE` unset), and no fault injected (`FAULT=none`): 5 runs of 270 s at 275 requests/s, results in `bench-results/m7/breaker`. From M6's 15 openings in 18 runs, 3 to 5 openings are expected; the expectation plays no part in the attribution, and if none opens no run is added.
-
-**Attribution**, for each change of the breaker from closed to open in the gateway's log, by the Valkey calls that failed (`recserve_valkey_calls_total`) in the interval between reads that holds the change and the one before it:
-
-- at least 5 with `timeout` and none with `error`: calls that ran out of their budget;
-- at least 5 with `error` and none with `timeout`: errors, which the gateway's log of those seconds names;
-- otherwise not attributed.
-
-Reported for the same interval, not as causes: the gateway's GC pause time (`go_gc_duration_seconds_sum`) and each container's CPU time, beside the median interval of the run's [30, 90 s).
-
-### Second M7 set: breaker on a failure rate, cover, benchsum as written
-
-Committed 2026-11-12, before these runs. The first M7 set (Results, M7) stays as it is; the two sets come from different VMs and are not compared side by side, each only against the criteria.
-
-**What changed since the first set.** The breaker opens on a failure rate in a window of 1 s, no longer on 5 failures in a row (D037, revision of M7). A replica is taken out only if the other answered since its run of calls ended at the deadline began (D041, M7 point 7). `scripts/bench-fault.sh` keeps each attempt's files under its own prefix, `FAULT-runN-aK`, and `cmd/benchsum` gives each run's valid attempt, every attempt with why it was invalid and its breaker openings, and each fault's verdict by the rule; the outlier detection of 03bb156 is in the build, so every fault runs with it.
-
-**benchsum as the criteria are written.** The criteria and the validity rule are not changed; benchsum's readings of them are, each with a test:
-
-1. The phases are cut at 90 and 150 s from the first request's due time, not at the script's marks a few ms later, and the times "after the pause" and "after removal" count from 90 and 150 s. F5's [15, 60 s) after the pause so ends at 150 s.
-2. A recovery window, and annshard-1's return, may start at any whole second of the recovery phase, [150, 270 s): "not recovered" if none starts within it. A window that runs past 270 s holds the responses due before 270 s, and the seconds of the return's window before 270 s.
-3. Both recoveries count from 150 s, on the same whole seconds.
-4. An invalid run is neither a pass nor a fail: it is not judged.
-5. The breaker table's medians take the intervals between reads that lie within [30, 90 s).
-
-**Expectation.** With no fault, 0 openings of the breaker in the 5 runs: at 275 requests/s with the cache on its window holds about 550 to 825 calls, and half of them must fail. The expectation plays no part in the attribution, which is as in Valkey circuit breaker openings (M7), nor in validity. In the fault runs, with the cache off, the window holds about 275 history reads.
-
-**F4's baseline.** Not changed: each F4 attempt still recreates Kafka before its first baseline. A measurement on the VM of these changes (one-off, not committed) did not confirm that Kafka's start raises the baseline. It planned three rounds of three baselines: right after Kafka's recreation and the services' (`fresh`), as F4 takes it; with Kafka not recreated, as the other faults take it; and 60 s after the recreation. Against that VM's reference of 520,455 ns, right after: 478,575, 480,579 and 701,455 ns, the last flagged; not recreated: 490,804 and 481,444; after 60 s: 569,584 and 667,428, the last flagged. The VM restarted before the last two. Kafka's CPU was about 100 ms a second in the 15 s after its recreation and 20 to 39 ms a second in each 15 s from then to 90 s. What flagged the first set's F4 attempts is still not established.
-
-**Runs**, all on one VM, with images and binaries built from the commit that records this section or a later one that changes no code, in this order:
-
-1. `make bench-ref REF_FILE=bench-results/m7/rerun/noise-reference.json`;
-2. `OUT=bench-results/m7/rerun/breaker make bench-fault FAULT=none RATE=275 REF_FILE=bench-results/m7/rerun/noise-reference.json`, 5 runs;
-3. `OUT=bench-results/m7/rerun/faults make bench-fault FAULT=F1 ... F6 RATE=275 REF_FILE=bench-results/m7/rerun/noise-reference.json`, three valid runs each, judged by Faults, setup and pass criteria (M6) as amended for M7, and F2, F5 and F6 also by its criteria of outlier detection.
-
-No run is added after the results. The quality evaluation is not run again: `TestRealDataQuality` uses neither the breaker nor the replicas' client, which its package links only for other tests, so neither change reaches it.
-
-## Hedge delay (M6, D041)
-
-The gateway's `recserve_shard_search_seconds{shard}` observes every call to a replica, from its send until it returns, whatever the result. Three runs as in Load tests (M6): replay, cache off, half the headline rate, `-hedge-delay 0`, so that no call is cancelled by a hedge that won. Each run's p95 per shard comes from the histogram by linear interpolation within a bucket, as Prometheus's `histogram_quantile`. The default becomes the median over the runs of the larger shard's p95, rounded up to 0.5 ms: on healthy replicas about 5% of the searches then send a hedge, half of what the budget allows. Three more runs with that default report hedges per search and p99.
-
-## Bundle swaps under load (M6, D031)
-
-As in Load tests (M6): replay, cache off, half the headline rate, 10 s warmup, 150 s measured. Every 15 s from 15 s on, the admin API swaps to the other of b7ff0634dd7b and 5de55036a382, which have the same items, so nine swaps. The gateway runs with `GODEBUG=gctrace=1`.
-
-- Per run: the p99 and max over the 1 s windows that overlap a swap (from the admin request until its answer) and over the other windows; prepare and drain times from the swaps' answers; GC cycles and pauses in each group, from the trace; the CPU time of the gateway and of the replicas during each swap.
-- Three runs as is, three with `GOGC=off`.
-- If with `GOGC=off` the median over runs of the max over swap windows is at most 1.2 times the median of the max over the other windows, the largest values are attributed to GC. Otherwise the record says that turning GC off does not remove them, gives the CPU readings, and names no other cause.
-- Defect, found 2026-11-11 after the M6 runs: the rule takes for granted that with GC on the swap windows hold the largest values, and does not check it. Where they do not, its ratio can read as GC with nothing for GC to explain. The rule stands as written and nothing was rerun; the M6 results give its reading and why it does not hold there.
-
-## Rollouts with SPEC §5's budgets (M6, D047)
-
-`make kind-check`'s rollouts and swap with the gateways' stage budgets at SPEC §5's values instead of 100 ms, three runs, each on a new cluster. Reported per 1 s window and per phase (before the first rollout, the gateways' rollout, the replicas', the swap, after): p50, p99 and max, failures, and the degraded share by reason. No pass or fail: the control plane shares the CPUs (D022).
-
-## Profiles and an optimization (M6)
-
-**Profiles.** As in Load tests (M6): replay, cache off, 400 requests/s; 30 s CPU profiles of the gateway (`/debug/pprof/profile` on the admin listener) and of annshard-0 (`-debug-addr`), with each container's CPU per request; and annbench's query on glove, M = 16, ef = 400, with a CPU profile. The top functions by flat and cumulative share are kept as text.
-
-**Target.** The function with the largest flat share in the process kind, gateway or replicas taken together, that uses the most CPU per request. If it is not `vec.Dot32`, the profile's conclusion is reported before any change.
-
-**Before and after**, on the same benchmarks: the function's `go test -bench`; annbench on glove, M = 16, one graph file, ef 120, 200, 400 and 800; the service at 200 and 400 requests/s, replay, cache off. Runs alternate before and after, three of each, with noise baselines. A difference is reported only if the three runs after are all better than the three before; otherwise as not resolved on this machine, with both ranges.
-
-**Unchanged results.** The optimized code returns what the code before it returns, or, where it changes the order of floating-point operations, what the definition it records in DECISIONS states, checked by tests; and on the same graph file, recall@100 before and after differs by at most 0.001 at each ef.
-
-## ANN in M6
-
-After the optimization, annbench as in M2 (single thread, recall@100 and p99 at ef 120, 200, 400 and 800): synth with M = 16, glove with M = 16 and 32, glove with M = 32 on two shards; faiss on the same machine for the same sets and settings. Graphs are built once with 4 goroutines; the shards mode records each graph's own M and efConstruction, read from its file. The sharded tier through annshard is measured on the real bundle by the hedge-delay runs, not on glove (D052).
-
-## Kubernetes rollout check
-
-On kind (D022), loadgen sends a fixed rate of 100 requests/s for 5 minutes while, after 60 s, `kubectl rollout restart` runs on the gateway, and, after 180 s, a bundle swap is triggered. **Pass** if no request fails (HTTP 5xx, 503 or transport error) and every response names a single bundle version. Latency is reported but is not part of the check, since the control plane shares the CPUs.
-
-## Stream state in serving (M8, D062)
-
-Committed 2026-11-15, before any of its runs, as the registration's section 1 requires. It measures what the gateway spends in CPU, memory and latency to keep the stream state (D062), and sets no pass line. Rates count recommend requests per second throughout. All runs of a phase are built from one commit, which each run records; if a failure of the gate is fixed after this section is committed, the gate runs again on the new commit and every later run uses it. Results go to `bench-results/m8/serving/`.
-
-**Boots.** A boot is one start of the machine that runs Docker and loadgen, told apart by `/proc/sys/kernel/random/boot_id`, which each run's files record. On each boot, before its first run, the scripts take a noise reference on the idle machine (Noise baseline) into `bench-results/m8/serving/noise-reference-<the boot ID's first 8 characters>.json`, check the bundles against the three versions this section names, stopping everything if one differs, and add the boot's CPU, memory, kernel, reference and image IDs to the environment record.
-
-**Groups.** off: Video_Games' B1, a8d9c526fb03, which names no window, so the gateway keeps no state. on: Video_Games' B1s8, 74ad6c83bf3c, window 14 days, so the gateway reads the events topic and keeps the state. Both are built from `make data` by `make bundle ENCODER=onnx RANKER=1`, B1s8 with `STREAM=14 RECENCY=1`. They have the same `items.ids`, `items.npy` and `user_encoder.onnx`, so with the same histories the replicas search the same vectors for each request in both groups.
-
-**Setup.** As in Load tests (M6): `deploy/bench.compose.yaml`; the gateway, two shards of two replicas, Valkey, Kafka and ingest on CPUs 1 to 3; loadgen on CPU 0, sending to the gateway's address on the compose network; the noise baseline on CPU 1; tracing and the exposure log off; Prometheus, Grafana and Jaeger not running; the cache off (`-cache-size 0`); no admission limits. Before each run, once ingest has applied every event the previous run's gateway accepted, that is once ingest's `recserve_ingest_records_total` reaches the gateway's 202 answers to `/v1/events`, one event each, Valkey is emptied and ingest, the replicas and the gateway are recreated; the gateway preloads the train and valid splits, and the run starts once it answers `/readyz` with 200. Kafka keeps its topic from run to run: ingest reads on from its group's committed offsets and the gateway from the topic's end, so a run's histories and state hold the preload and that run's events.
-
-**Workload: the stream scenario.** The Video_Games test events, numbered in time order from 0; for each, its `/v1/recommend` request, then a `/v1/events` request that writes it: request 2j, counted from the first warmup request, asks for event j's recommendations and request 2j + 1 writes event j. Loadgen sends twice as many requests as the rate. A run of 10 s warmup and 60 s measured uses 70 times the rate in events, so above 617 recommend requests/s the 43,249 test events run out; they start again, and on the k-th pass after the first every time moves on by k times the span from the first test event to the last plus 1 ms, so that every write is a new event. Both groups run this workload. The evaluation gave the state every event (the registration, section 5); replay writes nothing, so its window would hold no event past the test period's first 14 days, and the writes scenario writes 10% of the events.
-
-**Runs.** As in Load tests: 10 s warmup and 60 s measured, with a noise baseline before and after each run against the reference of its boot. Only the noise baseline flags a run (Noise baseline, Flag): a flagged run runs again at once, at most twice, the last attempt counts, and one still flagged is noisy. A group's three runs at a rate are the three attempts that count. A run is valid as in Load tests (Valid run), plus: at least 99% of the window's requests, 2 × 60 × the rate, are sent within it; no request due in the window fails, of either kind; every recommendation names the group's bundle version; and no service container restarts during the run. Its share of degraded recommendations, over those due in the window, is marked above 1% and does not make it run again.
-
-**Phase 1.** 100, 200, 400 and 800 recommend requests/s, in that order; at each rate three runs of each group, in the order off, on, on, off, off, on. Every rate runs, whatever the rates before it gave.
-
-**Phase 2.** Each group's headline, as in Load tests and its M6 additions with D054: the highest rate before the group's stop at which each of its three runs is valid and unflagged, with its recommendations' p99 ≤ 50 ms and at most 1% of them degraded; the rates that meet it need not be consecutive. Phase 1's four rates are the first rates of both grids only if all four ran on the boot phase 2 starts on; otherwise all four run again. The grid goes on in steps of 400 up to 4,000, the last rate M6's grid ran in full (D054); while both groups run, each rate's six runs keep phase 1's order, and once one group has stopped the other runs its three alone. A group's grid stops at its first rate where one of its own runs is invalid or the median of its three p99s is above 100 ms, and that rate does not count. The last rate, 4,000, runs and can be the headline; if it meets the condition, the headline is at least 4,000 and there is no bisection. Otherwise, once its grid has stopped, each group bisects as in M6 (Bisection), between its highest grid rate that meets the condition and the next grid rate, with three runs of its own at each rate; when both groups bisect, off goes first. If no grid rate meets the condition, 50 runs as Bisection says, and a group that meets it at neither 100 nor 50 has no headline.
-
-**Correctness gate.** Before any run above, on the on group: compose as above, on a new topic (`make down` first). The requests of the 100 earliest valid events go first, not compared, and no event is written. Then the gateway answers the requests of test events 0 to 999, sent one at a time, with the items, in order, that the pipeline in process gives over the same bundle, histories and state (`fresh.Events` over the train and valid splits, shards in process, every stage budget off), and none of its responses is degraded. Then test events 0 to 1,999 are written through `/v1/events` one at a time; once the gateway has applied all 2,000 with no record left to read and ingest has applied them, the requests of test events 2,000 to 2,999 are compared the same way, the process's histories and state holding the 2,000 as well. Then the admin API swaps to B1 and back to B1s8, whose state is built anew from the events kept, and the requests of test events 3,000 to 3,999 are compared again. A failure is a bug; after its fix the gate runs again, and no run of this section starts before it passes. The gate measures nothing.
-
-**Reported**, for each run:
-
-- the recommendations' p50, p90, p99, p99.9 and max, and their degraded share, over the recommendations due in the window; the p99 of `/v1/events`;
-- each container's CPU time over the window per recommendation answered: its cgroup's counter read when the window starts and after loadgen has stopped, over the recommendations due in the window and answered, degraded ones included, as for M6 (Additions for M6);
-- per shard, its two replicas' CPU time together over the same span per call the gateway made to the shard, hedges included (`recserve_shard_search_seconds`), and the second replicas asked per recommendation answered (`recserve_shard_hedges_total`, `won` and `lost`);
-- the gateway's resident memory and Go heap in use (`process_resident_memory_bytes` and `go_memstats_heap_inuse_bytes` on its `/metrics`) just before loadgen starts, after the noise baseline, and when the window ends; and its peak resident memory (`VmHWM` of its process) after loadgen has stopped;
-- the time from its container's start to its log line that it serves;
-- in the on group, the events applied, duplicate and poison from the window's start until loadgen has stopped (`recserve_stream_events_total`), and the records left to read when the window ends (`recserve_stream_lag_records`).
-
-A value that could not be taken is reported as missing, never as 0. Per rate, both groups' runs side by side.
-
-**Readings.** No pass line. Readings 1 to 4 use phase 1's four rates. A median is over a group's three counted runs at a rate, invalid and noisy ones included and marked. A reading that needs a missing value is missing. Differences are on minus off, and p99 is the recommendations'.
-
-1. Per rate, the gateway's CPU per recommendation, the median over the on runs over the median over the off runs, and the same for Kafka, whose every partition the on gateway reads; and the median p99 of the on runs minus that of the off runs; every run listed.
-2. At a rate where each of the three on runs is valid and unflagged, with its p99 ≤ 50 ms and at most 1% of its recommendations degraded, the gateway keeps the state at that rate on this setup. At another rate, the reading says the rate does not show it, and which run misses which condition.
-3. The replicas get the same searches in both groups while few requests degrade, hedges aside (D041). At a rate where every run of both groups has at most 1% of its recommendations degraded, for each shard, if its replicas' CPU per call over the three on runs and over the three off runs form ranges that do not overlap, the rate is marked as a measurement anomaly; ranges that touch overlap. At another rate the reading is not judged.
-4. Memory: at each rate, the median over the on runs of the resident memory and of the heap in use just before loadgen starts, minus the median over the off runs.
-5. Phase 2: each group's headline, and the on group's minus the off group's. A group without a headline is reported as such, and the difference is then missing.
-
-**Within one boot.** No figure here is compared with M6's or M7's: those come from the VMs their sections record, from b7ff0634dd7b with a mean encoder and 64 dimensions, from scenarios that write none or 10% of the events, and from a gateway that read no topic. Every reading uses runs of one boot.
-
-**Restarts.** If the machine restarts, which stops the scripts and the services:
-
-- A run cut off, without its summary, runs again from its start.
-- Phase 1: a rate is complete when its six counted runs have summaries. If the machine restarts within a rate, that rate's runs from the earlier boot move to `bench-results/m8/serving/phase1/set-aside/<the boot ID's first 8 characters>/`, are reported apart, and the rate runs again in full; complete rates stand.
-- Phase 2 runs on one boot. If the machine restarts within it, its own runs so far move to `bench-results/m8/serving/phase2/set-aside/<the boot ID's first 8 characters>/` and it starts again; phase 1's runs and readings stay.
-- The gate, the swap run or a profile run that a restart cuts off starts again in full; each benchmark's ten counts come from one boot.
-
-**Also measured.**
-
-- Micro-benchmarks, without compose, on one core (`taskset -c 1`, `-cpu 1`), ten counts each, the median and range reported. On the train split's events as the gateway keeps them, with B1s8's items, each of the valid split's 34,510 events taken one at a time in time order: the time to take an event (kept, paired and added to the state, D062 point 2) and the heap it adds, after GC. At each valid event's time: a popular list read that misses the kept list, the co-occurrence rows of its request's seeds (its 10 latest history items), and the window count and first event of its item.
-- The pipeline in process, every stage budget off, shards in process, histories and state from the train and valid splits: the time per request, on one core, ten counts, of the requests of valid events 0, 10, 20 and so on, numbered in time order from 0, on B1 without the state and on B1s8 with it.
-- Swaps: one run of the on group at 200 recommend requests/s, 10 s warmup and 150 s measured. At 40, 80 and 120 s after the first measured request the admin API swaps to B1s6 (d6d2691322ca, built with `STREAM=14` without `RECENCY`; same items, so the state is shared), then to B1 (no window: the state is dropped, the events kept), then back to B1s8 (its state built from the events kept). Reported for each swap: prepare and drain times from the admin answer, and the gateway's resident memory, heap in use and records left to read just before its admin request and just after its answer; for the run, the peak resident memory, and the recommendations' p99 and max over the 1 s windows that overlap a swap, from its admin request to its answer, pooled, and over the others, as in Bundle swaps under load (M6).
-- Profiles: one run of each group at 400 recommend requests/s, with a 30 s CPU profile of the gateway (`/debug/pprof/profile` on its admin listener) from 20 s after the first measured request; the top functions by flat and cumulative share are kept as text, with the run's gateway CPU per recommendation. These runs are outside phase 1's tables.
-
-**Order.** The gate, the micro-benchmarks and the pipeline in process, phase 1, the swap run, the profiles, phase 2.
+| Headline, replay, cache off, with the earlier 3 ms history budget | 550 requests/s, p99 4.61, 4.59 and 5.07 ms; one gateway on 2 CPUs about 1,800 requests/s, an estimate | [M6](#m6-2026-11-11) |
+| Faults at 275 requests/s, cache off, outlier detection, three runs each, second set (a second VM) | pass: replica killed, 50 ms on a shard, replica paused, searches hanging, fault-phase p99 6.8 to 20.5 ms; fail: Valkey down, one run recovering in 7 s with 5 allowed; not judged: consumer paused. The first set, another VM, failed 50 ms on a shard and searches hanging on one run each. No breaker opening in five no-fault runs, cache on | [M7, second set](#m7-second-set-2026-11-12) |
+| Rollouts and a swap in kind, 100 requests/s, SPEC §5's budgets | no failed response; at most 0.133% of a phase's responses degraded | [M6](#m6-2026-11-11) |
+| recall@10 on 43,249 Video_Games test events, each degradation forced | 0.0181 healthy, 0.0098 without co-occurrence, 0.0050 without the ranker; without the encoder, with a shard missing or with HNSW at ef 400, within 0.0004 of healthy | [M7](#m7-2026-11-12) |
+| recall@10 with state kept from the event stream against the bundle frozen, Musical_Instruments, its one registered test read | 0.0317 against 0.0200, +0.0117, 95% interval over users +0.0096 to +0.0137, confirming the registered hypothesis; Video_Games, exploratory, 0.0375 against 0.0197 | [M8](#m8-2026-11-14-and-15) |
+| Headline on the recommendations, test events requested then written in time order, cache off | 150 recommend requests/s with the stream state, 300 without; gateway CPU per recommendation 1.79 to 1.91 times as high with it; not compared with M6's or M7's | [M8, stream state](#m8-stream-state-in-serving-2026-11-15) |
+| `vec.Dot` in AVX2, `vec.Dot32` in AVX | replicas' CPU per request 37% lower and p99 15 to 26% lower at 200/s; `Dot32` 2.7 to 3.3 times faster, p99 in the service lower only at 400/s, by 0.01 ms, not attributed | [M6](#m6-2026-11-11) |
+| HNSW on glove-100, one thread | p99 1.0 to 1.3 times faiss's at the same ef; recall@100 reaches 0.95 only at p99 7.66 ms, above M2's 5 ms | [M6](#m6-2026-11-11) |
+| seqrec-lab's bundle against the baseline | not run yet (TASKS) | |
 
 ## Results
 
-### The README's results as of commit 6232424
+### M8, stream state in serving (2026-11-15)
 
-Kept here in full when the README was shortened.
+By [Stream state in serving](BENCHMARK_PROTOCOL.md#stream-state-in-serving-m8-d062), every step on one boot, f730b1e7, of one VM (Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.4, Docker 29.9.2, cgroup v1; noise reference 711,611 ns per pass). Files: `bench-results/m8/serving/`. Rates are recommend requests/s. Commit 7e7639a, made after the protocol, changes only `BenchmarkRealStreamTake`, to keep the loaded data live between its two heap readings.
 
-In the latest fault runs (275 requests/s on one 4-vCPU VM, result cache off, three runs per fault), four faults passed their criteria with no error and a fault-phase p99 of 6.8 to 20.5 ms: a replica killed, a replica paused, a replica whose searches hang, and 50 ms of latency on a shard. Valkey down failed: one run took 7 s to recover with 5 s allowed. The ingest consumer paused was not judged: one of its runs had no valid attempt. The runs are in this file (M7, second set), judged by its fault criteria of M6 as amended for M7.
+**Headline: 150 with the state, 300 without** (phase 2, all 12 runs valid, none noisy).
 
-Measured in M6 and M7 on 4-vCPU cloud VMs, with every service on the same three CPUs ([report with charts](../bench-results/m6/report.md), this file). The figures are that machine's and that topology's, and figures from different VMs are not compared.
+- Without the state the grid stopped at 1,200 (median p99 101.47 ms). 200 is its highest grid rate that meets the condition; 300 meets it, with p99 16.02 to 16.35 ms and 0.35 to 0.41% degraded, and 350 does not, with 1.19 to 1.59%.
+- With the state the grid stopped at 800 (median p99 319.11 ms). 100 is its highest grid rate that meets the condition; 150 meets it, with p99 19.48 to 23.68 ms and 0.17 to 0.96% degraded.
 
-| What | Result |
-|---|---|
-| Headline: the highest rate with p99 ≤ 50 ms and at most 1% of the responses degraded; replay, cache off | 550 requests/s, p99 4.6 to 5.1 ms (with the earlier 3 ms history budget) |
-| One gateway on 2 CPUs | about 1,800 requests/s, an estimate from its CPU per request |
-| Faults at half the headline, three runs each | replica killed, 50 ms on a shard, Valkey down, searches hanging: pass by the criteria as written, though for the replica faults the criteria cannot show that a restarted replica serves again or how fast searches recover; ingest paused, replica paused: fail, each on one second with Valkey's circuit breaker open |
-| Faults with the cache off, three runs each (M7) | replica killed, replica paused, searches hanging, Valkey down: pass; the replica answering again within 5 s of the fault's end and taking half of its shard's calls in the last minute; 50 ms on a shard: fail, on one second with the Valkey breaker open; consumer paused: not judged, two valid runs of three |
-| Outlier detection (M7), cache off | replica paused: fault phase p99 5.1 to 5.5 ms against 17.4 to 17.7 without it, pass; searches hanging: 5.7 to 6.4 ms against 18.2 to 18.4, fail, one run of three recovering in 13 s with 5 allowed; 50 ms on a shard: fail, on one second with the Valkey breaker open, one run of three not valid |
-| Faults with the cache off and outlier detection, second set (M7, another VM), three runs each | replica killed, 50 ms on a shard, replica paused, searches hanging: pass, fault phase p99 6.8 to 20.5 ms; Valkey down: fail, one run recovering in 7 s with 5 allowed; consumer paused: not judged, two valid runs of three; with no fault and the cache on, no breaker opening in five runs |
-| Recommendation quality on 43,249 test events, each degradation forced (M7) | recall@10 0.0181 healthy, 0.0098 without co-occurrence, 0.0050 without the ranker; without the encoder, with a shard missing or with HNSW at ef 400, every difference within 0.0004 of healthy |
-| `vec.Dot` in AVX2 | the replicas' CPU per request 37% lower, p99 a quarter lower at 200 requests/s |
-| HNSW on glove-100, one thread | p99 1.0 to 1.3 times faiss's at the same ef; recall@100 reaches 0.95 only at a p99 of 7.66 ms |
+**Phase 1**, three runs per group and rate, all 24 valid and none noisy (`phase1/table.md`), medians for the ratios:
 
-### M0 (2026-11-08 and 09)
+| Rate | p99 off, ms | p99 on, ms | Degraded off | Degraded on | Gateway CPU per recommendation, on over off | Resident memory before load, on minus off |
+|---:|---|---|---|---|---|---:|
+| 100 | 9.66 to 10.68 | 15.50 to 17.82 | 0.00 to 0.03% | 0.03 to 0.23% | 1.865 | +243 MB |
+| 200 | 11.80 to 13.18 | 31.59 to 37.41 | 0.07 to 0.22% | 1.12 to 1.57% | 1.790 | +215 MB |
+| 400 | 23.38 to 28.22 | 65.12 to 99.14 | 2.24 to 6.00% | 10.63 to 25.51% | 1.827 | +246 MB |
+| 800 | 44.79 to 47.94 | 287.57 to 627.01 | 32.26 to 39.82% | 76.75 to 78.25% | 1.906 | +232 MB |
 
-One cloud VM: Intel Xeon @ 2.10GHz, 4 vCPU, 15 GB, kernel 6.18.44, Go 1.27.3. Session noise reference 820,984 ns per pass (`bench-results/m0/noise-reference.json`, upper median; threshold 903,082 ns); for the coder/hnsw rerun 816,650 ns (`noise-reference-2.json`, true median). Raw results are in `bench-results/m0`.
+- Kafka's CPU per recommendation, on over off, is 1.445, 1.254, 1.023 and 0.922; heap in use before load is 222 to 274 MB higher.
+- The gateway keeps the state at 100 on this setup: each on run is valid and unflagged, with p99 ≤ 50 ms and at most 1% degraded. 200 does not show it (1.12 to 1.57% degraded), and at 400 and 800 each on run misses both conditions.
+- At 100 the replicas' CPU per call is higher with the state in every run, in ranges that do not overlap on either shard (shard 0: 2.9488 to 3.0249 ms off, 3.0398 to 3.1123 ms on; shard 1: 3.0167 to 3.0869 ms off, 3.0981 to 3.1864 ms on), although the second replicas asked per recommendation are the same, 0.1740 to 0.1742. By the protocol this marks 100 as a measurement anomaly on both shards; its cause is not known. At 200, 400 and 800 a run has more than 1% degraded, so the reading is not judged.
+- In every on run no event taken was a duplicate or poison and no record was left to read at the window's end. The gateway served 2.80 to 3.56 s after its container started in the off runs and 5.00 to 5.69 s in the on runs; its peak resident memory was 346 to 405 MB and 573 to 662 MB.
 
-#### R1: pass, with intra-op threads = 1
+**Correctness gate: pass.** On the preload, after 2,000 writes and after a swap away and back, the gateway answered the requests of test events 0 to 999, 2,000 to 2,999 and 3,000 to 3,999 with the items, in order, that the pipeline in process gives, none degraded, with a largest score difference of 0 (`gate/gate-f730b1e7.txt`).
 
-| Criterion | Result |
-|---|---|
-| 1. Parity (max abs diff, Go vs Python) | 0 for encoder L=50, encoder L=200 and ranker; pure-Go MLP 1.8e-7 |
-| 2. Concurrency 4, p99 | encoder L=50 1.02 ms (≤ 5), ranker C=500 2.91 ms (≤ 10) |
-| 3. Image | builds; parity 0 inside `distroless/cc-debian13`; 91.9 MB |
+**Micro-benchmarks** (ten counts each on one core, `micro/micro.md`): taking a valid event into the state takes 2,990.5 ns (2,795 to 3,820) and adds 230.5 B of heap; over every tenth valid event a request through the pipeline in process takes 2.383 ms (2.191 to 2.501) on B1 without the state and 4.639 ms (4.243 to 4.765) on B1s8 with it. Measured separately, a popular list read that misses the kept list takes a median of 0.413 ms and the co-occurrence rows of a request's seeds 1.384 ms (5.533 seeds on average).
 
-Latency in µs, B = 1 (`onnx/latency.json`):
+**Swaps** (one run of the on group at 200, valid, not noisy, peak resident memory 890 MB, `swap/swap.md`): to B1s6, B1 and B1s8, prepare took 760, 690 and 4,055 ms and drain 1, 27 and 3 ms. Over the 7 windows of 1 s that overlap a swap the recommendations' p99 is 88.00 ms and their max 114.88 ms; over the other 143, 48.76 ms and 202.30 ms.
 
-| Model | Threads | Conc. | Calls/s | p50 | p99 | max |
-|---|---|---|---|---|---|---|
-| encoder L=50 | 1 | 1 | 2,624 | 338 | 684 | 6,590 |
-| encoder L=50 | 1 | 4 | 9,068 | 365 | 1,021 | 25,174 |
-| encoder L=50 | 1 | 8 | 8,816 | 462 | 8,510 | 47,103 (noisy) |
-| encoder L=50 | default | 4 | 4,310 | 406 | 8,452 | 28,488 |
-| encoder L=200 | 1 | 1 | 618 | 1,521 | 2,408 | 8,883 |
-| encoder L=200 | 1 | 4 | 2,165 | 1,635 | 4,546 | 14,570 |
-| encoder L=200 | default | 4 | 1,279 | 1,640 | 12,433 | 26,263 |
-| ranker C=500 | 1 | 1 | 3,275 | 271 | 550 | 5,818 |
-| ranker C=500 | 1 | 4 | 10,503 | 288 | 2,905 | 8,881 |
-| ranker C=500 | default | 4 | 7,214 | 252 | 7,864 | 24,341 |
-| pure-Go MLP C=500 | | 1 | 99 | 9,627 | 15,585 | 21,809 |
-| pure-Go dot C=500 | | 1 | 60,702 | 13 | 43 | 4,741 |
+**Profiles at 400** (`profile/`), both runs in overload (6.49% off and 29.08% on degraded, p99 29.03 and 109.50 ms): gateway CPU per recommendation 1.643 ms off and 3.161 ms on; with the state `fresh.top` has 42.19% of the samples cumulative.
 
-- With ONNX Runtime's default thread pool, concurrent callers contend for the 4 CPUs; p99 at concurrency 4 is 2.7 to 8.3 times that with one intra-op thread. Services set intra-op threads to 1 (D015).
-- At concurrency 8 (more callers than CPUs) p99 rises to 8 to 13 ms with one intra-op thread and 13 to 21 ms with the default.
-- The pure-Go MLP is a plain scalar loop, about 35 times slower than ONNX Runtime; it serves only as a parity reference.
-- Image build: the cloud session intercepts TLS with its own CA, so the build stage ran with two extra lines trusting that CA (`onnx/image-build.txt`); the committed Dockerfile is unchanged.
+### M8 (2026-11-14 and 15)
 
-#### R2: fail; the fallback is adopted
+By [the registration](registration/m8-freshness.md) and its amendment "2026-11-15: Video_Games read 2 stopped before any metric". Each read sends one request per test event through the pipeline in process, every stage budget off, MMR included; the references are computed without a request. The reads record no environment, and per-event ranks are not committed (D011); the end of each read's file gives the SHA-256 of each row's rank file.
 
-recall@100 by ef, and single-thread p99 at ef = 800 (`ann/*.json`). coder/hnsw rows are the rerun with `Ml = 1/M` under the second session reference, 816,650 ns (D017).
+**H1 confirmed.** On Musical_Instruments' 42,595 test events, S3's recall@10 is 0.0317 and F0's 0.0200. S3 − F0 is +0.0117, with a 95% interval over users of [+0.0096, +0.0137] and over events of [+0.0102, +0.0131]; the interval over users is above 0 (section 8). The SHA-256 of the rank files: F0 49588aab22c8ad3f094ae69325a8209bac3c198d6bb31034e40eb093ee72910d, S3 7cf93b94779ad5a76b93e0a389d0d2d4f6b1ca8871ad218557d6f05457d47c04.
 
-| Set | Index | M / efC | recall@100 at ef = 120 / 200 / 400 / 800 | p99 at ef = 800 | Build |
-|---|---|---|---|---|---|
-| synth | coder/hnsw v0.6.1 | 16 / 200 | 0.035 at every ef | 0.67 ms | 147 s |
-| synth | coder/hnsw v0.6.1 | 32 / 400 | 0.064 at every ef | 0.53 ms | 307 s |
-| synth | coder/hnsw 36cab60 | 16 / 200 | 0.792 / 0.812 / 0.821 / 0.824 | 21.3 ms | 2,929 s |
-| synth | faiss | 16 / 200 | 0.996 / 1.000 / 1.000 / 1.000 | 1.34 ms | 322 s |
-| synth | faiss | 32 / 400 | 0.999 / 1.000 / 1.000 / 1.000 | 2.02 ms | 976 s |
-| glove | coder/hnsw v0.6.1 | 16 / 200 | 0.023 at every ef | 0.54 ms | 169 s |
-| glove | coder/hnsw v0.6.1 | 32 / 400 | 0.033 at every ef | 0.66 ms | 429 s |
-| glove | faiss | 16 / 200 | 0.719 / 0.778 / 0.844 / 0.896 | 3.43 ms | 666 s |
-| glove | faiss | 32 / 400 | 0.801 / 0.859 / 0.920 / 0.961 | 6.59 ms | 2,159 s |
-| synth | exact (Go) | | 1.000 | 87 ms | |
-| glove | exact (Go) | | 1.000 | 161 ms | |
+**The conditions of section 7**, Musical_Instruments (MI) with a window of 30 days, Video_Games (VG) with 14; VG's rows are exploratory (section 11). Recall@10 of all test events (NDCG@10 and Recall@20 are in the reads' files):
 
-- coder/hnsw v0.6.1, the pinned version, does not reach recall@100 ≥ 0.95 at any ef, on either set, with either setting; the criterion fails. Its recall does not change with ef: its layer search keeps only k results and stops after the first expansion that does not improve the best distance, and its heap's `Max` and `PopLast` take the last array slot of a min-heap, which is not the largest element (`graph.go` `layerNode.search`, `heap/heap.go`). ef only bounds the candidate queue. Its GC criterion holds: the longest pause in any query phase is at most 0.26 ms; heap after build is 1.0 to 2.0 GiB.
-- Upstream fixed both search defects on 2026-06-22 (commit 36cab60, untagged). Measured as extra information outside the criterion: on synth its recall@100 levels off at 0.824 while p99 grows to 21 ms, and its build took 49 min, so it would fail too. Its glove run was stopped by a 2-hour job limit and not repeated.
-- faiss with the same settings reaches 1.000 on synth, so the data, ground truth and recall code agree; on glove its recall is lower at every ef.
-- On glove, faiss reaches recall@100 ≥ 0.95 only at M = 32, ef = 800, with p99 6.59 ms. The single-thread p99 ≤ 5 ms part of the criterion is therefore not met there by the outside reference either. This is recorded as found; the criterion is unchanged and applies to the hand-written index in M2.
-- Noise: six coder/hnsw points of synth M = 16 in the rerun stayed flagged after three attempts (marked noisy in the JSON); none of them affects the verdict, which rests on recall. The faiss runs are bracketed but were not rerun; the baseline before glove faiss M = 32 was 911,710 ns, 11% over the first reference, so that run is flagged. faiss is the outside reference and does not enter the criterion.
-- Settings: coder/hnsw has no separate efConstruction; it builds with `EfSearch`, which was set to efConstruction during the build. The faiss latencies include Python's per-call overhead, about 6 to 11 µs. The Go heap figure is live heap after a GC; faiss's figure in its JSON is RSS growth.
+| Row | MI Recall@10 | VG Recall@10 |
+|---|---:|---:|
+| F0, bundle frozen | 0.0200 | 0.0197 |
+| S1, popularity from the stream | 0.0186 | 0.0247 |
+| S2, S1 with co-occurrence from the stream | 0.0197 | 0.0298 |
+| S3a, B1s6 (no recency features) with S2's sources | 0.0237 | 0.0431 |
+| S3, B1s8 (recency features) with S2's sources | 0.0317 | 0.0375 |
+| R7, bundle rebuilt every 7 days | 0.0242 | 0.0381 |
+| R30, rebuilt every 30 days | 0.0231 | 0.0355 |
+| popularity reference | 0.0155 | 0.0320 |
 
-### M2 (2026-11-09)
+| Δ Recall@10 | MI mean, 95% CI over users | VG mean, 95% CI over users |
+|---|---|---|
+| S3 − F0 | +0.0117 [+0.0096, +0.0137] | +0.0178 [+0.0152, +0.0202] |
+| S1 − F0 | -0.0014 [-0.0020, -0.0008] | +0.0050 [+0.0037, +0.0062] |
+| S3 − S3a | +0.0081 [+0.0062, +0.0099] | -0.0057 [-0.0075, -0.0039] |
+| S3 − R7 | +0.0075 [+0.0056, +0.0094] | -0.0006 [-0.0035, +0.0019] |
+| S3 − R30 | +0.0086 [+0.0067, +0.0105] | +0.0019 [-0.0009, +0.0044] |
 
-A different cloud VM from M0: Intel Xeon @ 2.30GHz with AVX-512 and AMX (M0: Xeon @ 2.10GHz), 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.3 (`bench-results/m2/env.txt`). M0's noise binary ran about 28% faster here (591,451 and 593,274 ns per pass against 820,984 ns), so M0's latencies are not comparable with these; faiss and exact search were rerun here with the unchanged M0 code. Session reference 652,267 ns (`noise-reference.json`, threshold 717,494 ns), from the one noisebase build of D025; its ten runs fell into two groups, about 590,000 and 700,000 to 820,000 ns, with nothing else running.
+- In both categories S3 is above F0 with intervals above 0. The parts differ: the stream's popularity alone (S1 − F0) is -0.0014 on MI and +0.0050 on VG, and the two recency features (S3 − S3a) +0.0081 and -0.0057, each interval excluding 0.
+- Against rebuilding, S3 beats R7 and R30 on MI, with intervals above 0, and does not on VG, where the intervals include 0. Rebuilt every 7 days is above the frozen bundle on both (R7 − F0 +0.0042 and +0.0184).
+- Recall@10 by whether the event's item has a train event (MI 28,609 with and 13,986 without, VG 17,091 and 26,158; `read-*.md`): F0 is 0.0299 and 0.0000 on MI and 0.0499 and 0.0000 on VG; S3 is 0.0284 and 0.0386 on MI and 0.0105 and 0.0551 on VG, so on VG S3 is far below F0 where the item has a train event, and above it elsewhere. R7 is 0.0317 and 0.0089 on MI, 0.0557 and 0.0266 on VG.
+- Read 1 (`read-1.md`): B1's healthy recall@10 is above B0's in both, 0.0200 against 0.0187 on MI and 0.0197 against 0.0181 on VG; on VG, B0 is b7ff0634dd7b and gives M7's healthy and reference recall@10 again, 0.0181 and 0.0043.
 
-#### Hand-written HNSW: fail, on glove latency only
+**Choices on valid (section 6).** The ALS settings and windows are in `bench-results/m8/<category>/` (`als-grid.txt`, `windows.txt`) and the bundles' versions at the top of each read's file: the window is 14 days for Video_Games (14 and 30 days tie at recall@10 0.0581, and 14 has the higher NDCG@10) and 30 for Musical_Instruments.
 
-recall@100 and single-thread p99 by ef (`ann/*.json`). The hand-written graphs were built with 4 goroutines (`Workers = 4`), faiss's with one thread, so build times are not comparable.
+**Reads** (`bench-results/m8/test-reads.log`): Video_Games' read 1 at 868f9be (2026-11-14T22:01:40Z); its read 2, stopped by the kernel for memory before any metric, run again under the amendment at b1df253 (2026-11-15T00:37:15Z); Musical_Instruments' one read at 6bfdbab (02:36:09Z). Two tests before it and `TestRealDataStreamGolden` after it opened Musical_Instruments' test file through `loadRealData` for its earliest event time only; none sent a test event as a request. Between Video_Games' read 1 and the stopped read 2 a script read its test file's event times, and a temporary test outside the repository built the stream state from all three splits, the 43,249 test events included, to check golden stream inputs, printing no metric (the amendment).
 
-| Set | Index | M / efC | recall@100 at ef = 120 / 200 / 400 / 800 | p99 ms at ef = 120 / 200 / 400 / 800 | Build | Unreachable |
-|---|---|---|---|---|---|---|
-| synth | recserve/hnsw | 16 / 200 | 0.996 / 1.000 / 1.000 / 1.000 | 0.57 / 0.73 / 0.91 / 1.21 | 109 s | 89 |
-| synth | faiss | 16 / 200 | 0.996 / 1.000 / 1.000 / 1.000 | 0.46 / 0.60 / 0.83 / 1.46 | 324 s (disturbed) | |
-| glove | recserve/hnsw | 16 / 200 | 0.712 / 0.774 / 0.842 / 0.898 | 1.22 / 2.09 / 3.31 / 7.63 | 362 s | 24 |
-| glove | faiss | 16 / 200 | 0.719 / 0.778 / 0.844 / 0.896 | 0.94 / 1.02 / 1.70 / 3.75 | 728 s | |
-| glove | recserve/hnsw | 32 / 400 | 0.795 / 0.852 / 0.914 / 0.958 | 2.70 / 4.12 / 7.72 / 15.48 | 1,164 s | 3 |
-| glove | faiss | 32 / 400 | 0.801 / 0.859 / 0.920 / 0.961 | 1.11 / 1.84 / 3.60 / 6.45 | 1,930 s | |
-| glove | recserve/hnsw, 2 shards | 32 / 400 | 0.851 / 0.900 / 0.94997 / 0.980 | 3.76 / 5.26 / 8.61 / 15.71 | 1,110 s per shard | 2 + 1 |
-| synth | exact (Go) | | 1.000 | 110.8 | | |
-| glove | exact (Go) | | 1.000 | 199.4 | | |
+**Validity (section 10).** A read that fails a condition stops before it writes its file, and each of the three counted reads wrote its file. The checks, at a5ff644 in `internal/recommend` (the two on-valid ones earlier, at d0eb293 for Video_Games and 6bfdbab for Musical_Instruments): no response of a condition is degraded and the forced conditions report their reasons exactly when forced; every test event is at or after 1658002729837; each request's window count equals a binary search of its item's sorted event times; Video_Games' read 2 repeats read 1's F0 and vector-reference ranks; on valid, the popularity reference equals fresh.py's for every window and B1's vector reference equals the grid script's.
 
-- synth passes with M = 16, efConstruction = 200: recall@100 reaches 0.95 first at ef = 120 (0.9956), with p99 0.57 ms, and no GC cycle ran in any synth query phase. M = 32 was not run on synth.
-- glove: with M = 16 recall@100 never reaches 0.95 (0.898 at ef = 800). With M = 32 it does only at ef = 800 (0.9575), with p99 15.48 ms, above 5 ms; that point was not flagged (first attempt, baselines 589,900 and 588,214 ns). The longest GC pause in any glove query phase is at most 0.20 ms. Only the latency part fails, so the criterion fails as written and no threshold changes; as the protocol states, the index stays in use with its measured p99 given wherever retrieval latency is reported. No qualifying point has a p99 between 3.6 and 5 ms, so the verdict does not depend on this CPU being faster than M0's.
-- Two shards: two shard processes, each with the half of the vectors `shard.Of` assigns to it and its own graph (2 build goroutines each); the parent sends every query to both over pipes and merges their top 100, scored against the full ground truth. recall@100 is 0.94997 at ef = 400, so the lowest ef reaching 0.95 is 800, with p99 15.71 ms: on 4 vCPUs, two shards searching with the same ef as one index do not lower p99. The GC statistics of this run are the parent's only; the shard processes, which hold the graphs, were not measured. M6 measures the sharded tier again through annshard and gRPC.
-- Against faiss on this machine, recall agrees within 0.007 at every point. p99 is 1.3 to 2.4 times faiss's on glove, and 0.8 to 1.2 times on synth. faiss's recall equals M0's to the digits shown, and checkgt verified the ground truth of 100 queries per set against an exact scan, so the regenerated data and ground truth match M0's. M0's faiss p99 at ef = 800, from the slower CPU: 1.34 ms (synth, M = 16), 3.43 ms and 6.59 ms (glove, M = 16 and 32).
-- Unreachable nodes are those layer 0 does not reach from the entry point (`hnsw.Index.Reachable`). Heap in use after a collection, with the vectors: synth 386 MiB (244 MiB of vectors), glove 619 MiB with M = 16 and 763 MiB with M = 32 (451 MiB of vectors). These figures also hold the queries and ground truth, 6.3 MiB on synth and 7.6 MiB on glove, 2 to 5% of the heap beyond the vectors.
-- Noise: of the 40 query points (12 per single-index run, 4 for two shards), 15 needed a third attempt and 8 (20%) were still flagged after it; each point's baselines and attempt are in its JSON. Builds are not repeated: both glove builds are flagged. The synth faiss run is flagged (867,327 and 830,893 ns before and after), and its build overlapped a test run pinned to CPU 3, so its build time is for reference only; the glove faiss runs are not flagged. The glove exact run is flagged before and after (790,304 and 742,262 ns, `glove-exact-noise-*.json`). The noise record inside `glove-exact.json` holds the baselines `m0ann` timed in its own process (482,413 and 749,650 ns), which D025 does not compare with the reference; the run passed `-ref 0`, which turns flagging off, so its `noisy: false` means not checked. faiss and exact search are references and do not enter the criterion.
-- Noise threshold: the session reference is the median of ten runs that fell into two groups, 587,389 to 595,671 ns and 708,863 to 821,079 ns, so the threshold (717,494 ns) lies about 20% above the lower group and inside the upper one, above one of its five runs. A baseline from the lower group never flags and one from most of the upper group does: a flag mostly records which group the machine was in, not a slowdown of a few percent.
+### M7, second set (2026-11-12)
 
-### M3 (2026-11-10)
+By [Second M7 set](BENCHMARK_PROTOCOL.md#second-m7-set-breaker-on-a-failure-rate-cover-benchsum-as-written), on one VM other than the first set's (Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.4, Docker 29.9.2, cgroup v1; `bench-results/m7/rerun/*/env.txt`), with images built from e0f2d69. Session reference 619,668 ns (a baseline above 681,635 ns is flagged); bundle b7ff0634dd7b. These results are judged against the criteria only.
 
-Another cloud VM: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.3, Valkey 9.1 and Kafka 4.4.0 in Docker over loopback (`bench-results/m3/env.txt`). Session reference 800,115 ns (`noise-reference.json`, ten runs from 775,013 to 838,451 ns); the twelve baselines of the six runs lie between 780,814 and 834,455 ns, and none is flagged. Code at 47bad71, baseline bundle 5de55036a382, 814,586 events in the histories.
+The runs' baselines record a different noisebase sha256 (6d64fe17…) from the reference's (e11ef169…) and uncommitted changes: `make bench-fault` rebuilt the binaries while the new results were untracked in the tree; built again at e0f2d69, `cmd/noisebase` gives e11ef169… from a clean tree and 6d64fe17… with an untracked file.
 
-#### Stage check of the Valkey path: fail, in the round that computes
+**Breaker openings with no fault: 0 in 5 runs, as expected** (`rerun/breaker/`). Five runs took five attempts, all valid; the healthy phases had a p99 of 7.01 to 8.62 ms and no error.
 
-Time in the stage "history read, then cache lookup", in µs, runs 1 / 2 / 3 (`stage-run*.log`). In the first round every request misses and computes; in the second, with a cache, every request hits.
+**Fault runs: F1, F2, F5 and F6 pass; F3 fails on one run's recovery; F4 is not judged.** `rerun/faults/`, with the cache off, hedge delay 2.5 ms, history budget 5 ms and outlier detection, by the criteria of Faults amended for M7, and for F2, F5 and F6 also those of outlier detection. 18 runs took 23 attempts; 6 were invalid, all on flagged baselines. The valid runs' healthy phases had a p99 of 7.05 to 10.12 ms and at most 0.22% degraded; no run had an error.
 
-| Store and cache | Round | Stage p50 | Stage p99 | History read p99 | Cache lookup p99 | Request p50 |
-|---|---|---|---|---|---|---|
-| process, cache off | 1 | 3 / 3 / 3 | 31 / 16 / 24 | 31 / 16 / 24 | | 2,506 / 2,432 / 2,402 |
-| process, cache off | 2 | 3 / 3 / 3 | 11 / 9 / 8 | 11 / 9 / 8 | | 2,329 / 2,401 / 2,329 |
-| process, cache on | 1 | 3 / 3 / 3 | 12 / 9 / 15 | 7 / 7 / 12 | 2 / 1 / 1 | 2,339 / 2,367 / 2,531 |
-| process, cache on | 2 | 2 / 3 / 3 | 100 / 154 / 180 | 4 / 5 / 4 | 99 / 143 / 179 | 5 / 7 / 6 |
-| Valkey, cache off | 1 | 372 / 682 / 435 | 2,762 / 5,361 / 2,817 | 2,762 / 5,361 / 2,817 | | 2,628 / 3,493 / 2,922 |
-| Valkey, cache off | 2 | 489 / 400 / 379 | 5,649 / 3,996 / 2,678 | 5,649 / 3,996 / 2,678 | | 3,115 / 2,832 / 2,789 |
-| Valkey, cache on | 1 | 477 / 627 / 572 | 2,902 / 4,343 / 5,796 | 2,336 / 2,973 / 3,971 | 2,145 / 3,176 / 3,878 | 3,275 / 4,184 / 4,464 |
-| Valkey, cache on | 2 | 408 / 568 / 512 | 812 / 2,353 / 1,679 | 459 / 1,419 / 742 | 501 / 1,130 / 936 | 416 / 579 / 526 |
+| Fault | Result | Fault phase p99, ms | Degraded in the fault phase | Recovery, s |
+|---|---|---|---|---|
+| F1 replica killed | pass | 7.22, 7.76, 7.69 | 0.0% | 4.0, 1.0, 4.0 |
+| F2 50 ms on shard 1 | pass | 20.48, 19.87, 19.60 | 62.4%, `shards_partial` | 0, 0, 0 |
+| F3 Valkey unavailable | fail, run 2 | 3.96, 2.41, 2.73 | 99.9%, `history_unavailable` | 1, 7, 1 |
+| F4 consumer paused | not judged: run 1 has no valid attempt in three, all flagged | 8.97, 7.50 (runs 2 and 3) | 0.1, 0.0% | 0, 2 |
+| F5 replica paused | pass | 7.18, 6.95, 7.42 | 0.1% | 3.0, 2.0, 3.0 |
+| F6 searches hang | pass | 6.94, 7.07, 6.84 | 0.1, 0.1, 0.0% | 1.0, 1.0, 1.0 |
 
-Control, 2,000 reads of a 16-byte value by the four workers: p50 157 / 211 / 186 µs, p99 306 / 745 / 450 µs.
+- The replica killed, paused or hanging is back: annshard-1's share of shard 0's calls in [210, 270 s) is 49.9 to 50.1% in every F1, F5 and F6 run. F5's `shards_partial` share in [0, 13 s) after the pause is 0.14 to 0.17%, F6's over the fault phase 0.03 to 0.04 points above the healthy phase's, and `recserve_shard_ejections_total` is 0 at 30 and at 90 s in every valid run, so the criteria of outlier detection are met. The breaker did not open outside F3's fault phase in any of the 23 attempts.
+- F3 opened the breaker once per run, at 90.51 to 90.52 s, attributed to errors. **F3's failure:** run 2's healthy p99 of 8.52 ms puts its limit at 10.23 ms, and the windows starting 0 to 6 s after removal had a p99 of 10.36 to 10.80 ms, with 6.80% degraded at 0 s against a limit of 1.07%; the window at 7 s had 9.27 ms. The windows that failed hold 156 s, a second with a p99 of 15.86 ms (11.22 ms at 158 s, 25.18 ms at 159 s) in which no history read ran past its budget; in run 2 one history read ran past it in 159 s and two in 160 s, and run 1, with 24.04 ms at 159 s, recovered after 1 s against its limit of 11.57 ms. The breaker stayed closed and no Valkey error occurred (`F3-valkey-per-second.tsv`). What raised run 2's p99 was not established.
+- F4's attempts were flagged 4 of 6 times, against 2 of 17 for the other faults; three of its five flagged baselines were taken after the load, more than 270 s after Kafka's recreation, and two before it. What raises them was not established.
+- Neither of shard 1's replicas was taken out while both had the 50 ms latency: annshard-3's count is 0 at 150 s and 1 at 151 s in every F2 run (`ejections-per-second.tsv`). In the invalid attempt F2-run1-a1 both of shard 1's replicas had been taken out once by 30 s, which D041's rule, asserted by `TestOneReplicaOutAtATime`, does not allow while the first is out; the files do not give the order or duration, since that attempt's per-second reads were not committed.
 
-- **Fail.** On Valkey with the cache on, the stage's p99 in the first round is 2,902, 4,343 and 5,796 µs, median 4,343 µs, above 3 ms. In the second round it is 812, 2,353 and 1,679 µs, median 1,679 µs, within it.
-- The stage's p50 is 0.4 to 0.6 ms in both rounds, two round trips; the tail is in the rounds that compute. There four workers without think time keep the four CPUs busy with about 2.4 ms of computation a request, and the Valkey server and the client's goroutines wait for a CPU with them. With the cache off both rounds compute, and the history read alone has a p99 of 2.7 to 5.6 ms in both.
-- The per-user history version is not built (D039). The control's p99 is 33 to 89% below the p99 of the history read in every run and round, but the control ran while nothing computed, which is not the condition of the round that fails. Under that round's load the cache lookup, a `GET` that finds nothing, has the p99 of the history read (2,145 / 3,176 / 3,878 against 2,336 / 2,973 / 3,971 µs): a small read in the history read's place would wait as long. D039 asks for the same conditions and is judged by this second reading. The version would also save the history read only on a hit, where the stage already passes.
-- A hit on Valkey takes p50 0.42 to 0.58 ms against 5 to 7 µs in the process (D036), and a miss about 0.9 to 1.9 ms more at p50 than in the process: the history read, the lookup and the write.
+### M7 (2026-11-12)
 
-#### Load at 200 requests/s on Valkey and Kafka: pass (M3 interim)
+Every M7 run was on one VM: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.4, Docker 29.9.2, cgroup v1 (`bench-results/m7/*/env.txt`; `quality.md` has none). Session reference 473,053 ns; bundle b7ff0634dd7b. The breaker's and the fault runs used images built from c3679be, before outlier detection; `faults/env.txt` records its code as uncommitted changes in the working tree, which no image or binary of those runs contains. An invalid attempt's files are removed before its rerun, so its verdict, flag and count of breaker openings come from the script's log and are not committed.
 
-One rate, cache on, no writes; not the headline, which M6 measures with the sweep. From the due time, in ms (`load-200-run*.json`); the counters are the gateway's and cover the 14,000 requests of warmup and measurement (`load-200-run*-metrics.txt`).
+#### Valkey circuit breaker openings: the two attributed openings are calls that ran out of their budget; five of the six openings fell in invalid attempts
 
-| Run | p50 | p90 | p99 | p99.9 | max | Valid | `history_unavailable` | `shards_partial` | Cache errors | Cache hits | Baselines ns |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 4.25 | 6.22 | 11.99 | 18.66 | 24.38 | yes | 41 | 6 | 146 | 0 | 834,455 / 782,159 |
-| 2 | 4.15 | 6.04 | 10.97 | 19.34 | 34.51 | yes | 44 | 5 | 110 | 0 | 805,541 / 799,375 |
-| 3 | 4.18 | 6.18 | 10.94 | 16.82 | 31.85 | yes | 31 | 0 | 105 | 0 | 780,814 / 800,725 |
+`make bench-fault FAULT=none RATE=275` (`breaker/`). Five valid runs took 9 attempts. Each of the 4 invalid attempts had 1.70% of its healthy phase degraded and the breaker open in it (1, 1, 2 and 1 openings); of the valid runs only none-run3 had an opening.
 
-- **Pass.** All three runs are valid (12,000 of 12,000 requests answered 200, 200.0 requests/s sent) with p99 from 10.94 to 11.99 ms, below 50 ms. Each is a first attempt.
-- Degraded responses are at most 0.34% of a run (47 of 14,000), below the 1% mark. The `history_unavailable` ones, 0.22 to 0.31%, are history reads that ran past the 3 ms budget; the circuit breaker did not open in any run (no change of state in the gateway's log). Cache errors, 0.75 to 1.04%, are lookups and writes that ran past the budget; such a request is answered in full.
-- No request hit the cache: the histories hold the test events, each request is at its event's time, and 14,000 events of the split do not repeat a user with an unchanged history. In this workload the cache costs every request a read and a write and saves none; a workload with repeats is M6's cache-on scenario to define.
-- Service time p99 is 11.25, 10.35 and 10.28 ms; the send lag p99 is 1.08 to 1.09 ms and the worst pause of the generator 8.4 to 12.8 ms.
+- Attributed by the rule: none-run3's attempt 2 at 18.992 s, in the warmup, with 6 `timeout` and 0 `error` calls failed; none-run5's attempt 1 (invalid) at 86.599 s, in the healthy phase, with 6 `timeout` (5 history, 1 cache read) and 0 `error`. Both are calls that ran out of their budget, which D037 point 3 counts as failures; no Valkey error is among them. The other four openings are not attributed. Why five history reads in a row passed 5 ms is not established.
+- The openings of none-run2's attempts 1 and 2 and none-run3's attempt 1 are not attributed, since the rerun replaced their files; none-run5's attempt 1 was attributed from a copy of its gateway log and reads made outside the repository, so its row cannot be checked from the committed files. The fault runs at c3679be show the same: outside F3's fault, whose openings are attributed to errors, all six openings in their files are attributed to timeouts (F1-run2 at 11.8 and 243.8 s, F2-run1 at 105.3 s, F3-run1 at 203.5 s, the invalid F4-run2 at 113.4 and 237.0 s).
 
+#### Fault runs with the cache off: F1, F3, F5 and F6 pass; F2 fails on one breaker opening; F4 is not judged
+
+`make bench-fault FAULT=F1 ... F6 RATE=275` (`faults/`), with the cache off, hedge delay 2.5 ms, history budget 5 ms, by the criteria of Faults amended for M7. 18 runs took 27 attempts; 10 were invalid, 7 on flagged baselines and 3 with 1.72 to 1.74% of the healthy phase degraded. The valid runs' healthy phases had a p99 of 4.70 to 6.83 ms; no run had an error.
+
+Fault-phase p99 in ms, three runs each: F1 pass, 4.79, 5.16, 4.38 (recovery 2.0, 4.0, 5.0 s); F3 pass, 1.75, 1.75, 1.91, with 99.9% `history_unavailable`; F5 pass, 17.45 to 17.70, 5.5% `shards_partial`; F6 pass, 18.17 to 18.39, 24.9 to 25.0% `shards_partial`, reported; F2 fail on run 1, 18.60 to 18.73, 62.4 to 63.1% `shards_partial`. F4 is not judged: run 2 has no valid attempt in three, all flagged.
+
+- annshard-1's share of shard 0's calls in [210, 270 s) is 50.0% in every F1, F5 and F6 run.
+- F2 fails on run 1 alone, whose fault phase had the breaker open for a second (`history_unavailable` 1.71 points above the healthy phase, from the opening at 105.3 s); runs 2 and 3 pass.
+- F5's `shards_partial` share in [0, 13 s) after the pause is 25.1%, F6's over the fault phase 24.9 to 25.0%, both above the 1% by which M6 adopted outlier detection; the 40% the protocol expected for F5 without it is not a criterion.
+- F4 had 4 of its 6 attempts flagged, the other faults 3 of 21. The only flagged F4 attempt whose files remain, run 2's third, measured 535,526 ns in its baseline after Kafka's recreation against the reference's 473,053; what raised it was not measured.
+
+#### Recommendation quality on b7ff0634dd7b
+
+`make bench-quality` (`quality.md`), by the protocol as amended for M7: 43,249 test events, one request each, 8,378 of whose histories give no user vector. Every condition is valid. Differences from the healthy pipeline, with paired bootstrap 95% intervals:
+
+| Condition | Recall@10 | Δ Recall@10 |
+|---|---:|---|
+| healthy | 0.0181 | |
+| reference (exact scoring of all items on the encoder's vector) | 0.0043 | -0.0139 [-0.0151, -0.0126] |
+| encoder fails | 0.0182 | +0.0001 [-0.0002, +0.0004] |
+| co-occurrence fails | 0.0098 | -0.0083 [-0.0093, -0.0074] |
+| ranker fails | 0.0050 | -0.0131 [-0.0143, -0.0119] |
+| shard 1 of 2 fails | 0.0182 | +0.0001 [+0.0000, +0.0003] |
+| HNSW, ef 400 | 0.0181 | +0.0000 [+0.0000, +0.0000] |
+
+Without co-occurrence or without the ranker every metric (Recall@10 above; Recall@20 and NDCG@10 in `quality.md`) is lower than healthy, with intervals below 0, and the two conditions' intervals do not overlap. Without the encoder, with shard 1 missing, and with HNSW, every difference is within 0.0004 of 0; some intervals exclude 0 by up to 0.0001.
+
+#### Outlier detection: F5 passes; F6 fails on one run's recovery and F2 on one breaker opening; no replica was taken out in a healthy phase
+
+`OUT=bench-results/m7/faults-outlier make bench-fault FAULT=F2, F5, F6 RATE=275` (`faults-outlier/`), on the same VM and setup, with images built from 03bb156, which adds outlier detection (D041). 9 runs took 11 attempts; 3 were invalid, all on flagged baselines, the three of F2's run 2, which so has no valid attempt.
+
+Fault-phase p99 in ms: F5 passes, 5.10, 5.47, 5.48, with 0.0 to 0.1% degraded and recovery 4.0, 3.0, 2.0 s; F6 fails on run 3, 6.37, 5.71, 5.95, with 0.1, 0.1 and 1.8% degraded and recovery 1.0, 1.0 and 13.0 s; F2 fails on run 3 (19.10 and 18.79 ms in runs 1 and 3, 62.4 and 62.9% `shards_partial`, recovery 0).
+
+- The criteria of outlier detection: F5's `shards_partial` share in [0, 13 s) after the pause is 0.14 to 0.17%, F6's over the fault phase 0.02 to 0.04 points above the healthy phase's, and `recserve_shard_ejections_total` is 0 at 30 and at 90 s in every run; F2 fails its criteria, so the third condition is not met. Against the runs before it at c3679be, F5's fault phase p99 is 5.10 to 5.48 ms against 17.45 to 17.70 and F6's 5.71 to 6.37 ms against 18.17 to 18.39, with no overlap.
+- F2's run 3 had the breaker open at 90.7 s, in the fault phase, attributed to timeouts; F5's run 1, which passes, had it open at 238.668 s, in the recovery phase, also attributed to timeouts. F6's run 3 recovered after 13 s: its windows' p99 stayed above 1.2 times the healthy phase's 5.08 ms, with seconds of 7 to 12.7 ms in the first 10 s after removal, while annshard-1 was back after 1.0 s; its fault phase also had the breaker open at 144.1 s, attributed to timeouts. What raised F6's p99 after the removal was not established; neither failure involves a replica taken out in its healthy phase.
+- In F2 annshard-3's count is 0 at 90 s and 1 just after the removal in the committed reads; the per-second reads, in `raw/` and not committed, show 0 at 150.0 s and 1 at 151.0 s in all three runs, so none was taken out while both replicas of shard 1 were slow. The script deletes the toxics of annshard-2 and then annshard-3, one request after the other; the order was not measured. F1, F3 and F4 were not run with outlier detection.
 
 ### M6 (2026-11-11)
 
-The results below are summarized with charts in `bench-results/m6/report.md` (`make report` draws them from the result files).
+Charts are in [bench-results/m6/report.md](../bench-results/m6/report.md). Every M6 figure was measured with Go 1.27.3; the toolchain moved to 1.27.4 after the last of them for a security fix in `net/http` (D001), and nothing was rerun. Four VMs of one kind ran it (Intel Xeon, 4 vCPU, 15.7 GiB, kernel 6.18.44, Docker 29.9.2, cgroup v1), the services in compose on bundle b7ff0634dd7b. Figures from different VMs are not compared.
 
-Every M6 figure was measured with Go 1.27.3. The toolchain moved to 1.27.4 after the last of them, for a security fix in `net/http` (D001), and nothing was rerun.
+VM 1 ran the profiles and `vec.Dot`'s comparison (2.10GHz, session reference 698,757 ns), VM 2 the load sweeps (2.30GHz, 657,992 ns), VM 3 the faults, hedge delay, swaps and kind, with the history budget at 5 ms (2.10GHz, 887,645 ns), and VM 4 the ANN runs and `vec.Dot32`'s comparison (2.10GHz, 779,905 ns).
 
-The VM of M3's description: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.3, Docker 29.9.2 with cgroup v1 (`bench-results/m6/*/env.txt`). Session reference 698,757 ns (`bench-results/m6/noise-reference-1.json`, ten runs from 676,015 to 748,753 ns). Bundle b7ff0634dd7b, services in compose by `deploy/bench.compose.yaml`. The profiles and the optimization below ran on this VM.
-
-The sweeps ran on another VM of the same kind: Intel Xeon @ 2.30GHz, 4 vCPU, 15.7 GiB, the same kernel, Go and Docker. Its reference is 657,992 ns (`bench-results/m6/noise-reference-2.json`, ten runs from 559,758 to 869,192 ns, on an idle machine).
-
-The fault runs and those after them ran on a third: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, the same kernel, Go and Docker, with the images rebuilt from the code of the sweeps' last commit, whose history budget is 5 ms. Its reference is 887,645 ns (`bench-results/m6/noise-reference-3.json`, ten runs from 839,028 to 949,394 ns, on an idle machine).
-
-The ANN runs and the comparison for `vec.Dot32` ran on a fourth: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, the same kernel, Go and Docker. Its reference is 779,905 ns (`bench-results/m6/noise-reference.json`, ten runs from 745,013 to 845,862 ns, on an idle machine). Figures from different VMs are not compared with one another.
-
-Every `make bench-*` target rebuilds `bin/`, so the `cmd/noisebase` binary that took a session's reference and the ones that took its baselines differ in the commit stamped into them, and their SHA-256 with it (`env.txt`); the code of `cmd/noisebase` and `internal/bench`'s noise baseline did not change in M6 (last changed in fa06dde).
-
-#### Kafka's health check
-
-An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute readings: its health check started a JVM every 2 s. Checked every 2 s only until healthy and every 10 minutes after, it used 24 ms (Environment record, D039). The profile run below was first taken with the old check, unrecorded: p99 was 10.97 ms there against 6.41 ms with the new one.
-
-#### Profiles at 400 requests/s
-
-`make bench-profile` at d49b06e (`profile/`): replay, cache off, valid and unflagged, p99 6.41 ms. CPU per request: the four replicas 0.45 to 0.46 ms each, 1.82 ms together; the gateway 1.31 ms; Valkey 0.13 ms; Kafka 0.07 ms. In a replica's profile `vec.Dot` has 54.2% of the samples, the system calls 9.6%, the top-k heap 4.1%; in the gateway's, the system calls 13.8%, ONNX Runtime's cgo calls 11.3%, `vec.Dot` 8.6%, `vec.Dot32` 3.1%, MMR 8.8% cumulative. The replicas taken together use the most CPU per request, and `vec.Dot` leads their profile, so it is the target (D053), not `vec.Dot32`, which only the HNSW mode calls.
-
-#### vec.Dot in AVX2: lower after on every quantity but the gateway's CPU at 400/s
-
-`make bench-compare BEFORE=a3f48ae` (`optimization/`): before a3f48ae, after ed28e3b; BenchmarkDot on CPU 1 and the service, replay, cache off, before and after alternating, three runs each. All 18 runs are first attempts, valid, with no noise baseline flagged.
-
-| Quantity | Before | After | Verdict |
-|---|---|---|---|
-| BenchmarkDot, 64 dims, ns | 47.5 to 50.6 | 10.5 to 11.4 | lower after |
-| BenchmarkDot, 100 dims, ns | 74.2 to 80.2 | 14.9 to 15.9 | lower after |
-| 200/s: p99, ms | 5.14 to 5.32 | 3.93 to 4.39 | lower after |
-| 200/s: the replicas' CPU per request, ms | 1.94 to 1.98 | 1.23 to 1.29 | lower after |
-| 200/s: the gateway's CPU per request, ms | 1.52 to 1.57 | 1.46 to 1.52 | lower after |
-| 400/s: p99, ms | 6.90 to 7.79 | 4.27 to 4.64 | lower after |
-| 400/s: the replicas' CPU per request, ms | 1.80 to 1.87 | 1.10 to 1.16 | lower after |
-| 400/s: the gateway's CPU per request, ms | 1.29 to 1.33 | 1.26 to 1.32 | not resolved on this machine |
-
-- The inner product takes 4.2 to 5.4 times less time; the replicas use about 37% less CPU per request, and p99 falls by about a quarter at 200/s and a third at 400/s.
-- The after runs of BenchmarkDot ran from ed28e3b's working tree with the benchmark moved to its own file (the next commit); `vec.Dot` itself was ed28e3b's.
-- Results: the tests, both bundles' golden cases (5de55036a382 checked by starting a gateway on it, b7ff0634dd7b by the after runs) and the sixteen-lane definition hold (D053). No committed file changed.
+On VM 2 a baseline above 0.724 ms, 10% over its reference's median of 0.658 ms, flags a run; 52 of the 88 attempts of the headline sweep were flagged; 10 of them were the last of their three attempts and stand as noisy. The `cmd/noisebase` binaries of a session's reference and baselines differ in the commit stamped into them and in their SHA-256 (`env.txt`), since every `make bench-*` rebuilds `bin/`; the noise baseline's code did not change in M6 (fa06dde).
 
 #### Load sweep, replay with the cache off: headline 550 requests/s
 
-`make bench-sweep SCENARIO=replay CACHE=off` (`sweep-replay-cache-off/`, the table in `sweep.md`), on the second VM. The figures are this VM's and this topology's, with every service on the same three CPUs.
+`make bench-sweep SCENARIO=replay CACHE=off` (`sweep-replay-cache-off/`, the table in `sweep.md`), on VM 2.
 
-- **Headline, 550 requests/s** (D005 as amended by D054): p99 4.61, 4.59 and 5.07 ms in the three runs, 0.04, 0.02 and 0.07% of the responses degraded. 500/s meets the condition; 600/s does not, with one run 1.69% degraded and two flagged.
-- **Under D005 as written** the grid meets it at every rate run up to 550/s, at 800/s and at 1,600, 2,000, 2,400 and 3,200/s; 600, 1,200, 2,800, 3,600 and 4,000/s miss it on flagged noise baselines alone, with p99 between 5 and 17 ms. The grid ran in full to 4,000/s and once at 4,400/s, 98.79% degraded, and was stopped there; its stop rule never acted (`GRID_MAX=4000` repeats it). From 1,200/s on p99 stays between 11 and 17 ms while the degraded share grows: 12 to 19% of the responses at 1,200/s, 55 to 69% at 1,600, 84 to 90% at 2,000, 94 to 96% at 2,400 and 98 to 99% from 3,600 on.
-- Nearly every degraded response is `history_unavailable`: the history read through Valkey failed, ran past its 3 ms budget, or was not tried while the circuit breaker was open. A request without a history has no user vector and skips vector retrieval, so the four replicas' CPU per request falls from 1.01 ms at 550/s to 0.02 ms or less from 3,200/s on, and the gateway's from 1.10 to 0.23 to 0.24 ms. At 1,200/s the degraded responses come in whole seconds: in run 1, 45 of the 60 seconds have under 10% and 7 have 70% or more. That matches the circuit breaker on the gateway's Valkey calls, which after five failures in a row leaves Valkey alone for a second (D037); the gateway exports no metric of the breaker's state that could confirm it.
-- CPU per request at 550/s in the run with the median p99: the gateway 1.10 ms, the four replicas together 1.01 ms, Valkey 0.11 ms.
-- **Capacity and admission limits** (D050): c = 1.098 ms (1.098 to 1.199 ms in the three runs), so a gateway on 2 CPUs is estimated at 2/c = 1,821 requests/s. `-max-rate` becomes 1,450 and `-max-inflight` 152 (`deploy/kind/gateway.yaml`). This is an estimate from one quantity, measured while the gateway shared its CPUs with the rest of the service.
+- **Headline, 550 requests/s** (D005 as amended by D054): p99 4.61, 4.59 and 5.07 ms, 0.04, 0.02 and 0.07% degraded. 500 meets the condition; 600 does not, with one run 1.69% degraded and two flagged.
+- The grid ran in full to 4,000 and once at 4,400, 98.79% degraded, where it was stopped. Under D005 as written the grid also meets the condition at 800, 1,600, 2,000, 2,400 and 3,200, rates with up to most of the responses degraded, and 600, 1,200, 2,800, 3,600 and 4,000 miss it on flagged baselines alone (D054). From 1,200 on p99 stays between 11 and 17 ms while the degraded share grows: 12 to 19% at 1,200, 55 to 69% at 1,600, 84 to 90% at 2,000, 94 to 96% at 2,400, 98 to 99% from 3,600.
+- Nearly every degraded response is `history_unavailable`: the history read failed, ran past its 3 ms budget, or was not tried while the circuit breaker was open. A request without a history has no user vector and skips vector retrieval, so the replicas' CPU per request falls from 1.01 ms at 550 to 0.02 ms or less from 3,200 on. At 1,200 the degraded responses come in whole seconds (run 1: 45 of 60 seconds under 10%, 7 at 70% or more, from raw samples that are not committed), which matches the breaker leaving Valkey alone for a second (D037); the gateway exported no metric of its state to confirm it.
+- **Capacity** (D050), an estimate from one quantity measured while the gateway shared its CPUs with the rest of the service: the gateway's CPU per request at 550 in the median-p99 run is c = 1.098 ms (1.098 to 1.199 in the three runs), the four replicas' 1.01 ms and Valkey's 0.11 ms, so one gateway on 2 CPUs is estimated at 2/c = 1,821 requests/s, and `-max-rate` becomes 1,450 and `-max-inflight` 152 (`deploy/kind/gateway.yaml`).
+- **Cross-check** (`bench-vegeta RATE=275`, `vegeta/`, at 05d909c with uncommitted changes): at half the headline loadgen's p99 is 3.89, 3.92 and 4.14 ms (the last two noisy after three attempts) and vegeta's 3.35, 3.26 and 3.38 ms, every one of its 16,500 requests per run answered 200. vegeta times a request from its send and loadgen from its due time, so loadgen's figure also holds any wait before the send.
 
 #### The other five scenarios, 100 to 800 requests/s
 
-`make bench-sweep SCENARIO=... CACHE=... RATES="100 200 400 800"` (`sweep-<scenario>-cache-<on|off>/`): the rates set with the amendment (D054). p99 is between 3.7 and 5.3 ms at every rate to 400/s in every scenario, and between 4.4 and 7.9 ms at 800/s. Where a rate misses, it is on a run with more than 1% degraded or on flagged baselines.
+`make bench-sweep SCENARIO=... CACHE=... RATES="100 200 400 800"`. p99 is between 3.7 and 5.3 ms at every rate to 400 and between 4.4 and 7.9 ms at 800; where a rate misses, a run has more than 1% degraded or flagged baselines.
 
 | Scenario | Cache hits, 100 / 200 / 400 / 800 per s | Most degraded run, 400 and 800/s | `/v1/events` p99, ms |
 |---|---|---|---|
@@ -633,375 +191,121 @@ An idle Kafka in compose used 639 to 686 ms of CPU per second in five one-minute
 | repeats, cache on | 58 / 63 / 71 / 80% | 1.70%, 5.03% | |
 | repeats, cache off | | 0.05%, 1.77% | |
 
-- Replaying the test split hits the cache here, where M3's runs had no hit: compose preloads only the train and valid splits, so a user's later test events have the history of the first and the same key (D030); M3's Valkey also held the test split. Repeated requests add 2 to 11 points of hit rate, fewer at higher rates (11 at 100/s, 2 at 800/s).
-- In replay the gateway's CPU per request falls from 1.42 ms at 100/s to 0.62 ms at 800/s with the cache on, and from 1.80 to 1.02 ms with it off.
-- **History budget (D039).** In replay with the cache on, the share of requests past the 3 ms budget is at most 0.03% at 100 and 200/s, but one run of 400/s has 1.74% (0.02% in the other two), so the rule runs the headline rate, 550/s, with 5 ms and 8 ms (`budget-history-5ms/`, `budget-history-8ms/`). With 5 ms the share is 0.02, 0.00 and 0.00% in three unflagged runs, with 8 ms 0.00% in all three (two of them flagged), so SPEC §5's budget for the history read and cache lookup becomes 5 ms. The headline itself was measured with 3 ms.
-- **Cross-check** (`make bench-vegeta RATE=275`, `vegeta/`, at 05d909c with uncommitted changes): at half the headline, loadgen's p99 is 3.89, 3.92 and 4.14 ms, the last two runs noisy after three attempts, and vegeta's 3.35, 3.26 and 3.38 ms, every one of vegeta's 16,500 requests per run answered 200. vegeta times a request from its send and loadgen from its due time, so loadgen's figure also holds any wait before the send.
+- Replay hits the cache here, where M3's runs had no hit: compose preloads only the train and valid splits, so a user's later test events have the first one's history and the same key (D030). Repeated requests add 2 to 11 points of hit rate, fewer at higher rates.
+- **History budget (D039).** In replay with the cache on the share past the 3 ms budget is at most 0.03% at 100 and 200, but one run of 400 has 1.74%, so the rule runs the headline rate with 5 ms and 8 ms: 0.02, 0.00 and 0.00% with 5 ms in three unflagged runs, 0.00% with 8 ms in all three (two flagged). SPEC §5's budget becomes 5 ms; the headline itself was measured with 3 ms.
 
 #### Fault runs: F1, F2, F3 and F6 pass by the criteria as written; F4 and F5 fail; two criteria cannot show what they state
 
-`make bench-fault FAULT=F1 ... F6 RATE=275` (`faults/`, the table in `faults.md`), on the third VM, with the 5 ms history budget, the hedge delay then the default, 5 ms (2.5 ms came after these runs), and the cache on. Every fault has three valid runs; 9 of the 27 attempts were invalid, 3 on flagged baselines and 6 with 1.73 to 3.47% of the healthy phase degraded (their files were replaced by the reruns). No valid run has an error in any phase, and every fault phase has p99 ≤ 50 ms.
+`make bench-fault FAULT=F1 ... F6 RATE=275` (`faults/`), on VM 3, the cache on, the history budget 5 ms and the hedge delay then the default, 5 ms (2.5 ms came after). Every fault has three valid runs; 9 of the 27 attempts were invalid, 3 on flagged baselines and 6 with 1.73 to 3.47% of the healthy phase degraded (their files were replaced by the reruns). No valid run has an error in any phase, and every fault phase has p99 ≤ 50 ms.
 
-| Fault | Result | Fault phase p99, ms | Degraded in the fault phase | Recovery, s | Also |
-|---|---|---|---|---|---|
-| F1 replica killed | pass as written; criteria defects 1 and 2 | 8.66, 9.02, 10.14 | 0.0% | no power here (defect 2) | no failover in any fault phase; annshard-1 used 7, 5 and 28 ms of CPU in the last 60 s |
-| F2 50 ms on shard 1 | pass as written; criteria defect 2 | 21.08, 21.20, 21.19 | 35.0, 34.9, 34.5%, all `shards_partial` | no power here (defect 2) | mean coverage 0.72; shard 1's hedges 4,088 to 4,139 denied and 464 to 470 lost per run, none won |
-| F3 Valkey unavailable | pass | 2.99, 2.58, 3.06 | 99.9%, `history_unavailable` | 1, 1, 1 | |
-| F4 consumer paused | fail | 9.12, 10.60, 10.59 | 0.0, 0.1, 1.7% | 0, 0, 0 | lag back at 0 in 2.11, 1.44 and 1.15 s; property 9 holds in all three; run 3: `history_unavailable` 1.67 points above the healthy phase |
-| F5 replica paused | fail; criteria defects 1 and 2 | 18.89, 18.79, 19.12 | 2.6, 2.6, 4.4% | no power here (defect 2) | `shards_partial` in [0, 13 s) after the pause 11.75, 12.06, 12.11%; in [13, 15 s) 0.36, 0, 0%; in [15, 60 s) 0%; run 3: `history_unavailable` 2.22 points above the healthy phase in [15, 60 s) |
-| F6 searches hang | pass as written; criteria defect 2 | 20.49, 20.10, 19.58 | 11.44, 11.18, 11.51% `shards_partial` | no power here (defect 2) | mean coverage 0.91; shard 0's hedges 1,521 to 1,559 denied and 385 to 390 won per run |
+| Fault | Result | Fault phase p99, ms | Degraded in the fault phase |
+|---|---|---|---|
+| F1 replica killed | pass as written; criteria defects 1 and 2 | 8.66, 9.02, 10.14 | 0.0% |
+| F2 50 ms on shard 1 | pass as written; defect 2 | 21.08, 21.20, 21.19 | 35.0, 34.9, 34.5%, all `shards_partial` |
+| F3 Valkey unavailable | pass | 2.99, 2.58, 3.06 | 99.9%, `history_unavailable` |
+| F4 consumer paused | fail | 9.12, 10.60, 10.59 | 0.0, 0.1, 1.7% |
+| F5 replica paused | fail; defects 1 and 2 | 18.89, 18.79, 19.12 | 2.6, 2.6, 4.4% |
+| F6 searches hang | pass as written; defect 2 | 20.49, 20.10, 19.58 | 11.44, 11.18, 11.51% `shards_partial` |
 
-- **F4 and F5 fail on one second each, in which the gateway's Valkey circuit breaker was open.** In every valid run, each second outside F3's fault in which more than 20% of the responses report `history_unavailable` starts with a change of the breaker from closed to open in the gateway's log (`*.breaker`), and the breaker closes 1.0 s later on its first trial call: 15 openings in the 18 runs, 11 of them in the first 30 s, 2 in fault phases (F4 run 3 at 112.7 s, F5 run 3 at 145.5 s) and 2 in recovery phases. The breaker opens after five failed Valkey calls in a row (D037); what made those calls fail is not established.
-- **What the criteria's defects (above) leave unshown.** (1) F1's and F5's check that annshard-1 serves again is met by CPU alone. In the last 60 s annshard-1 used 7, 5 and 28 ms in F1, the replicas never killed 4 to 27 ms; in F5 it used 236 to 248 ms and the others 231 to 258 ms. A replica's CPU without searches was not measured, so neither fault shows that searches reach the replica again. (2) In the recovery phases of the replica faults, F1, F2, F5 and F6, the cache answers most lookups and shard 0 gets 2 to 25 calls per second (below), so the recovery criterion has no power at this load: it was met, but how fast searches recover is not a result of these runs. F1, F2 and F6 pass by the criteria as written, with these parts not shown. (3) No run had an error in the warmup and F4's warmup p99 per second is at most 20.1 ms, so the third defect changes no result.
-- **The cache serves most of the late traffic.** 59 to 67% of the lookups hit in the healthy phases, 63 to 75% in the fault phases (none in F3's) and 86 to 99% in the recovery phases, since replay repeats keys as the run goes on. Shard 0 gets 73 to 79 calls per second while healthy and 2 to 25 in the recovery phases, and the shares above are of all responses: in F6's fault phase, with 71% hits, about 39% of the responses that searched were partial.
-- **Outlier detection (D041).** F5's share in [0, 13 s) and F6's over its fault phase are above 1%, so D041 records outlier detection as adopted, and TASKS has it; it is not built in M6.
-- The healthy phases' p99 is 8.2 to 13.1 ms, with toxiproxy on every call to the replicas and Valkey and the cache on.
+- **F4 and F5 fail on one second each, with the gateway's Valkey circuit breaker open.** In every valid run each second outside F3's fault with more than 20% `history_unavailable` starts with the breaker changing from closed to open in the gateway's log, and it closes 1.0 s later: 15 openings in the 18 runs, 11 of them in the first 30 s, 2 in fault phases (F4 run 3 at 112.7 s, F5 run 3 at 145.5 s) and 2 in recovery phases. `history_unavailable` is 1.67 points above the healthy phase in F4's run 3 and 2.22 points in F5's run 3. The breaker then opened after five failed Valkey calls in a row (D037); what made them fail was not established here. M7 attributed two openings in runs with no fault to calls that ran out of their budget, and why those ran past it is not established.
+- F2: mean coverage 0.72, shard 1's hedges 4,088 to 4,139 denied and 464 to 470 lost per run, none won. F6: mean coverage 0.91, shard 0's hedges 1,521 to 1,559 denied and 385 to 390 won. F4's lag was back at 0 in 1.15 to 2.11 s and property 9 holds in all three runs. F5's `shards_partial` is 11.75, 12.06 and 12.11% in [0, 13 s) after the pause 0.36, 0 and 0% in [13, 15 s) and 0% from 15 s on.
+- **What the criteria's defects leave unshown.** (1) That annshard-1 serves searches again after F1 and F5: the check is met by CPU alone, and in the last 60 s annshard-1 used 7, 5 and 28 ms in F1 against 4 to 27 ms for the replicas never killed, and 236 to 248 ms in F5 against 231 to 258 ms; a replica's CPU without searches was not measured. (2) How fast searches recover after F1, F2, F5 and F6: the cache answers 86 to 99% of the lookups in the recovery phases (59 to 67% in the healthy phases), so shard 0 gets 2 to 25 calls per second there against 73 to 79 while healthy, and the criterion was met without power at this load. (3) Nothing changes: no run had an error in the warmup, and F4's warmup p99 per second is at most 20.1 ms.
+- **Outlier detection (D041).** F5's `shards_partial` share in [0, 13 s) and F6's over its fault phase (about 39% of the responses that searched) are above 1%, so D041 records outlier detection as adopted; it was not built in M6. The healthy phases' p99 is 8.2 to 13.1 ms, with toxiproxy on every call to the replicas and Valkey and the cache on.
 
 #### Hedge delay: 2.5 ms
 
-`make bench-hedge RATE=275` (`hedge/`, the table in `hedge.md`), on the third VM, the cache off. With hedging off the p95 of a call is 2.12, 1.97 and 1.91 ms on shard 0 and 2.20, 2.05 and 1.99 ms on shard 1, so the default becomes 2.5 ms, the median of the larger shard's, 2.05 ms, rounded up (D041). With 2.5 ms, 1.0 to 1.3% of each shard's searches sent a hedge, fewer than the 5% the rule aims at: the rounding up puts the delay past most of the slowest 5% of calls. p99 is 5.84 to 6.56 ms with hedging off and 5.70 to 6.32 ms with 2.5 ms, ranges that overlap, so a difference in p99 is not resolved on this machine. No run is invalid or flagged.
+`make bench-hedge RATE=275` (`hedge/`), on VM 3, the cache off. With hedging off the p95 of a call is 1.91 to 2.12 ms on shard 0 and 1.99 to 2.20 ms on shard 1, so the default becomes 2.5 ms, the median of the larger shard's, 2.05 ms, rounded up (D041). With 2.5 ms, 1.0 to 1.3% of each shard's searches sent a hedge, fewer than the 5% the rule aims at, since the rounding puts the delay past most of the slowest 5% of calls. p99 is 5.84 to 6.56 ms with hedging off and 5.70 to 6.32 ms with 2.5 ms, so a difference is not resolved. No run is invalid or flagged.
 
 #### Bundle swaps: a higher p99 in the swap windows, with GC on or off; a lower maximum with GC off
 
-`make bench-swap RATE=275` (`swap/`, the table in `swaps.md`), on the third VM with the 2.5 ms hedge delay, the cache off: nine swaps per run between b7ff0634dd7b and 5de55036a382, three runs with GC as configured and three with `GOGC=off`. No run is invalid or flagged.
+`make bench-swap RATE=275` (`swap/`), on VM 3 with the 2.5 ms hedge delay, the cache off: nine swaps per run between b7ff0634dd7b and 5de55036a382, three runs with GC as configured and three with `GOGC=off`; none invalid or flagged. A swap's prepare took 65 to 864 ms, its drain at most 3.0 ms.
 
-| GC | Swap windows p99, ms | Swap windows max | Other windows p99 | Other windows max |
-|---|---|---|---|---|
-| on | 6.90, 7.50, 6.73 | 18.65, 25.58, 11.88 | 5.99, 5.19, 5.18 | 25.79, 17.25, 19.85 |
-| off | 6.93, 11.33, 6.50 | 20.19, 23.39, 23.49 | 5.54, 6.34, 5.48 | 52.22, 31.16, 29.25 |
+With GC on, p99 over the swap windows is 6.73 to 7.50 ms against 5.18 to 5.99 ms in the other windows, and their max 11.88 to 25.58 ms against 17.25 to 25.79 ms; with `GOGC=off`, 6.50 to 11.33 ms against 5.48 to 6.34 ms, and max 20.19 to 23.49 ms against 29.25 to 52.22 ms.
 
-- A swap's prepare took 65 to 864 ms and its drain at most 3.0 ms. During a swap the gateway used 87 to 462 ms of CPU and the four replicas 28 to 505 ms.
-- By the rule above, the median max over the swap windows with `GOGC=off`, 23.39 ms, is 0.75 times that over the other windows, 31.16 ms: read as written, the rule attributes the largest values to GC. That reading does not hold here, by the rule's defect noted above: with GC on, the swap windows' maximum is above the other windows' in one run (25.58 against 17.25 ms) and below in two, medians 18.65 against 19.85 ms, ranges that overlap, so no excess is established for GC to explain and this record attributes nothing to GC. With `GOGC=off` it is below in every run (20.19 to 23.49 against 29.25 to 52.22 ms). The other windows' largest values, up to 52.22 ms, also occur with no GC at all.
-- p99 over the swap windows is above the other windows' in every run, with GC on (6.73 to 7.50 against 5.18 to 5.99 ms) and off (6.50 to 11.33 against 5.48 to 6.34 ms): turning GC off does not remove it. The CPU readings above are the only other figures; no cause is named.
-- With GC on, the swap windows hold 6 or 7 collections per run, 1.4 to 2.9 ms of pauses in all; the other windows 205 to 207, 72 to 78 ms.
+p99 over the swap windows is above the other windows' in every run, so turning GC off does not remove it. The rule's ratio of the maxima with `GOGC=off`, 23.39 over 31.16 ms, 0.75, reads as GC, and that reading does not hold: with GC on the swap windows' maximum is above the other windows' in one run and below in two, with overlapping ranges, and with `GOGC=off` it is below in every run while the other windows reach 52.22 ms with no GC at all. This record attributes nothing to GC and names no cause.
 
 #### Rollouts and a swap in kind with SPEC §5's budgets
 
-`make bench-kind VERSION=b7ff0634dd7b` (`kind/`, the table in `kind.md`), on the third VM with the images of the 2.5 ms hedge delay: each run on a new cluster, the gateways' stage budgets at the binary's defaults, SPEC §5's, then `kind-check`'s load of 100 requests/s through the gateways' rollout, the replicas' and a swap. Reported, not judged (D022).
+`make bench-kind VERSION=b7ff0634dd7b` (`kind/`), on VM 3 with the images of the 2.5 ms hedge delay: three new clusters, the gateways' stage budgets at SPEC §5's values, `kind-check`'s load of 100 requests/s through the gateways' rollout, the replicas' and a swap. Not judged (D022). No error in any phase; at most 0.133% of a phase's responses are degraded (single `vector_timeout` and `shards_partial` responses). p99 by phase is 3.80 to 9.91 ms, highest in the gateways' rollout (7.68 to 9.91), and the largest single response took 26.77 ms. `kind/` has no `env.txt`; its VM and its images, of 89fac9f, are stated here only.
 
-- No error in any phase of the three runs. At most 0.133% of a phase's responses are degraded: one `vector_timeout` while the gateways rolled in run 1, one `shards_partial` while the replicas rolled in run 2, and one of each during the swap in run 3.
-- p99 by phase, over the three runs: before 3.80 to 4.71 ms, the gateways' rollout 7.68 to 9.91, the replicas' 5.87 to 6.13, the swap 7.09 to 8.84, after 5.12 to 5.23; the largest single response took 26.77 ms, during the replicas' rollout in run 2.
+#### Profiles, `vec.Dot` in AVX2 and `vec.Dot32` in AVX
 
-#### annbench's profile on glove: `vec.Dot32` first
+**Profile at 400** (`make bench-profile` at d49b06e, `profile/`, VM 1): replay, cache off, p99 6.41 ms. CPU per request: the four replicas 1.82 ms together, the gateway 1.31 ms, Valkey 0.13 ms, Kafka 0.07 ms. In a replica `vec.Dot` has 54.2% of the samples; in the gateway `vec.Dot` has 8.6% and `vec.Dot32` 3.1%. The replicas use the most CPU per request and `vec.Dot` leads their profile, so it is the target (D053), not `vec.Dot32`, which exact search does not call.
 
-`make bench-ann STEP=profile PY=...` (`ann/`, `profile-annbench.txt`), on the fourth VM: a glove graph with M = 16 and efConstruction 200, built with 4 goroutines in 434 s, then annbench's query at ef 400, k 100 under a CPU profile. Recall@100 is 0.8423 (M2: 0.8422) and p99 4.33 ms. `vec.Dot32` holds 75.7% of the samples flat, `hnsw.searchLayer` 12.5% and `hnsw.neighbors` 5.5%. `vec.Dot32` is first, so it gets the SIMD that TASKS made conditional on this (D055).
+**`vec.Dot` in AVX2** (`make bench-compare BEFORE=a3f48ae`, `optimization/`, VM 1): before a3f48ae, after ed28e3b; BenchmarkDot on CPU 1 and the service, replay, cache off, before and after alternating, three runs each, all first attempts, valid, none flagged.
 
-#### vec.Dot32 in AVX: lower after in BenchmarkDot32 and on glove; in the service only p99 at 400/s
+BenchmarkDot at 64 dims takes 47.5 to 50.6 ns before and 10.5 to 11.4 after. p99 is 5.14 to 5.32 ms before and 3.93 to 4.39 after at 200/s, and 6.90 to 7.79 and 4.27 to 4.64 at 400/s; the replicas' CPU per request 1.94 to 1.98 and 1.23 to 1.29 ms at 200/s, 1.80 to 1.87 and 1.10 to 1.16 at 400/s; all lower after. The gateway's CPU per request at 400/s, 1.29 to 1.33 and 1.26 to 1.32 ms, is not resolved on this machine.
 
-`make bench-compare BEFORE=9a75fd5 MICRO=Dot32 ANN_GRAPH=<ANN_DATA>/graphs/profile-glove-M16.bin OUT=bench-results/m6/optimization-dot32` (`optimization-dot32/`, the table in `compare.md`), on the fourth VM: before 9a75fd5, after 20a8363; BenchmarkDot32 on CPU 1, annbench's query on the graph of the profile above, built by the code before, and the service, replay, cache off; before and after alternating, three runs each. All 18 service and micro runs are first attempts, valid, with no noise baseline flagged, and no annbench point is flagged.
+The inner product takes 4.2 to 5.4 times less time, the replicas use about 37% less CPU per request, and p99 falls by 15 to 26% at 200/s and 33 to 45% at 400/s. The gateway's CPU per request is lower after at 200/s. The after runs of BenchmarkDot ran from ed28e3b's working tree with the benchmark moved to its own file (the next commit); `vec.Dot` itself was ed28e3b's. The tests, both bundles' golden cases and the sixteen-lane definition hold (D053).
 
-| Quantity | Before | After | Verdict |
-|---|---|---|---|
-| BenchmarkDot32, 64 dims, ns | 20.2 to 20.5 | 7.10 to 7.43 | lower after |
-| BenchmarkDot32, 100 dims, ns | 30.3 to 34.2 | 10.5 to 11.0 | lower after |
-| annbench on glove, M = 16, ef 120: p99, ms | 1.59 to 1.68 | 0.84 to 0.97 | lower after |
-| ef 200: p99, ms | 2.25 to 2.37 | 1.24 to 1.34 | lower after |
-| ef 400: p99, ms | 3.99 to 4.12 | 2.30 to 2.40 | lower after |
-| ef 800: p99, ms | 7.53 to 7.96 | 4.21 to 4.51 | lower after |
-| recall@100 at ef 120, 200, 400, 800 | 0.7121, 0.7738, 0.8423, 0.8979 | the same | within 0.001 |
-| 200/s: p99, ms | 5.47 to 5.94 | 5.21 to 6.14 | not resolved on this machine |
-| 200/s: the replicas' CPU per request, ms | 1.76 to 1.83 | 1.71 to 1.88 | not resolved on this machine |
-| 200/s: the gateway's CPU per request, ms | 1.84 to 1.86 | 1.75 to 1.87 | not resolved on this machine |
-| 400/s: p99, ms | 5.99 to 6.50 | 5.40 to 5.98 | lower after |
-| 400/s: the replicas' CPU per request, ms | 1.43 to 1.52 | 1.39 to 1.47 | not resolved on this machine |
-| 400/s: the gateway's CPU per request, ms | 1.48 to 1.53 | 1.44 to 1.50 | not resolved on this machine |
+**annbench's profile on glove** (`make bench-ann STEP=profile`, VM 4): a graph with M = 16 and efConstruction 200, queried at ef 400, k 100: recall@100 0.8423, p99 4.33 ms, `vec.Dot32` 75.7% of the samples, so it gets the SIMD that TASKS made conditional on this (D055). **`vec.Dot32` in AVX** (`make bench-compare BEFORE=9a75fd5 MICRO=Dot32 ANN_GRAPH=...`, `optimization-dot32/`, VM 4): before 9a75fd5, after 20a8363; BenchmarkDot32, annbench on that graph built by the code before, and the service, three runs each before and after, all first attempts, valid, none flagged.
 
-- The inner product takes 2.7 to 3.3 times less time, and annbench's p99 on glove after is 0.50 to 0.61 times the p99 before at every ef. Recall@100 is the same to its last digit, 10^-6, at every ef.
-- In the service `Dot32` runs only in MMR: 3.1% of the gateway's samples in the profile at 400 requests/s, taken on the first VM before `vec.Dot`'s change. Exact search, the default, uses `vec.Dot`. The gateway's CPU per request is not resolved at either rate. p99 at 400/s meets the rule for lower after by 0.01 ms, the after runs' largest against the before runs' smallest; with no difference resolved in CPU, this record does not attribute it to `Dot32`.
-- Results: the tests and the 32-lane definition hold (D055); golden cases use `vec.Dot`, and no committed file changed.
-- **A defect of `cmd/benchsum compare`**, found 2026-11-13, criteria not changed, nothing rerun: it gave "lower after" or "lower before" with fewer than three runs on a side, where the rule of Before and after asks for three. Fixed 2026-11-13: with fewer than three runs on either side the verdict is "missing runs" (`TestLower`). Run on the committed files, the fixed tool gives every range and verdict of `optimization/compare.md` and `optimization-dot32/compare.md` as committed.
+BenchmarkDot32 at 64 dims takes 20.2 to 20.5 ns before and 7.10 to 7.43 after; annbench's p99 on glove is 1.59 to 1.68 ms before and 0.84 to 0.97 after at ef 120, and 7.53 to 7.96 and 4.21 to 4.51 at ef 800. In the service p99 at 200/s, 5.47 to 5.94 ms before and 5.21 to 6.14 after, is not resolved on this machine, and at 400/s it is lower after, 5.99 to 6.50 and 5.40 to 5.98.
+
+The inner product takes 2.7 to 3.3 times less time and annbench's p99 after is 0.50 to 0.61 times the p99 before at every ef; recall@100 is the same to its last digit (0.7121, 0.7738, 0.8423 and 0.8979 at ef 120, 200, 400 and 800). In the service `Dot32` runs only in MMR; the replicas' and the gateway's CPU per request are not resolved at either rate, and p99 at 400/s is lower after by 0.01 ms only, the after runs' largest against the before runs' smallest, which this record does not attribute to `Dot32`. The tests and the 32-lane definition hold (D055).
 
 #### ANN: synth passes M2's criterion and glove fails it on latency, as in M2; p99 1.0 to 1.3 times faiss's on glove
 
-`make bench-ann STEP=table PY=...` (`ann/`), on the fourth VM with `vec.Dot32` in AVX: annbench as in M2, single thread, graphs built with 4 goroutines (2 per shard), faiss 1.15.1 with one thread on the same sets. `checkgt` verified the ground truth of 100 queries per set. Every query point is a first attempt with no baseline flagged, and no build or faiss run is flagged.
+`make bench-ann STEP=table` (`ann/`), on VM 4 with `vec.Dot32` in AVX: annbench as in M2, single thread, graphs built with 4 goroutines (2 per shard), faiss 1.15.1 with one thread on the same sets; every query point is a first attempt with no baseline flagged, and no build or faiss run is flagged.
 
-| Set | Index | M / efC | recall@100 at ef = 120 / 200 / 400 / 800 | p99 ms at ef = 120 / 200 / 400 / 800 | Build | Unreachable |
-|---|---|---|---|---|---|---|
-| synth | recserve/hnsw | 16 / 200 | 0.9956 / 0.9995 / 1.0000 / 1.0000 | 0.43 / 0.60 / 0.79 / 1.20 | 75 s | 90 |
-| synth | faiss | 16 / 200 | 0.9963 / 0.9996 / 0.9999 / 1.0000 | 0.41 / 0.59 / 0.80 / 1.50 | 350 s | |
-| glove | recserve/hnsw | 16 / 200 | 0.7119 / 0.7738 / 0.8423 / 0.8978 | 0.83 / 1.22 / 2.52 / 4.83 | 205 s | 26 |
-| glove | faiss | 16 / 200 | 0.7185 / 0.7780 / 0.8438 / 0.8961 | 0.74 / 1.21 / 2.03 / 3.71 | 753 s | |
-| glove | recserve/hnsw | 32 / 400 | 0.7946 / 0.8522 / 0.9140 / 0.9575 | 1.50 / 2.08 / 4.09 / 7.66 | 587 s | 2 |
-| glove | faiss | 32 / 400 | 0.8008 / 0.8588 / 0.9196 / 0.9610 | 1.12 / 1.72 / 3.26 / 6.21 | 2,135 s | |
-| glove | recserve/hnsw, 2 shards | 32 / 400 | 0.8506 / 0.8999 / 0.94997 / 0.9805 | 1.78 / 2.73 / 4.58 / 8.63 | 540 s per shard | 1 + 1 |
+| Set | Index | M / efC | recall@100 at ef = 120 / 800 | p99 ms at ef = 120 / 800 |
+|---|---|---|---|---|
+| synth | recserve/hnsw | 16 / 200 | 0.9956 / 1.0000 | 0.43 / 1.20 |
+| synth | faiss | 16 / 200 | 0.9963 / 1.0000 | 0.41 / 1.50 |
+| glove | recserve/hnsw | 16 / 200 | 0.7119 / 0.8978 | 0.83 / 4.83 |
+| glove | faiss | 16 / 200 | 0.7185 / 0.8961 | 0.74 / 3.71 |
+| glove | recserve/hnsw | 32 / 400 | 0.7946 / 0.9575 | 1.50 / 7.66 |
+| glove | faiss | 32 / 400 | 0.8008 / 0.9610 | 1.12 / 6.21 |
+| glove | recserve/hnsw, 2 shards | 32 / 400 | 0.8506 / 0.9805 | 1.78 / 8.63 |
 
-- At the same ef, recserve's p99 is 0.80 to 1.05 times faiss's on synth and 1.01 to 1.33 times on glove; recall agrees within 0.007 at every point.
-- By M2's criterion (Hand-written HNSW above): synth meets it at ef 120 (0.9956, 0.43 ms). On glove recall@100 reaches 0.95 only with M = 32 at ef 800 (0.9575), with p99 7.66 ms, above 5 ms, so glove still fails on latency alone; faiss reaches 0.9610 there at 6.21 ms. Two shards reach 0.94997 at ef 400, again just under 0.95, so their lowest qualifying ef is 800, at 8.63 ms. The longest GC pause in any query phase is at most 0.13 ms.
-- The graphs are new builds with the new `Dot32`; recall on glove agrees with M2's graphs to the digits M2 shows.
+- At the same ef, recserve's p99 is 0.80 to 1.05 times faiss's on synth and 1.01 to 1.33 times on glove; recall agrees within 0.007 at every point. The graphs are new builds with the new `Dot32`, and recall on glove agrees with M2's to the digits M2 shows.
+- By M2's criterion synth meets it at ef 120 (0.9956, 0.43 ms). On glove recall@100 reaches 0.95 only with M = 32 at ef 800 (0.9575), at p99 7.66 ms, above 5 ms, so glove fails on latency alone; faiss reaches 0.9610 there at 6.21 ms. Two shards reach 0.94997 at ef 400, just under 0.95, so their lowest qualifying ef is 800, at 8.63 ms.
 
-#### What the committed files cannot show
+### M3 (2026-11-10)
 
-Found 2026-11-11 on review; nothing was rerun.
+Another cloud VM: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.3, Valkey 9.1 and Kafka 4.4.0 in Docker over loopback (`bench-results/m3/env.txt`). Session reference 800,115 ns; the twelve baselines of the six runs lie between 780,814 and 834,455 ns, none flagged. Code at 47bad71, baseline bundle 5de55036a382, 814,586 events in the histories.
 
-- The figures of invalid fault attempts (6 with 1.73 to 3.47% of the healthy phase degraded) are gone: `scripts/bench-fault.sh` removes an attempt's files before its rerun.
-- The degraded seconds at 1,200 requests/s (45 of 60 under 10%, 7 at 70% or more) come from raw samples, which are not committed; so does the first, unrecorded profile run's p99.
-- `kind/` has no `env.txt`; its VM, the third, and its images, of 89fac9f, are stated in the text only.
+**Stage check of the Valkey path: fail, in the round that computes** (`stage-run*.log`, three runs). The stage "history read, then cache lookup" on Valkey with the cache on has a p99 of 2,902, 4,343 and 5,796 µs in the first round, where every request misses and computes, median 4,343 µs, above SPEC §5's 3 ms (run 1's 2,902 µs is below it); in the second round, where every request hits, 812, 2,353 and 1,679 µs, median 1,679 µs, within it. The tail is in the rounds that compute, where four workers without think time keep the four CPUs busy with about 2.4 ms of computation a request; the Valkey server and the client's goroutines waiting for a CPU fits that, but no CPU reading tests it, and these runs carried Kafka's health-check load (D039). The per-user history version is not built (D039): the control, 2,000 reads of a 16-byte value, has a p99 of 306, 745 and 450 µs, but it ran while nothing computed, and under the failing round's load the cache lookup, a `GET` that finds nothing, has the p99 of the history read (2,145 / 3,176 / 3,878 against 2,336 / 2,973 / 3,971 µs).
 
-### M7 (2026-11-12)
-
-Every M7 run was on one VM: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.4, Docker 29.9.2 with cgroup v1 (`bench-results/m7/*/env.txt`, each with the session reference below; `quality.md` has no environment record). Session reference 473,053 ns (`bench-results/m7/noise-reference.json`, ten runs from 458,475 to 491,559 ns). Bundle b7ff0634dd7b. The breaker's runs and the fault runs below ran on images built from c3679be, before outlier detection; `faults/env.txt` records uncommitted changes, the outlier detection's code in the working tree, which no image or binary of those runs contains (the images were built before it, and loadgen, noisebase and benchsum do not import `internal/annshard`). Figures from M6's VMs are not compared with these. An invalid attempt's files are removed before its rerun (defect 2 below), so its verdict, the share degraded or the flag, and its count of breaker openings come from the script's log of each attempt and are not in the committed files; the `.attempt` files give the attempts per run.
-
-#### Valkey circuit breaker openings: both attributed openings are calls that ran out of their budget; five of the six openings fell in invalid attempts
-
-`make bench-fault FAULT=none RATE=275` (`breaker/`, the table in `breaker.md`). Five valid runs took 9 attempts. Each of the 4 invalid attempts had 1.70% of its healthy phase degraded and the breaker open in it (1, 1, 2 and 1 openings); of the valid runs only none-run3 had an opening.
+**Load at 200 requests/s on Valkey and Kafka: pass (M3 interim)** (`load-200-run*.json`). Cache on, no writes; the three runs are valid first attempts with 12,000 of 12,000 requests answered 200, p99 10.94, 10.97 and 11.99 ms. Degraded responses are at most 0.35% of a run (49 of 14,000), `history_unavailable` 0.22 to 0.31% from history reads past the 3 ms budget, with the circuit breaker never open; cache errors, 0.75 to 1.04%, are lookups and writes past it. No request hit the cache: 14,000 events of the split do not repeat a user with an unchanged history.
 
-| Run, attempt | Valid | Opened at s | Phase | Calls failed in the interval | Attribution | Beside it, not as causes |
-|---|---|---|---|---|---|---|
-| none-run3, 2 | yes | 18.992 | warmup | 6 `timeout`, 0 `error` | timeouts | GC pause 0.21 ms against a median of 0.14 ms, the excess in the second before the change (from the reads in `raw/`) |
-| none-run5, 1 | no | 86.599 | healthy | 6 `timeout` (5 history, 1 cache read), 0 `error` | timeouts | GC pause 1.48 ms against 0.17 ms, all in the second of the change; every container's CPU below its median |
+### M2 (2026-11-09)
 
-- The openings of none-run2's attempts 1 and 2 and none-run3's attempt 1 are not attributed: the rerun replaced their files (defect below). none-run5's attempt 1 was attributed from a copy of its gateway log and reads made outside the repository before the rerun, with `benchsum`, taking the first request's due time from the reads, an estimate within a few ms (in all five valid runs the earliest read is 3 ms after a whole second from it, and 1 ms either way changes no count); the same procedure on none-run3 gives its committed row. That row cannot be checked from the committed files.
-- By the rule, both attributed openings are calls that ran out of their budget, which D037 point 3 counts as failures; no Valkey error is among them. Why five history reads in a row passed 5 ms is not established.
-- The fault runs at c3679be below, with only the history read going through the breaker, show the same: outside F3's fault, whose openings are attributed to errors, all six openings in their files are attributed to timeouts (F1-run2 at 11.8 and 243.8 s, F2-run1 at 105.3 s, F3-run1 at 203.5 s, and the invalid F4-run2 at 113.4 and 237.0 s).
-- Defects, found 2026-11-12, protocol and rule not changed, nothing rerun: (1) a valid run needs at most 1% of its healthy phase degraded, and a breaker open for its 1 s degrades about 1.7% of it, so every run whose breaker opens in its healthy phase is rejected and the valid runs undercount openings; (2) `scripts/bench-fault.sh` removes an attempt's files and recreates the gateway before a rerun, so the openings of invalid attempts cannot be attributed from the results; (3) `benchsum`'s medians take the spans whose later read is in second 90, while the protocol says [30, 90 s).
-
-#### Fault runs with the cache off: F1, F3, F5 and F6 pass; F2 fails on one breaker opening; F4 is not judged
+A different cloud VM from M0: Intel Xeon @ 2.30GHz with AVX-512 and AMX, 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.3 (`bench-results/m2/env.txt`). M0's noise binary ran about 28% faster here, so M0's latencies are not comparable with these; faiss and exact search were rerun here with the unchanged M0 code. Session reference 652,267 ns (threshold 717,494 ns).
 
-`make bench-fault FAULT=F1 ... F6 RATE=275` (`faults/`, the table in `faults.md`), with the cache off, hedge delay 2.5 ms, history budget 5 ms, by the criteria of Faults, amended for M7. 18 runs took 27 attempts; 10 were invalid, 7 on flagged baselines and 3 with 1.72 to 1.74% of the healthy phase degraded. The valid runs' healthy phases had a p99 of 4.70 to 6.83 ms; no run had an error.
+**Hand-written HNSW: fail, on glove latency only** (`ann/*.json`). On synth, M = 16 and efConstruction = 200 pass: recall@100 reaches 0.95 first at ef = 120 (0.9956), with p99 0.57 ms. On glove, M = 16 never reaches 0.95 (0.898 at ef = 800, p99 7.63 ms) and M = 32 does only at ef = 800 (0.9575), with p99 15.48 ms, above 5 ms, in a point that was not flagged; faiss has 0.896 at 3.75 ms and 0.961 at 6.45 ms there. Only the latency part fails, so the criterion fails as written and no threshold changes; the index stays in use with its measured p99 given wherever retrieval latency is reported. No qualifying point has a p99 between 3.6 and 5 ms, so the verdict does not depend on this CPU being faster than M0's. Two shards, each with half of the vectors, reach 0.94997 at ef = 400, so the lowest ef reaching 0.95 is 800, with p99 15.71 ms: on 4 vCPUs two shards do not lower p99. Recall agrees with faiss within 0.007; p99 is 1.3 to 2.4 times faiss's on glove and 0.8 to 1.2 times on synth.
 
-| Fault | Result | Fault phase p99, ms | Degraded in the fault phase | Recovery, s | Also |
-|---|---|---|---|---|---|
-| F1 replica killed | pass | 4.79, 5.16, 4.38 | 0.0% | 2.0, 4.0, 5.0 | annshard-1 back after 2.0, 4.0 and 5.0 s, the window at 0 s; its share in [210, 270 s) 50.0% in each; no failover in any fault phase |
-| F2 50 ms on shard 1 | fail, run 1 | 18.73, 18.60, 18.69 | 63.1, 62.4, 62.4%, `shards_partial` 61.4 to 62.4 points above the healthy phase | 0, 0, 0 | run 1: `history_unavailable` 1.71 points above the healthy phase, from the opening at 105.3 s; shard 1's hedges 9,116 to 9,262 denied, 1,021 to 1,039 lost and 1 won per run |
-| F3 Valkey unavailable | pass | 1.75, 1.75, 1.91 | 99.9%, `history_unavailable` | 1, 1, 1 | |
-| F4 consumer paused | not judged: run 2 has no valid attempt in three, all flagged | 5.49, 6.46 (runs 1 and 3) | 0.0% | 0, 0 | lag back at 0 in 2.08 and 1.89 s; property 9 holds in both |
-| F5 replica paused | pass | 17.70, 17.45, 17.57 | 5.5%, `shards_partial` | 2.0, 1.0, 2.0 | `shards_partial` in [0, 13 s) after the pause 25.15, 25.12, 25.09%; in [13, 15 s) 0.18%; in [15, 60 s) 0%; annshard-1's share in [210, 270 s) 50.0% |
-| F6 searches hang | pass | 18.39, 18.17, 18.31 | 25.0, 24.9, 24.9%, `shards_partial`, reported | 1.0, 1.0, 1.0 | mean coverage 0.80; shard 0's hedges 4,161 to 4,203 denied and 1,021 to 1,039 won; annshard-1's share in [210, 270 s) 50.0% |
+Of the 40 query points, 15 needed a third attempt and 8 (20%) were still flagged, among them recserve's synth and glove M = 16 points at ef = 800; the synth faiss run (the 0.8 to 1.2 ratio uses it), the glove exact run and both glove builds are flagged too. The session reference is the median of ten runs in two groups, 587,389 to 595,671 ns and 708,863 to 821,079 ns, so the threshold lies about 20% above the lower group and inside the upper one: a flag mostly records which group the machine was in, not a slowdown of a few percent.
 
-- F2 fails on run 1 alone, whose fault phase had the breaker open for a second; runs 2 and 3 pass.
-- F4 had 4 of its 6 attempts flagged, the other faults 3 of 21. Each F4 attempt recreates Kafka before its first baseline; the only flagged F4 attempt whose files remain, run 2's third, measured 535,526 ns in it against the reference's 473,053. What raised it was not measured.
-- F5's share in [0, 13 s), 25.1%, is below the 40% that Faults, amended for M7 expected without outlier detection; the expectation is not a criterion. With F6's 24.9 to 25.0%, both are above 1%, the share by which M6 adopted outlier detection.
-- Defects of `cmd/benchsum`, found 2026-11-12, criteria not changed, nothing rerun, none changing a verdict above: (1) it cuts the phases at the script's marks, 3 to 7 ms after 90 and 150 s, and ends F5's [15, 60 s) at the removal; with the bounds as written no p99 moves by more than 0.033 ms; (2) its recovery search tries only windows that end by 270 s; (3) its recovery window starts at the removal and annshard-1's return at the next whole second, so recoveries of 0 and 1 s read about 1 s by the other start, and F6-run3's 13 s with outlier detection 12.996 s; (4) it judges invalid runs too, so `faults.md` gives F4-run2 and, with outlier detection, F2-run2 a pass column; a fault's verdict above is taken from its valid runs by the rule, which benchsum does not print.
-- The criteria answer how the retrieval path behaves under each fault with every response searching; how the service behaves with the cache on is M6's result.
+### M0 (2026-11-08 and 09)
 
-#### Recommendation quality on b7ff0634dd7b
+One cloud VM: Intel Xeon @ 2.10GHz, 4 vCPU, 15 GiB, kernel 6.18.44, Go 1.27.3. Session noise reference 820,984 ns per pass (`bench-results/m0/noise-reference.json`, upper median; threshold 903,082 ns); for the coder/hnsw rerun 816,650 ns (`noise-reference-2.json`, true median).
 
-`make bench-quality` (`quality.md`), by the protocol as amended for M7: 43,249 test events, one request each, 8,378 of whose histories give no user vector. Every condition is valid: the test fails otherwise. Differences from the healthy pipeline, with paired bootstrap 95% intervals:
+**R1: pass, with intra-op threads = 1.** Parity (max abs diff, Go against Python) is 0 for the encoders at L=50 and L=200 and the ranker, and 1.8e-7 for the pure-Go MLP. At concurrency 4, p99 is 1.02 ms for the encoder at L=50 (limit 5), 4.55 ms at L=200 and 2.91 ms for the ranker at C=500 (limit 10). The image builds and passes parity inside `distroless/cc-debian13`, 91.9 MB, built with two extra lines trusting the cloud session's CA (`onnx/image-build.txt`); the committed Dockerfile is unchanged. With ONNX Runtime's default thread pool p99 is 2.7 to 8.3 times higher, so services set intra-op threads to 1 (D015).
 
-| Condition | Recall@10 | Δ Recall@10 | Δ Recall@20 | Δ NDCG@10 |
-|---|---:|---:|---:|---:|
-| healthy | 0.0181 | | | |
-| reference (exact scoring of all items on the encoder's vector) | 0.0043 | -0.0139 [-0.0151, -0.0126] | -0.0181 [-0.0195, -0.0167] | -0.0061 [-0.0068, -0.0055] |
-| encoder fails | 0.0182 | +0.0001 [-0.0002, +0.0004] | +0.0004 [+0.0001, +0.0008] | +0.0001 [-0.0000, +0.0002] |
-| co-occurrence fails | 0.0098 | -0.0083 [-0.0093, -0.0074] | -0.0103 [-0.0115, -0.0091] | -0.0037 [-0.0042, -0.0032] |
-| ranker fails | 0.0050 | -0.0131 [-0.0143, -0.0119] | -0.0170 [-0.0184, -0.0156] | -0.0058 [-0.0064, -0.0052] |
-| shard 1 of 2 fails | 0.0182 | +0.0001 [+0.0000, +0.0003] | +0.0000 [-0.0002, +0.0002] | +0.0001 [+0.0000, +0.0001] |
-| HNSW, ef 400 | 0.0181 | +0.0000 [+0.0000, +0.0000] | -0.0001 [-0.0002, -0.0000] | +0.0000 [-0.0000, +0.0000] |
+**R2: fail; the fallback is adopted** (`ann/*.json`). coder/hnsw v0.6.1, the pinned version, does not reach recall@100 ≥ 0.95 at any ef, on either set, with either setting (0.035 and 0.064 on synth, 0.023 and 0.033 on glove, at every ef; the rerun with `Ml = 1/M`, D017): its layer search keeps only k results, and its heap's `Max` and `PopLast` take the last array slot of a min-heap (`graph.go` `layerNode.search`, `heap/heap.go`), so ef only bounds the candidate queue. Its GC criterion holds, with the longest pause at most 0.26 ms. Upstream fixed both defects on 2026-06-22 (commit 36cab60, untagged); measured outside the criterion, on synth its recall@100 levels off at 0.824 while p99 grows to 21.3 ms and its build took 49 min, so it would fail too. faiss with the same settings reaches 1.000 on synth, so the data, ground truth and recall code agree; on glove it reaches 0.95 only at M = 32, ef = 800 (0.961), with p99 6.59 ms in a run flagged by a baseline 11% over the first reference (911,710 ns), so the outside reference does not meet the p99 ≤ 5 ms part of the criterion there either. The criterion is unchanged and applies to the hand-written index in M2. Six coder/hnsw points of synth M = 16 stayed flagged after three attempts, none affecting the verdict, which rests on recall.
 
-- Without co-occurrence or without the ranker every metric is lower than healthy, with intervals below 0; the two conditions' intervals for each metric do not overlap.
-- Without the encoder, with shard 1 missing, and with HNSW, every difference is within 0.0004 of 0; some intervals exclude 0 by up to 0.0001.
+## Limits
 
-#### Outlier detection: F5 passes; F6 fails on one run's recovery and F2 on one breaker opening; no replica was taken out in a healthy phase
+- **Machine.** Every service shares three CPUs of a 4-vCPU cloud VM, with loadgen on the fourth (the M0 and M2 ANN runs and the M3 stage check were not pinned). VMs share physical CPUs with other tenants and differ in speed (session references from 473,053 to 887,645 ns per pass), so a figure is that machine's and that topology's; figures from different VMs, boots and sets are not compared, and none predicts the capacity of a multi-machine deployment. A run whose baseline is over 10% above its session's reference is flagged and rerun at most twice; the last attempt is marked noisy if still flagged.
+- **Capacity and headline.** The 1,821 requests/s is 2/c from one quantity, c = 1.098 ms of CPU per request at the headline (1.098 to 1.199 ms in the three runs), measured while the gateway shared its CPUs with the rest of the service. The headline ran with the 3 ms history budget; SPEC §5's is now 5 ms.
+- **Faults.** M6's criteria could not show that a restarted replica serves again or how fast searches recover; M7's runs, with the cache off, can, and answer how the retrieval path behaves with every response searching; the cache-on behaviour is M6's result. The attributed breaker openings outside F3's fault (F3's are attributed to errors) are calls past their budget; why they ran past it is not established, and F2's two failures in the first set each rest on such an opening. F4's baselines were flagged most often (4 of 6 attempts in each M7 set) for a cause not established, and F4 is not judged in either. The second set's F3 run 2 (7 s to recover with 5 allowed) and the first set's F6 run 3 (13 s) have no established cause, and the order in which F2's two toxics were removed was not measured.
+- **Records not committed.** The per-second reads (`raw/`) of M6 and M7; the figures of M6's and the first M7 set's invalid fault attempts; the gateway log from which none-run5's attempt 1 was attributed; `kind/`'s `env.txt`; M8's per-run scrapes and attempt records in serving, so which counted runs followed a flagged attempt is not shown; the per-event ranks of M8's reads (D011); the readings of Kafka's health check in compose, 639 to 686 ms of CPU per second when it started a JVM every 2 s and 24 ms after the fix (D039), whose only trace is the message of commit c802a68 ("about two thirds of a CPU"), so the M3 and M5 runs in compose carry that load; the measurement of F4's baseline after Kafka's recreation that the protocol's second M7 set cites. `quality.md` and M8's reads record no environment.
+- **Tool defects.** The defects of `cmd/benchsum` found after the runs and their fixes are in [BENCHMARK_ERRATA.md](BENCHMARK_ERRATA.md); none changes a verdict. The committed tables and `*.fault.json` are the earlier tool's, not regenerated; an invalid attempt's Pass reads `false` in them.
+- **Not resolved.** A higher p99 in the swap windows is not attributed to GC; the hedge delay's and `Dot32`'s effects on p99 are not resolved.
+- **Retrieval and quality.** glove fails M2's p99 criterion in recserve's index and in faiss, and two shards on 4 vCPUs do not lower p99. M7's figures come from one bundle trained once and not updated over the test period. M8's confirmatory result is one test read of one category; Video_Games' rows are exploratory.
+- **Stream state in serving.** One boot, not compared with M6 or M7; the replicas' CPU per call at 100 recommend requests/s was higher with the state on both shards, for a cause not known.
+- **Not measured.** The sharded tier through annshard on glove; the cost of tracing (compose samples every request, a production deployment would sample about 1%, D051); `Dot32`'s Go code on CPUs without AVX2; seqrec-lab's bundle against the baseline.
 
-`OUT=bench-results/m7/faults-outlier make bench-fault FAULT=F2, F5, F6 RATE=275` (`faults-outlier/`, the table in `faults.md`), on the same VM, the setup of the runs above, with images built from 03bb156, which adds outlier detection (D041). 9 runs took 11 attempts; 3 were invalid, all on flagged baselines, the three of F2's run 2, which so has no valid attempt.
-
-| Fault | Result | Fault phase p99, ms | Degraded in the fault phase | Recovery, s | Taken out |
-|---|---|---|---|---|---|
-| F2 50 ms on shard 1 | fail, run 3; run 2 not valid | 19.10, 18.79 (runs 1 and 3) | 62.4, 62.9%, `shards_partial` 62.4 and 61.2 points above the healthy phase | 0, 0 | annshard-3 once per run, in the second after the fault's removal |
-| F5 replica paused | pass | 5.10, 5.47, 5.48 | 0.1, 0.0, 0.0% | 4.0, 3.0, 2.0 | annshard-1 once per run, in the fault phase |
-| F6 searches hang | fail, run 3 | 6.37, 5.71, 5.95 | 0.1, 0.1, 1.8% | 1.0, 1.0, 13.0 | annshard-1 once per run, in the fault phase |
-
-- **The criteria of outlier detection.** F5's `shards_partial` share in [0, 13 s) after the pause is 0.17, 0.17 and 0.14%, and F6's over the fault phase 0.02 to 0.04 points above the healthy phase's: both within 1 point in every run. `recserve_shard_ejections_total` is 0 at 30 and at 90 s in every run. F2 fails its criteria, so the third condition is not met.
-- **Against the runs before it** (the table above, 3 runs each, at c3679be): F5's fault phase p99 5.10 to 5.48 ms against 17.45 to 17.70, its `shards_partial` share in [0, 13 s) 0.14 to 0.17% against 25.09 to 25.15%; F6's p99 5.71 to 6.37 ms against 18.17 to 18.39, its `shards_partial` share over the fault phase 0.02 to 0.04 points above the healthy phase's against 24.9 to 25.0 points. The two sets of runs do not overlap on any of these.
-- **The failures.** F2's run 3 had the breaker open at 90.7 s, in the fault phase, attributed to timeouts, and `history_unavailable` 1.68 points above the healthy phase. F6's run 3 recovered after 13 s: the windows' p99 stayed above 1.2 times the healthy phase's 5.08 ms, with seconds of 7 to 12.7 ms in the first 10 s after removal, while annshard-1 was back after 1.0 s; its fault phase also had the breaker open at 144.1 s, attributed to timeouts. Neither involves a replica taken out in its healthy phase. What raised F6's p99 after the removal was not established.
-- **F2's ejection.** The committed reads show annshard-3's count at 0 at 90 s and at 1 just after the removal; the per-second reads, in `raw/` and not committed, show it at 0 at 150.0 s and at 1 at 151.0 s in all three runs, so none was taken out while both replicas of shard 1 were slow. The script deletes the toxics of annshard-2 and then annshard-3, one request after the other, which fits annshard-2 answering again while annshard-3 still had the latency; the order was not measured.
-- F1, F3 and F4 were not run with it (Faults, amended for M7); their results above are of c3679be.
-
-### M7, second set (2026-11-12)
-
-By the protocol of Second M7 set, on one VM other than the first set's: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.4, Docker 29.9.2 with cgroup v1 (`bench-results/m7/rerun/*/env.txt`). Images were built from e0f2d69 before the runs; `env.txt`, written at 06:15 and 06:39 UTC, records no uncommitted changes under `cmd`, `internal`, `deploy` or `scripts`. The reference was taken before any result was written and records no uncommitted changes and noisebase sha256 e11ef169…; all 56 baselines of the runs record uncommitted changes and sha256 6d64fe17…, binaries rebuilt by `make bench-fault` while the new results were untracked in the tree. Built again at e0f2d69 with Go 1.27.4 in a checkout at `/home/user/recserve` (one at another path gave another sum), `cmd/noisebase` has sha256 e11ef169… from a clean tree and 6d64fe17… with an untracked file, and `go version -m` of the two differs only in `vcs.modified` and the module version's `+dirty`. Session reference 619,668 ns (`rerun/noise-reference.json`, ten runs from 566,634 to 668,655 ns); a baseline is flagged above 681,635 ns. Bundle b7ff0634dd7b. Every attempt keeps its files (`FAULT-runN-aK`), and the tables are benchsum's (`breaker/faults.md`, `faults/faults.md`, `faults/breaker.md`). These results are judged against the criteria only; the first set's, from another VM, are not compared with them.
-
-#### Breaker openings with no fault: 0 in 5 runs, as expected
-
-`OUT=bench-results/m7/rerun/breaker make bench-fault FAULT=none RATE=275` (`rerun/breaker/`). Five runs took five attempts, all valid. Expected before the runs: 0 openings in the 5 runs. Observed: 0. The healthy phases had a p99 of 7.01 to 8.62 ms and no error.
-
-#### Fault runs: F1, F2, F5 and F6 pass; F3 fails on one run's recovery; F4 is not judged
-
-`OUT=bench-results/m7/rerun/faults make bench-fault FAULT=F1 ... F6 RATE=275` (`rerun/faults/`), with the cache off, hedge delay 2.5 ms, history budget 5 ms and outlier detection, by the criteria of Faults, amended for M7, and F2, F5 and F6 also by those of outlier detection. 18 runs took 23 attempts; 6 were invalid, all on flagged baselines. The valid runs' healthy phases had a p99 of 7.05 to 10.12 ms and at most 0.22% degraded; no run had an error.
-
-| Fault | Result | Fault phase p99, ms | Degraded in the fault phase | Recovery, s | Also |
-|---|---|---|---|---|---|
-| F1 replica killed | pass | 7.22, 7.76, 7.69 | 0.0% | 4.0, 1.0, 4.0 | annshard-1 back after 4.0, 1.0 and 4.0 s, the window at 0 s; its share in [210, 270 s) 49.9, 49.9, 50.1%; no failover in any fault phase |
-| F2 50 ms on shard 1 | pass | 20.48, 19.87, 19.60 | 62.4%, `shards_partial` 62.3 to 62.4 points above the healthy phase | 0, 0, 0 | shard 1's hedges 9,257 to 9,264 denied, 1,033 or 1,034 lost and 0 or 1 won per run; annshard-3 taken out once per run, after the fault's removal |
-| F3 Valkey unavailable | fail, run 2 | 3.96, 2.41, 2.73 | 99.9%, `history_unavailable` | 1, 7, 1 | the breaker opened once per run, at 90.51 to 90.52 s, attributed to errors |
-| F4 consumer paused | not judged: run 1 has no valid attempt in three, all flagged | 8.97, 7.50 (runs 2 and 3) | 0.1, 0.0% | 0, 2 | lag back at 0 in 2.12 and 2.09 s; property 9 holds in both |
-| F5 replica paused | pass | 7.18, 6.95, 7.42 | 0.1% | 3.0, 2.0, 3.0 | `shards_partial` in [0, 13 s) after the pause 0.17, 0.17, 0.14%; in [13, 15 s) and [15, 60 s) 0%; annshard-1 taken out once per run, in the fault phase; its share in [210, 270 s) 50.1, 49.9, 49.9% |
-| F6 searches hang | pass | 6.94, 7.07, 6.84 | 0.1, 0.1, 0.0% | 1.0, 1.0, 1.0 | `shards_partial` over the fault phase 0.03, 0.04, 0.03 points above the healthy phase; annshard-1 taken out once per run, in the fault phase; shard 0's hedges 67 to 72 won, 5 to 7 denied, 0 to 2 lost; annshard-1's share in [210, 270 s) 49.9, 50.0, 50.0% |
-
-- **The breaker.** Outside F3's fault phase it did not open in any of the 23 attempts, invalid ones included (`faults/breaker.md`).
-- **The criteria of outlier detection** are met: F5's `shards_partial` share in [0, 13 s) after the pause is 0.14 to 0.17% against 0% in the healthy phase, and F6's over the fault phase 0.03 to 0.04 points above the healthy phase's; `recserve_shard_ejections_total` is 0 at 30 and at 90 s in every valid run; F2 passes its criteria.
-- **F3's failure.** Run 2's healthy p99 of 8.52 ms puts the limit at 10.23 ms. Its per-second p99 was 15.86 ms at 156 s, 11.22 ms at 158 s and 25.18 ms at 159 s (`F3-run2-a1.fault.json`); the windows starting 0 to 6 s after removal had a p99 of 10.36 to 10.80 ms, with 6.80% degraded at 0 s, beyond the degraded limit of 1.07%, and 0.18 to 0.22% from 1 s on, within it, and the window at 7 s 9.27 ms (`F3-recovery-windows.tsv`, derived from the samples). Run 1 had 24.04 ms at 159 s and recovered after 1 s against its limit of 11.57 ms. The windows that failed in run 2 are those holding 156 s, in which no history read ran past its budget. History reads ran out of their 5 ms budget in single seconds of the recovery phase of each run, with the breaker closed and no Valkey error, among them two at 159 s in run 1, one at 159 s and two at 160 s in run 2 and three at 158 s in run 3, and as many responses reported `history_unavailable` (`F3-valkey-per-second.tsv`). What raised run 2's p99 in those seconds was not established.
-- **F4's baselines.** 4 of F4's 6 attempts were flagged, against 2 of the other faults' 17. Of F4's five flagged baselines, three were taken after the load, more than 270 s after Kafka's recreation (run 1, attempts 1 to 3: 688,721, 740,358 and 709,083 ns), and two before it (run 1 attempt 2, 706,421 ns; run 2 attempt 1, 685,340 ns). The other two: F1-run3-a1 after the load, 682,937 ns, and F2-run1-a1 before it, 727,405 ns. What raises them was not established.
-- **When replicas were taken out.** The reads at the phase boundaries show each count at 0 at 90 s and at 1 just after the removal. The reads of each second (`ejections-per-second.tsv`, derived from the per-second reads) show annshard-1 taken out in [90, 91 s) in every F5 and F6 run, and annshard-3's count at 0 at 150 s and at 1 at 151 s in every F2 run, so neither of shard 1's replicas was taken out while both had the latency.
-- **F2-run1-a1's ejections.** The attempt is invalid on its flagged baseline. The files: in the gateway's metrics read at 30 s (`F2-run1-a1.b0.metrics`) each of shard 1's replicas, annshard-2 and annshard-3, had been taken out once, and calls had ended at the deadline at all four replicas, 15 and 15 at shard 0's and 18 and 24 at shard 1's; the read just after the injection shows the same ejections, and the one just after the removal annshard-3's at 2. They do not give the order of the two ejections or how long each replica was out: this attempt's per-second reads were not committed. The code: by D041's rule the second of a shard's two replicas is not taken out while the first is out, which `TestOneReplicaOutAtATime` (`internal/annshard`) asserts; `internal/annshard/client.go` is the same at e0f2d69, the build of these runs, as where the test passes.
-- **Defects of `cmd/benchsum`**, found 2026-11-12 after these runs, criteria not changed, nothing rerun, none changing a verdict above: (1) "no replica is taken out in any healthy phase" compares the first per-second reads in seconds 30 and 90, while the healthy phase is [30, 90 s) by reading 1 of Second M7 set; in the runs of `ejections-per-second.tsv` those reads were 4 to 11 ms after 30 s and 4 to 5 ms after 90 s, so an ejection in the first ms of the healthy phase would be missed and one in the first ms of the fault phase counted against it; every count in `ejections-per-second.tsv` is 0 from second 29 to second 90, and every F1, F3 and F4 attempt's metrics read just after the injection (`*.b1.metrics`) show no ejection. (2) F4's lag drain counts from the script's removal mark, at 150.006 and 150.004 s in the valid runs, not from 150 s; from 150 s the drains are 2.127 and 2.092 s against the 2.121 and 2.088 s reported, with 30 s allowed. (3) The breaker table gives an opening's phase by the script's marks, not by 90 and 150 s; the only openings, F3's at 90.510 to 90.522 s, are in the fault phase either way (`faults/breaker.md`).
-- Fixed 2026-11-12 in d2a5667: `cmd/benchsum` reads the three as above. The committed tables and `*.fault.json` are the earlier tool's and are not regenerated. Run on the committed files, the fixed tool writes `faults/breaker.md` and `breaker/breaker.md` byte for byte as committed. F4's drains, from the committed `.lag` files and 150 s, are 2.127 and 2.092 s in the valid runs. The healthy-phase ejections cannot be read again, the per-second reads not being committed; the committed counts bound them at 0 in every valid attempt: a counter only rises, and it is 0 in the F1, F3 and F4 metrics read just after the injection and in every F2, F5 and F6 row of `ejections-per-second.tsv` for seconds 29 and 90, read no later than the first of the two reads the fixed tool takes and after the second. No verdict changes
-- Limit of that reading, 2026-11-12: with reads about once a second, the reads before 30 and 90 s cover about [29, 89 s): an ejection in the last second before 90 s is not counted, and one in the last second of the warmup is. In the committed runs every count is 0 at 90 s, so none was missed
-- **Replies cut short after the status line**, found 2026-11-13, criteria not changed, nothing rerun: `cmd/benchsum` judged a sample by its status alone, while loadgen records a reply whose status line arrived and whose body did not with that status and the outcome `error`, so a 200 or 202 cut short counted as an answer or an accepted event and not as an error. Fixed 2026-11-13: a sample with the outcome `error` is an error, neither an answer nor an accepted event (`TestOutcomeErrorIsAnError`). Loadgen gives that outcome also to a reply that is neither a 503 nor its endpoint's success, a 4xx for one, which the tool counted as neither an error nor an answer. No committed verdict changes: the change concerns only samples with the outcome `error`, and each of the 236 loadgen reports under `bench-results/` counts 0 requests with the outcome `error` and 0 with `busy`.
-- **Each phase's hedges and failovers**, 2026-11-13, criteria not changed, nothing rerun: `cmd/benchsum` takes them as differences of the gateway's metrics read at 30 s (`*.b0.metrics`), at the injection (`*.b1.metrics`), at the removal (`*.b2.metrics`) and after the load, and `scripts/bench-fault.sh` read `b1` and `b2` after the injection and the removal returned, so what was counted between the injection and that read went to the healthy phase, and between the removal and that read to the fault phase. In F1 run 1 of this set, toxiproxy:19091 has 0 failed calls and 0 failovers in `F1-run1-a1.b0.metrics` and 1 of each in `F1-run1-a1.b1.metrics`, and `F1-run1-a1.fault.json` puts that failover in the healthy phase and none in the fault phase; F1 run 2 of the first M7 set is the same (`faults/F1-run2.b0.metrics`, `.b1.metrics`, `.fault.json`). F1's "no failover in any fault phase", in this set's table and the first M7 set's, rests on that split, and the hedges in the tables' notes are split at the same reads. No pass criterion reads these counts. Fixed 2026-11-13: the script reads `b1` and `b2` before the injection and the removal, which follow that read, each mark still written just before them; the criteria's phases are cut at 90 and 150 s, not at the marks.
-- **Invalid attempts in the fault tables**, 2026-11-13, criteria not changed, nothing rerun: `cmd/benchsum` printed an invalid attempt's Pass as `false`, though an invalid run is neither a pass nor a fail; each fault's verdict counts valid runs only and is unchanged. Fixed 2026-11-13: the cell is empty (`TestFaultTableLeavesInvalidPassBlank`). The committed tables are the earlier tool's and are not regenerated; in them an invalid attempt's Pass is `false`: F4-run2 in `faults/faults.md` and F4-run1-a3 in `rerun/faults/faults.md`.
-
-### M8 (2026-11-14 and 15)
-
-By docs/registration/m8-freshness.md and its amendment "2026-11-15: Video_Games read 2 stopped before any metric". For every row but the references, each read sends one request per test event through the pipeline in process, every stage budget off, MMR included; the references are computed without a request. The reads record no environment. Per-event ranks are not committed (D011); the end of each read's file gives the SHA-256 of each row's rank file.
-
-#### Choices on valid (section 6) and bundles
-
-| | Video_Games | Musical_Instruments |
-|---|---|---|
-| ALS (6.1): factors, α, λ; recall@10 with the fold-in, with the exact user step | 256, 100, 0.01; 0.0282, 0.0310 | 128, 40, 0.01; 0.0237, 0.0241 |
-| Window (6.2) | 14 days: 14 and 30 days tie at 0.0581, 14 has the higher NDCG@10 | 30 days, recall@10 0.0193 |
-| B1, B0 | a8d9c526fb03, b7ff0634dd7b | 3be5f6667aaa, 2dda7923d636 |
-| B1s6, B1s8 | d6d2691322ca, 74ad6c83bf3c | f79fea0f6a5a, 244c913c1cc8 |
-| Bundles rebuilt every 7 days, every 30, every 30 with B1s8's ranker | 59, 14, 14 | 60, 14, 14 |
-
-The grids and windows are in `bench-results/m8/<category>/` (`als-grid.tsv`, `als-grid.txt`, `windows.txt`), and the bundles' versions at the top of each read's file.
-
-#### Reads
-
-`bench-results/m8/test-reads.log`: Video_Games' read 1 at 868f9be (2026-11-14T22:01:40Z); its read 2, logged at 22:51:31Z and stopped by the kernel for memory before any metric, then run again under the amendment "2026-11-15: Video_Games read 2 stopped before any metric" at b1df253 (2026-11-15T00:37:15Z); Musical_Instruments' one read at 6bfdbab (02:36:09Z). Before that read, besides the bundle builds that sections 2 and 4 describe, three tests opened Musical_Instruments' test file through loadRealData and used only its earliest event time (section 2), and none sent a test event as a request: on valid, before 6bfdbab, TestRealDataValidReference and TestRealDataPopularityReference; and after 6bfdbab, TestRealDataStreamGolden on B1s6 and on B1s8, which logs nothing.
-
-#### H1: confirmed
-
-On Musical_Instruments' 42,595 test events, S3's recall@10 is 0.0317 and F0's 0.0200. S3 − F0 is +0.0117, with a 95% interval over users of [+0.0096, +0.0137] and over events of [+0.0102, +0.0131]. The interval over users is above 0, so H1 is confirmed (section 8). The SHA-256 of the rank files: F0 49588aab22c8ad3f094ae69325a8209bac3c198d6bb31034e40eb093ee72910d, S3 7cf93b94779ad5a76b93e0a389d0d2d4f6b1ca8871ad218557d6f05457d47c04.
-
-#### The conditions of section 7
-
-Musical_Instruments (MI) with a window of 30 days, Video_Games (VG) with 14; Video_Games' rows are exploratory (section 11).
-
-| Row | MI Recall@10 | MI Recall@20 | MI NDCG@10 | VG Recall@10 | VG Recall@20 | VG NDCG@10 |
-|---|---:|---:|---:|---:|---:|---:|
-| F0 | 0.0200 | 0.0293 | 0.0105 | 0.0197 | 0.0272 | 0.0094 |
-| S1 | 0.0186 | 0.0284 | 0.0105 | 0.0247 | 0.0362 | 0.0144 |
-| S2 | 0.0197 | 0.0292 | 0.0109 | 0.0298 | 0.0398 | 0.0172 |
-| S3a | 0.0237 | 0.0336 | 0.0126 | 0.0431 | 0.0618 | 0.0235 |
-| S3 | 0.0317 | 0.0522 | 0.0159 | 0.0375 | 0.0572 | 0.0207 |
-| R7 | 0.0242 | 0.0362 | 0.0136 | 0.0381 | 0.0532 | 0.0202 |
-| R30 | 0.0231 | 0.0347 | 0.0130 | 0.0355 | 0.0483 | 0.0184 |
-| S3+R30 | 0.0327 | 0.0539 | 0.0167 | 0.0394 | 0.0635 | 0.0225 |
-| vector reference | 0.0180 | 0.0279 | 0.0100 | 0.0166 | 0.0239 | 0.0089 |
-| popularity reference | 0.0155 | 0.0302 | 0.0073 | 0.0320 | 0.0510 | 0.0169 |
-
-Recall@10 on the events whose item has a train event and on the others:
-
-| Row | MI, item with train events (28,609) | MI, others (13,986) | VG, item with train events (17,091) | VG, others (26,158) |
-|---|---:|---:|---:|---:|
-| F0 | 0.0299 | 0.0000 | 0.0499 | 0.0000 |
-| S1 | 0.0278 | 0.0000 | 0.0439 | 0.0122 |
-| S2 | 0.0294 | 0.0000 | 0.0500 | 0.0166 |
-| S3a | 0.0307 | 0.0092 | 0.0150 | 0.0615 |
-| S3 | 0.0284 | 0.0386 | 0.0105 | 0.0551 |
-| R7 | 0.0317 | 0.0089 | 0.0557 | 0.0266 |
-| R30 | 0.0311 | 0.0066 | 0.0563 | 0.0219 |
-| S3+R30 | 0.0304 | 0.0374 | 0.0116 | 0.0575 |
-| vector reference | 0.0268 | 0.0000 | 0.0421 | 0.0000 |
-| popularity reference | 0.0077 | 0.0315 | 0.0148 | 0.0433 |
-
-| Δ Recall@10 | MI mean | MI 95% CI, users | MI 95% CI, events | VG mean | VG 95% CI, users | VG 95% CI, events |
-|---|---:|---:|---:|---:|---:|---:|
-| S3 − F0 | +0.0117 | [+0.0096, +0.0137] | [+0.0102, +0.0131] | +0.0178 | [+0.0152, +0.0202] | [+0.0155, +0.0197] |
-| S1 − F0 | -0.0014 | [-0.0020, -0.0008] | [-0.0020, -0.0008] | +0.0050 | [+0.0037, +0.0062] | [+0.0039, +0.0062] |
-| S2 − S1 | +0.0011 | [+0.0006, +0.0016] | [+0.0006, +0.0016] | +0.0051 | [+0.0042, +0.0061] | [+0.0042, +0.0060] |
-| S3a − S2 | +0.0039 | [+0.0031, +0.0048] | [+0.0031, +0.0047] | +0.0133 | [+0.0112, +0.0153] | [+0.0114, +0.0152] |
-| S3 − S3a | +0.0081 | [+0.0062, +0.0099] | [+0.0067, +0.0094] | -0.0057 | [-0.0075, -0.0039] | [-0.0074, -0.0039] |
-| S3 − R7 | +0.0075 | [+0.0056, +0.0094] | [+0.0060, +0.0091] | -0.0006 | [-0.0035, +0.0019] | [-0.0029, +0.0014] |
-| S3 − R30 | +0.0086 | [+0.0067, +0.0105] | [+0.0071, +0.0102] | +0.0019 | [-0.0009, +0.0044] | [-0.0005, +0.0041] |
-| R7 − F0 | +0.0042 | [+0.0029, +0.0054] | [+0.0030, +0.0053] | +0.0184 | [+0.0167, +0.0200] | [+0.0168, +0.0200] |
-| R30 − F0 | +0.0031 | [+0.0019, +0.0042] | [+0.0019, +0.0042] | +0.0158 | [+0.0142, +0.0174] | [+0.0142, +0.0173] |
-| S3+R30 − S3 | +0.0010 | [-0.0003, +0.0022] | [-0.0003, +0.0022] | +0.0019 | [+0.0007, +0.0032] | [+0.0007, +0.0031] |
-| S3+R30 − R30 | +0.0096 | [+0.0079, +0.0113] | [+0.0081, +0.0110] | +0.0039 | [+0.0011, +0.0063] | [+0.0013, +0.0060] |
+## Reproduce
 
-- In both categories S3 is above F0, with both intervals above 0.
-- The parts differ between them: popularity from the stream alone (S1 − F0) is -0.0014 on Musical_Instruments and +0.0050 on Video_Games, and the two recency features (S3 − S3a) +0.0081 and -0.0057; each of these intervals excludes 0.
-- Against rebuilding, S3 − R7 and S3 − R30 are +0.0075 and +0.0086 on Musical_Instruments, with intervals above 0, and -0.0006 and +0.0019 on Video_Games, with intervals that include 0.
-- On the events whose item has no train event, F0 and the vector reference have recall@10 0.0000 in both categories; on Musical_Instruments S1 and S2 do too, while S3a has 0.0092 and S3 0.0386.
+Most targets take DATA, the data directory, and VERSION, the baseline bundle; the compose scripts write an `env.txt` into each result directory. A session starts with `make bench-ref`; the sections named below are in [BENCHMARK_PROTOCOL.md](BENCHMARK_PROTOCOL.md).
 
-#### Read 1
-
-TestRealDataQuality's conditions on B1, and B0's reference and healthy rows, are in each category's `read-1.md` with the strata. B1's healthy recall@10 is above B0's in both: 0.0200 against 0.0187 on Musical_Instruments and 0.0197 against 0.0181 on Video_Games, B0 healthy minus B1 healthy within [-0.0023, -0.0005] and [-0.0024, -0.0008] over events. On Video_Games, B0 is b7ff0634dd7b and gives M7's healthy and reference recall@10 again, 0.0181 and 0.0043.
-
-#### Validity (section 10)
-
-A read that fails a condition stops before it writes its file, and each of the three counted reads wrote its file. The checks, at a5ff644, in internal/recommend:
-
-| Condition | Checked in |
-|---|---|
-| No response of a condition is degraded | `runConditionOn`, realquality_test.go:126-143, for read 1's conditions (realquality_test.go:445), B0 healthy (freshness_test.go:606), F0 to S3 (freshness_test.go:178) and each rebuilt bundle's requests (freshness_test.go:146) |
-| In TestRealDataQuality's forced conditions, every response reports its reason exactly when forced | realquality_test.go:126-146 |
-| Every test event at or after 1658002729837 | freshness_test.go:578-580 |
-| Each request's window count equals a binary search of its item's sorted event times | `checkWindowCounts`, freshness_test.go:352-372, called at freshness_test.go:646 |
-| Video_Games' read 2: F0's and the vector reference's ranks equal read 1's B1 healthy and B1 reference | freshness_test.go:653-663; the rank files' SHA-256 agree as well (bench-results/m8/Video_Games/read-2.md:46 and read-1.md:44, read-2.md:54 and read-1.md:43) |
-| Before a category's first read, on valid: the popularity reference's ranks equal fresh.py's for every window | `TestRealDataPopularityReference`, popularity_test.go:165-205 (`make bench-windows`): no rank differs, on Video_Games (d0eb293) and on all 41,284 valid events of Musical_Instruments (6bfdbab) |
-| Before it: B1's vector reference equals the grid script's | `TestRealDataValidReference`, realquality_test.go:466-502 (`make valid-reference`): equal on all 34,510 and 41,284 valid events (d0eb293, 6bfdbab) |
-
-Beside them, the checks of section 4 and of the amendment "2026-11-15: Video_Games read 2 stopped before any metric": each request is answered by a bundle rebuilt at or before its time from events before it (rebuilt_test.go:83-96); the rebuilt bundles' items, settings, rankers and rebuild times (freshness_test.go:247-306); B1s6 and B1s8 against B1 and the window chosen (freshness_test.go:310-325); every stream bundle's golden stream inputs against the Go state (freshness_test.go:632-645); a rebuilt bundle opened for a period has the rebuild time it had when checked (freshness_test.go:131-137).
-
-### M8, stream state in serving (2026-11-15)
-
-By [Stream state in serving](#stream-state-in-serving-m8-d062), every step on one boot, f730b1e7, of one VM: Intel Xeon @ 2.10GHz, 4 vCPU, 15.7 GiB, kernel 6.18.44, Go 1.27.4, Docker 29.9.2 with cgroup v1; loadgen on CPU 0, the noise baseline on CPU 1, the containers on CPUs 1 to 3; noise reference 711,611 ns per pass. The gate's output, the micro-benchmarks' output and each run's summary name commit 7e7639a and this boot; the swap run's files name the boot only. 7e7639a, committed after this protocol, changes only `BenchmarkRealStreamTake`: it keeps the loaded data live, which, freed between the two heap readings, would count against the events. The environment record has an entry per set of image IDs on the boot, two at 0d3897c and six at 7e7639a; each run's summary names its gateway image. The files are in `bench-results/m8/serving/`, without the per-run scrapes and attempt records, so which counted runs followed a flagged attempt is not shown. MB are 10^6 bytes.
-
-#### Correctness gate: pass
-
-`TestRealDataStreamGateway` passed: the gateway answered the requests of test events 0 to 999 on the preload, 2,000 to 2,999 after the writes and 3,000 to 3,999 after the swap away and back with the items, in order, that the pipeline in process gives, none degraded, with a largest score difference of 0 each time (`gate/gate-f730b1e7.txt`).
-
-#### Micro-benchmarks and the pipeline in process
-
-Ten counts each on one core (`micro/micro.md`, from `micro/micro.txt`). The pipeline's two rows, `F0` and `S3` in the file, answer the requests of every tenth valid event.
-
-| Benchmark | Median | Range |
-|---|---:|---:|
-| Taking a valid event into the state | 2,990.5 ns | 2,795 to 3,820 ns |
-| Heap each event adds, after GC | 230.5 B | 230.5 B in every count |
-| A popular list read that misses the kept list | 0.413 ms | 0.387 to 0.536 ms |
-| The co-occurrence rows of a request's seeds, 5.533 seeds on average | 1.384 ms | 1.221 to 1.608 ms |
-| An item's window count and first event | 164.15 ns | 158.9 to 205.7 ns |
-| A request through the pipeline in process, B1 without the state | 2.383 ms | 2.191 to 2.501 ms |
-| The same on B1s8 with the state | 4.639 ms | 4.243 to 4.765 ms |
-
-#### Phase 1: the state kept at 100 recommend requests/s; 200 to 800 do not show it
-
-All 24 runs are valid and none is noisy; every run is listed in `phase1/table.md`, and its other latencies are in its summary. The recommendations' p99 and degraded share, each group's three runs:
-
-| Rate | p99 off, ms | p99 on, ms | Degraded off | Degraded on |
-|---:|---|---|---|---|
-| 100 | 9.66 to 10.68 | 15.50 to 17.82 | 0.00 to 0.03% | 0.03 to 0.23% |
-| 200 | 11.80 to 13.18 | 31.59 to 37.41 | 0.07 to 0.22% | 1.12 to 1.57% |
-| 400 | 23.38 to 28.22 | 65.12 to 99.14 | 2.24 to 6.00% | 10.63 to 25.51% |
-| 800 | 44.79 to 47.94 | 287.57 to 627.01 | 32.26 to 39.82% | 76.75 to 78.25% |
-
-Readings 1 and 4, from medians over each group's three runs:
-
-| Rate | Gateway CPU per recommendation, on over off | Kafka CPU per recommendation, on over off | p99, on minus off | Resident memory before load, on minus off | Heap in use before load, on minus off |
-|---:|---|---|---:|---:|---:|
-| 100 | 1.865 (5.453 / 2.924 ms) | 1.445 (1.362 / 0.942 ms) | +6.21 ms | +243 MB | +274 MB |
-| 200 | 1.790 (4.291 / 2.397 ms) | 1.254 (0.966 / 0.771 ms) | +20.87 ms | +215 MB | +236 MB |
-| 400 | 1.827 (3.094 / 1.693 ms) | 1.023 (0.665 / 0.650 ms) | +67.22 ms | +246 MB | +222 MB |
-| 800 | 1.906 (2.023 / 1.061 ms) | 0.922 (0.319 / 0.346 ms) | +271.50 ms | +232 MB | +230 MB |
-
-- Reading 2: at 100 recommend requests/s each on run is valid and unflagged, with p99 ≤ 50 ms and at most 1% of its recommendations degraded, so the gateway keeps the state at that rate on this setup. 200 does not show it: 200-on-1, 200-on-2 and 200-on-3 have 1.22%, 1.12% and 1.57% degraded. Nor do 400 and 800, where each on run misses both conditions: p99 95.09, 65.12 and 99.14 ms with 22.10%, 10.63% and 25.51% degraded at 400; 319.11, 627.01 and 287.57 ms with 78.25%, 76.91% and 76.75% at 800.
-- Reading 3: at 100 every run of both groups has at most 1% degraded, and on each shard the replicas' CPU per call forms ranges that do not overlap: shard 0, 2.9488 to 3.0249 ms off and 3.0398 to 3.1123 ms on; shard 1, 3.0167 to 3.0869 ms off and 3.0981 to 3.1864 ms on. 100 is therefore marked as a measurement anomaly, on both shards. The second replicas asked per recommendation are 0.1740 in each off run and 0.1740, 0.1740 and 0.1742 in the on runs. The anomaly's cause is not known. At 200, 400 and 800 a run has more than 1% degraded, so the reading is not judged.
-- In every on run, of phase 1 and of phase 2, no event taken was a duplicate or poison, and no record was left to read when the window ended. In phase 1 the gateway logged that it serves 2.80 to 3.56 s after its container started in the off runs and 5.00 to 5.69 s in the on runs, and its peak resident memory was 346 to 405 MB and 573 to 662 MB.
-
-#### Swaps
-
-One run of the on group at 200 recommend requests/s: valid, not noisy, no container restarted, peak resident memory 890 MB (`swap/swap.md`, `swap/swap.swap.json`). Times count from the first warmup request's due time.
-
-| Swap | To | Admin request, s | Prepare ms | Drain ms | Resident memory before, after, MB | Heap in use before, after, MB | Records left to read before, after |
-|---|---|---:|---:|---:|---|---|---|
-| 1 | B1s6, d6d2691322ca | 50.1 | 760 | 1 | 583, 714 | 385, 438 | 0, 0 |
-| 2 | B1, a8d9c526fb03 | 90.1 | 690 | 27 | 717, 848 | 533, 476 | 0, 0 |
-| 3 | B1s8, 74ad6c83bf3c | 130.1 | 4,055 | 3 | 375, 750 | 160, 390 | 0, 0 |
-
-Over the 7 windows of 1 s that overlap a swap, pooled, the recommendations' p99 is 88.00 ms and their max 114.88 ms; over the other 143, 48.76 ms and 202.30 ms.
-
-#### Profiles
-
-One run of each group at 400 recommend requests/s, outside phase 1's tables, with 30 s of the gateway's CPU profile (`profile/`). off: gateway CPU per recommendation 1.643 ms; 17.85 s of samples; the first three by flat share `internal/runtime/syscall/linux.Syscall6` 14.79%, `runtime.cgocall` 12.16% and `vec.dotAVX2` 8.46%. on: 3.161 ms; 36.81 s of samples; the first by flat share `runtime.mapaccess2_fast32` 9.75%; of the `fresh` functions, by cumulative share, `fresh.top` 42.19%, which `fresh.(*State).Row`, 31.54%, and `fresh.(*State).Popular`, 20.24%, both call.
-
-#### Phase 2, reading 5: headline 300 recommend requests/s off, 150 on
-
-Phase 1's four rates ran on the boot phase 2 ran on, so they are the first rates of both grids. All 12 runs of phase 2 are valid and none is noisy (`phase2/table.md`).
-
-- off: the grid stopped at 1,200, median p99 101.47 ms; 1,200 does not count. Its highest grid rate that meets the condition is 200: at 400 and 800 each run has more than 1% degraded. Between 200 and 400, 300 meets it, with p99 16.02 to 16.35 ms and 0.35% to 0.41% degraded, and 350 does not, with 1.19% to 1.59% degraded; the two are 50 apart, so the headline is 300.
-- on: the grid stopped at 800, median p99 319.11 ms. Its highest grid rate that meets the condition is 100. Between 100 and 200, 150 meets it, with p99 19.48 to 23.68 ms and 0.17% to 0.96% degraded; the two are 50 apart, so the headline is 150.
-- On minus off: -150 recommend requests/s, the difference of the two headlines.
+- `bench-sweep`: `bench-results/m6/sweep-*`, `budget-history-*`; Load tests, Additions for M6.
+- `bench-fault`: `m6/faults`, `m7/breaker`, `m7/faults`, `m7/faults-outlier`, `m7/rerun/*`; Faults, setup and pass criteria (M6) as amended for M7.
+- `bench-hedge`, `bench-swap`, `bench-kind`, `bench-vegeta`: `m6/hedge`, `m6/swap`, `m6/kind`, `m6/vegeta`; Hedge delay, Bundle swaps under load, Rollouts with SPEC §5's budgets (with Kubernetes rollout check), and the cross-check of Load tests (`bench-vegeta` needs vegeta v12.12.0).
+- `bench-profile`, `bench-compare`: `m6/profile`, `m6/optimization`, `m6/optimization-dot32`; Profiles and an optimization.
+- `bench-ann` (PY with faiss-cpu 1.15.1, h5py and numpy): `m6/ann`; ANN in M6.
+- `bench-quality`: `m7/quality.md`; Recommendation quality. `bench-bundles`: `m7/bundles-<B>.md`, none committed yet; seqrec-lab's bundle against the baseline.
+- `bench-als-grid`, `valid-reference`, `bench-windows`, `rebuilds`, `bench-read`: `m8/<category>/`; [the registration](registration/m8-freshness.md). `bench-stream`: `m8/serving/`; Stream state in serving.
+- `report` (needs uv): the charts in `m6/figures`.

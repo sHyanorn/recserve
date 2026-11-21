@@ -1,6 +1,6 @@
 # M0 risk checks
 
-Code for the two checks defined in [docs/BENCHMARKS.md](../../docs/BENCHMARKS.md#m0-risk-checks). Results are in [`bench-results/m0`](../../bench-results/m0). This is a separate Go module, so its dependencies stay out of the service.
+Code for the two checks defined in [docs/BENCHMARK_PROTOCOL.md](../../docs/BENCHMARK_PROTOCOL.md#m0-risk-checks). Results are in [`bench-results/m0`](../../bench-results/m0). This is a separate Go module, so its dependencies stay out of the service.
 
 Inputs are downloaded or generated under a data directory outside the repository (`DATA` below; the flags default to `/home/user/data/m0`). Run the shared step from that directory. Nothing there is committed.
 
