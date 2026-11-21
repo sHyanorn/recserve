@@ -5,11 +5,14 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 
 	"github.com/sHyanorn/recserve/internal/vec"
 )
@@ -450,5 +453,27 @@ func TestSaveAndRead(t *testing.T) {
 	}
 	if _, err := Read(bytes.NewReader(saved), loose.data[:len(loose.data)-loose.dim], loose.dim); err == nil {
 		t.Error("data of another size accepted")
+	}
+}
+
+// TestReadReportsReadErrors fails the reader before the magic and after the
+// graph: the error is the reader's, not a verdict on the file.
+func TestReadReportsReadErrors(t *testing.T) {
+	var buf bytes.Buffer
+	if _, err := looseIx(t).WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	errRead := errors.New("disk failure")
+	for name, r := range map[string]io.Reader{
+		"before the magic": iotest.ErrReader(errRead),
+		"after the graph":  io.MultiReader(bytes.NewReader(buf.Bytes()), iotest.ErrReader(errRead)),
+	} {
+		if _, err := Read(r, loose.data, loose.dim); !errors.Is(err, errRead) {
+			t.Errorf("failing %s: got %v, want %v", name, err, errRead)
+		}
+	}
+	_, err := Read(bytes.NewReader(append([]byte("x"), buf.Bytes()[1:]...)), loose.data, loose.dim)
+	if err == nil || !strings.Contains(err.Error(), "magic") {
+		t.Errorf("wrong magic: got %v, want an error naming the magic", err)
 	}
 }

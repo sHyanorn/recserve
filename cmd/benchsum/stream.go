@@ -81,10 +81,13 @@ func (m metrics) value(name string, want map[string]string) *float64 {
 // empty.
 func optional(path string) ([]byte, error) {
 	data, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) || len(data) == 0 {
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
-	return data, err
+	if err != nil || len(data) == 0 {
+		return nil, err
+	}
+	return data, nil
 }
 
 // optionalMetrics reads a scrape, nil if there is none.

@@ -34,8 +34,11 @@ func (x *Index) WriteTo(w io.Writer) (int64, error) {
 func Read(r io.Reader, data []float32, dim int) (*Index, error) {
 	br := bufio.NewReader(r)
 	magic := make([]byte, len(fileMagic))
-	if _, err := io.ReadFull(br, magic); err != nil || string(magic) != fileMagic {
-		return nil, errors.New("hnsw: not a saved index")
+	if _, err := io.ReadFull(br, magic); err != nil {
+		return nil, fmt.Errorf("hnsw: magic: %w", err)
+	}
+	if string(magic) != fileMagic {
+		return nil, fmt.Errorf("hnsw: not a saved index: magic %q, want %q", magic, fileMagic)
 	}
 	head := make([]int64, 8)
 	if err := binary.Read(br, binary.LittleEndian, head); err != nil {
@@ -60,8 +63,11 @@ func Read(r io.Reader, data []float32, dim int) (*Index, error) {
 			return nil, fmt.Errorf("hnsw: body: %w", err)
 		}
 	}
-	if _, err := br.ReadByte(); !errors.Is(err, io.EOF) {
+	switch _, err := br.ReadByte(); {
+	case err == nil:
 		return nil, errors.New("hnsw: trailing data")
+	case !errors.Is(err, io.EOF):
+		return nil, fmt.Errorf("hnsw: after the graph: %w", err)
 	}
 	if err := x.Check(); err != nil {
 		return nil, err

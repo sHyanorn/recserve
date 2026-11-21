@@ -63,6 +63,26 @@ func streamFixture(t *testing.T, dir, name string, edit map[string]string) strin
 	return prefix
 }
 
+func TestOptional(t *testing.T) {
+	dir := t.TempDir()
+	full, empty := filepath.Join(dir, "full"), filepath.Join(dir, "empty")
+	if err := os.WriteFile(full, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{full: "x", empty: "", filepath.Join(dir, "none"): ""} {
+		if got, err := optional(name); err != nil || string(got) != want || (want == "" && got != nil) {
+			t.Errorf("optional(%s) = %q, %v, want %q and no error", filepath.Base(name), got, err, want)
+		}
+	}
+	// A directory is a file that cannot be read, not a file that is missing.
+	if got, err := optional(dir); err == nil {
+		t.Errorf("optional(a directory) = %q, nil, want an error", got)
+	}
+}
+
 func TestStreamRun(t *testing.T) {
 	dir := t.TempDir()
 	s, err := summarizeStream(streamFixture(t, dir, "200-on-1", nil), filepath.Join(dir, "200-on-1.csv.gz"), "on", "vON")

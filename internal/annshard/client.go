@@ -145,8 +145,9 @@ type Client struct {
 
 // lacking is an index that a replica was found not to hold.
 type lacking struct {
-	r  *replica
-	ix index
+	r       *replica
+	version string
+	shard   int32
 }
 
 // group is the replicas of one shard.
@@ -404,25 +405,18 @@ func (c *Client) Prepare(ctx context.Context, version string, items int) (*Shard
 // runs in the background, for no request in particular, once at a time per
 // replica and index, and after a failure not again for catchUpWait.
 func (c *Client) catchUp(r *replica, x *annshardpb.Index) {
-	ix, err := parseIndex(x)
-	if err != nil {
-		return
-	}
-	key := lacking{r, ix}
+	key := lacking{r, x.GetVersion(), x.GetShard()}
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.closed || c.catching[key] {
-		c.mu.Unlock()
 		return
 	}
 	c.catching[key] = true
-	c.wg.Add(1)
-	c.mu.Unlock()
-	go func() {
-		defer c.wg.Done()
+	c.wg.Go(func() {
 		if err := c.prepareOn(r, x, c.opt.Serving()); err == nil {
-			c.opt.Log.Info("a replica prepared an index it lacked", "replica", r.addr, "version", ix.version, "shard", ix.shard)
+			c.opt.Log.Info("a replica prepared an index it lacked", "replica", r.addr, "version", key.version, "shard", key.shard)
 		} else if c.ctx.Err() == nil {
-			c.opt.Log.Warn("a replica could not prepare an index it lacks", "replica", r.addr, "version", ix.version, "shard", ix.shard, "err", err)
+			c.opt.Log.Warn("a replica could not prepare an index it lacks", "replica", r.addr, "version", key.version, "shard", key.shard, "err", err)
 			select {
 			case <-time.After(catchUpWait):
 			case <-c.ctx.Done():
@@ -431,7 +425,7 @@ func (c *Client) catchUp(r *replica, x *annshardpb.Index) {
 		c.mu.Lock()
 		delete(c.catching, key)
 		c.mu.Unlock()
-	}()
+	})
 }
 
 // prepareOn has replica r prepare the index x, telling it the version

@@ -198,6 +198,49 @@ h_count{shard="0"} 100
 	}
 }
 
+// -label of value and quantile is a comma-separated list of k=v; an item
+// without = is an error, since it would drop the filter.
+func TestLabelFlag(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "m")
+	if err := os.WriteFile(f, []byte(`# TYPE c counter
+c{route="events",code="202"} 3
+c{route="recommend",code="200"} 5
+# TYPE h histogram
+h_bucket{shard="0",kind="a",le="0.001"} 100
+h_bucket{shard="0",kind="a",le="+Inf"} 100
+h_sum{shard="0",kind="a"} 0.05
+h_count{shard="0",kind="a"} 100
+h_bucket{shard="1",kind="a",le="0.001"} 0
+h_bucket{shard="1",kind="a",le="0.002"} 100
+h_bucket{shard="1",kind="a",le="+Inf"} 100
+h_sum{shard="1",kind="a"} 0.15
+h_count{shard="1",kind="a"} 100
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		args []string
+		want string // the output, or "error" for any error
+	}{
+		{[]string{"value", "-name", "c", "-label", "route=events,code=202"}, "3\n"},
+		{[]string{"value", "-name", "c", "-label", "route=recommend"}, "5\n"},
+		{[]string{"value", "-name", "c", "-label", "route"}, "error"},
+		{[]string{"value", "-name", "c", "-label", "route=events,code"}, "error"},
+		{[]string{"quantile", "-name", "h", "-label", "shard=0,kind=a"}, "0.00095\n"},
+		{[]string{"quantile", "-name", "h", "-label", "shard=1,kind=a"}, "0.00195\n"},
+		{[]string{"quantile", "-name", "h", "-label", "shard"}, "error"},
+	} {
+		var out strings.Builder
+		err := run(append(tc.args, "-after", f), &out)
+		switch {
+		case tc.want == "error" && err == nil:
+			t.Errorf("%v: accepted, printed %q", tc.args, out.String())
+		case tc.want != "error" && (err != nil || out.String() != tc.want):
+			t.Errorf("%v: %q, %v, want %q", tc.args, out.String(), err, tc.want)
+		}
+	}
+}
+
 func TestSamplesRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.csv.gz")
 	if err := writeGz(path, "i,path,due_ms,latency_ms,status,outcome,degraded,answered,shards\n"+
@@ -351,7 +394,7 @@ func TestCPUPerRecommendationAnswered(t *testing.T) {
 	write(".at0.metrics", "")
 	write(".at1.metrics", "")
 	write(".at0.cpu", "gateway 0\n")
-	write(".at1.cpu", "gateway 100000000\n")
+	write(".at1.cpu", "gateway 100000000\nlate 5000000\n") // "late" has no reading at the start
 	write(".noise-before.json", `{"noisy": false}`)
 	write(".noise-after.json", `{"noisy": false}`)
 	var b strings.Builder
@@ -373,6 +416,9 @@ func TestCPUPerRecommendationAnswered(t *testing.T) {
 	}
 	if got, want := s.CPUPerRequest["gateway"], 100.0/90; math.Abs(got-want) > 1e-12 || s.Answers != 90 || s.Events != 10 {
 		t.Fatalf("gateway %v ms per recommendation, want %v; %d answers, %d events", got, want, s.Answers, s.Events)
+	}
+	if v, ok := s.CPUPerRequest["late"]; ok {
+		t.Errorf("a container with no reading at the start has %v ms per recommendation, want none", v)
 	}
 	var sweep strings.Builder
 	sweepTable(&sweep, map[float64][]runSummary{200: {s}}, []string{"gateway"})

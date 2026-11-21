@@ -80,3 +80,19 @@ func TestSwapRun(t *testing.T) {
 		t.Errorf("table lacks %q:\n%s", want, tb.String())
 	}
 }
+
+func TestReadSwapsNeedsBothCPUReadings(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "run")
+	for suffix, body := range map[string]string{
+		".swaps":      "12200 12600 {\"prepare_ms\":1}\n",
+		".swap1.cpu0": "gateway 0\n",
+		".swap1.cpu1": "gateway 1000000\nannshard-0 1000000\n",
+	} {
+		if err := os.WriteFile(p+suffix, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := readSwaps(p, 0); err == nil || !strings.Contains(err.Error(), "annshard-0") {
+		t.Errorf("a replica with no reading before the swap: got %v, want an error naming it", err)
+	}
+}

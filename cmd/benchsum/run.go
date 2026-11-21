@@ -71,8 +71,9 @@ func summarizeRun(prefix, raw string) (runSummary, error) {
 		s.CacheHitRate = delta("recserve_cache_lookups_total", map[string]string{"result": "hit"}) / lookups
 	}
 	for name, v := range c1 {
-		if s.Answers > 0 {
-			s.CPUPerRequest[name] = (v - c0[name]) / 1e6 / float64(s.Answers)
+		// A container with no reading at the start has no CPU time over the window.
+		if v0, ok := c0[name]; ok && s.Answers > 0 {
+			s.CPUPerRequest[name] = (v - v0) / 1e6 / float64(s.Answers)
 		}
 	}
 	return s, nil

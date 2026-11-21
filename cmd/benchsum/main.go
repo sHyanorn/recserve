@@ -10,7 +10,7 @@
 //	benchsum faults -dir D                       the fault runs' table
 //	benchsum breakers -dir D                     the breaker's openings in the fault runs, one row each
 //	benchsum compare -dir D                      before and after an optimization (scripts/bench-compare.sh)
-//	benchsum quantile -after M [-before M0] -name N [-label k=v] -q Q
+//	benchsum quantile -after M [-before M0] -name N [-label k=v,...] -q Q
 //	                                             a quantile of a histogram in a /metrics scrape, or between two
 //	benchsum swap -prefix P -samples S           a run of bundle swaps under load: P.swap.json
 //	benchsum swaps -dir D                        the swap runs' table and what GOGC=off says of the largest latencies
@@ -48,6 +48,23 @@ func main() {
 	}
 }
 
+// parseLabels reads the -label flag, a comma-separated list of k=v; empty
+// means no label.
+func parseLabels(s string) (map[string]string, error) {
+	want := map[string]string{}
+	if s == "" {
+		return want, nil
+	}
+	for kv := range strings.SplitSeq(s, ",") {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			return nil, fmt.Errorf("-label %q: %q is not k=v", s, kv)
+		}
+		want[k] = v
+	}
+	return want, nil
+}
+
 func run(args []string, out io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("a subcommand is required: run, rate, next, sweep, fault, faults, breakers, swap, swaps, phases, quantile, hedge, histories, stream, streamtable, streamnext, streamswap, bench or value")
@@ -62,7 +79,7 @@ func run(args []string, out io.Writer) error {
 	after := fs.String("after", "", "a /metrics scrape")
 	before := fs.String("before", "", "an earlier scrape of the same process")
 	name := fs.String("name", "", "histogram name")
-	lbl := fs.String("label", "", "k=v: only the series with that label")
+	lbl := fs.String("label", "", "k=v[,k=v...]: only the series with those labels")
 	q := fs.Float64("q", 0.95, "quantile")
 	bisect := fs.Bool("bisect", false, "next: bisect after the grid, as the headline sweep does")
 	gridMax := fs.Float64("grid-max", 0, "next: the grid's last rate, for a sweep whose grid ended there with no rate stopping it (0: none)")
@@ -213,11 +230,9 @@ func run(args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		want := map[string]string{}
-		for kv := range strings.SplitSeq(*lbl, ",") {
-			if k, v, ok := strings.Cut(kv, "="); ok {
-				want[k] = v
-			}
+		want, err := parseLabels(*lbl)
+		if err != nil {
+			return err
 		}
 		v := m.value(*name, want)
 		if v == nil {
@@ -235,9 +250,9 @@ func run(args []string, out io.Writer) error {
 				return err
 			}
 		}
-		want := map[string]string{}
-		if k, v, ok := strings.Cut(*lbl, "="); ok {
-			want[k] = v
+		want, err := parseLabels(*lbl)
+		if err != nil {
+			return err
 		}
 		return printf(out, "%g\n", histogramQuantile(a, b, *name, want, *q))
 	case "swap":

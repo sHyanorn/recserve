@@ -127,20 +127,26 @@ func readSwaps(prefix string, start float64) ([]swapTime, error) {
 		}
 		w.Start, w.End = w.Start-start, w.End-start
 		n := len(out) + 1
-		c0, err := readCPU(fmt.Sprintf("%s.swap%d.cpu0", prefix, n))
+		cpu0, cpu1 := fmt.Sprintf("%s.swap%d.cpu0", prefix, n), fmt.Sprintf("%s.swap%d.cpu1", prefix, n)
+		c0, err := readCPU(cpu0)
 		if err != nil {
 			return nil, err
 		}
-		c1, err := readCPU(fmt.Sprintf("%s.swap%d.cpu1", prefix, n))
+		c1, err := readCPU(cpu1)
 		if err != nil {
 			return nil, err
 		}
-		for c := range c1 {
-			d := (c1[c] - c0[c]) / 1e6
-			switch {
-			case c == "gateway":
+		for c, v1 := range c1 {
+			if c != "gateway" && !strings.HasPrefix(c, "annshard-") {
+				continue
+			}
+			v0, ok := c0[c]
+			if !ok {
+				return nil, fmt.Errorf("%s has no reading of %s, which %s has", cpu0, c, cpu1)
+			}
+			if d := (v1 - v0) / 1e6; c == "gateway" {
 				w.GatewayCPUMS = d
-			case strings.HasPrefix(c, "annshard-"):
+			} else {
 				w.ReplicasCPUMS += d
 			}
 		}
