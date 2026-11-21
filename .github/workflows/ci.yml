@@ -15,13 +15,14 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      # The wheel tools/bundle builds its golden values with; the GitHub release tarball is gone.
       - name: ONNX Runtime 1.31.1
         run: |
-          curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/ort.tgz" \
-            https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-linux-x64-1.31.1.tgz
-          echo "c849e36a1ef3e22d4ff217b9d1ce4a3cf5b9467b975610913ae959ad5b16bdc9  $RUNNER_TEMP/ort.tgz" | sha256sum -c
-          tar xzf "$RUNNER_TEMP/ort.tgz" -C "$RUNNER_TEMP"
-          echo "RECSERVE_ORT_LIB=$RUNNER_TEMP/onnxruntime-linux-x64-1.31.1/lib/libonnxruntime.so.1.31.1" >> "$GITHUB_ENV"
+          curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/ort.whl" \
+            https://files.pythonhosted.org/packages/fc/0a/c887bcb84a9455b2723825381a77af38611a80f996f804e20fde5f671b63/onnxruntime-1.31.1-cp313-cp313-manylinux_2_28_x86_64.whl
+          echo "74a6a52994616c4d18b33db1e13c226333a70a6ba07480a5cab9c2a50dff1430  $RUNNER_TEMP/ort.whl" | sha256sum -c
+          unzip -q -j -d "$RUNNER_TEMP/ort" "$RUNNER_TEMP/ort.whl" onnxruntime/capi/libonnxruntime.so.1.31.1
+          echo "RECSERVE_ORT_LIB=$RUNNER_TEMP/ort/libonnxruntime.so.1.31.1" >> "$GITHUB_ENV"
       - run: go vet ./...
       - run: go test -race ./...
 

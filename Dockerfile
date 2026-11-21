@@ -17,9 +17,10 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/ ./cmd/ingest
 
 FROM golang:1.27.4-trixie@sha256:b54b2639de8c1bfe538ec5ffc45f29b1932235ac5f6d63c059853646677112d9 AS ort
-ADD --checksum=sha256:c849e36a1ef3e22d4ff217b9d1ce4a3cf5b9467b975610913ae959ad5b16bdc9 \
-    https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-linux-x64-1.31.1.tgz /ort.tgz
-RUN tar -xzf /ort.tgz -C /usr/local/lib --strip-components=2 onnxruntime-linux-x64-1.31.1/lib/libonnxruntime.so.1.31.1
+ADD --checksum=sha256:74a6a52994616c4d18b33db1e13c226333a70a6ba07480a5cab9c2a50dff1430 \
+    https://files.pythonhosted.org/packages/fc/0a/c887bcb84a9455b2723825381a77af38611a80f996f804e20fde5f671b63/onnxruntime-1.31.1-cp313-cp313-manylinux_2_28_x86_64.whl /ort.whl
+RUN apt-get update && apt-get install -y --no-install-recommends unzip && \
+    unzip -q -j -d /usr/local/lib /ort.whl onnxruntime/capi/libonnxruntime.so.1.31.1
 
 # glibc and libstdc++, which ONNX Runtime needs.
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cc66d222f0a7ec996b78a99fe76a969bc80b539a5016ad866c14d1949bc6d0ab AS gateway
